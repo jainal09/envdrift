@@ -696,11 +696,6 @@ def test_trufflehog_scans_the_history_of_a_repository_whose_path_a_url_reserves(
 
 
 @requires_trufflehog
-@pytest.mark.xfail(
-    strict=False,
-    raises=AssertionError,
-    reason="trufflehog's history clone writes to a git hook's GIT_INDEX_FILE (see #916)",
-)
 def test_trufflehog_history_scan_leaves_the_index_a_hook_exported_alone(
     git_repo, tmp_path_factory, monkeypatch
 ):
@@ -726,6 +721,54 @@ def test_trufflehog_history_scan_leaves_the_index_a_hook_exported_alone(
     if result.error is not None:
         pytest.fail(f"unexpected error: {result.error}")
     assert index.read_bytes() == staged, "the scan rewrote the index git was about to commit"
+
+
+@requires_trufflehog
+def test_commit_whose_hook_runs_a_trufflehog_history_scan_keeps_its_changes(
+    git_repo, tmp_path_factory, integration_env
+):
+    """#916: a pre-commit hook that runs guard's trufflehog history scan leaves the commit whole.
+
+    During ``git commit -a`` the hook gets GIT_INDEX_FILE, the index git is about to commit.
+    trufflehog's clone wrote its own index there, so the commit came out empty and the staged
+    changes were unstaged.
+    """
+    (git_repo / "app.txt").write_text("v1\n")
+    _commit_all(git_repo)
+    report = tmp_path_factory.mktemp("guard") / "report.json"
+    hook = git_repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text(
+        "#!/bin/sh\n"
+        f'"{Path(sys.executable).as_posix()}" -m envdrift.cli guard --no-gitleaks --trufflehog '
+        f'--history --no-auto-install --json . > "{report.as_posix()}"\n'
+        "exit 0\n"
+    )
+    hook.chmod(0o755)
+    (git_repo / "app.txt").write_text("v2\n")
+    (git_repo / "added.txt").write_text("new\n")
+    subprocess.run(["git", "add", "added.txt"], cwd=git_repo, capture_output=True, check=True)
+
+    subprocess.run(
+        ["git", "commit", "-qam", "v2"],
+        cwd=git_repo,
+        env=integration_env,
+        capture_output=True,
+        check=True,
+    )
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=git_repo, capture_output=True, text=True, check=True
+        ).stdout
+
+    # The hook ran the history scan.
+    results = json.loads(report.read_text())["scanner_results"]
+    assert [r["error"] for r in results if r["name"] == "trufflehog"] == [None]
+    assert sorted(git("show", "--name-only", "--format=", "HEAD").split()) == [
+        "added.txt",
+        "app.txt",
+    ]
+    assert git("status", "--porcelain") == ""
 
 
 @requires_trufflehog
@@ -1018,6 +1061,39 @@ def test_history_scan_that_cannot_run_is_an_error(tmp_path, monkeypatch, scanner
     assert result.error is not None, "a history scan that cannot run must fail"
     assert expected in result.error
     assert result.findings == []
+
+
+_HOOK_SCANNERS = [
+    *_PATH_SCANNERS,
+    pytest.param(TalismanScanner, marks=requires_talisman, id="talisman"),
+]
+
+
+@pytest.mark.parametrize("scanner_cls", _HOOK_SCANNERS)
+@pytest.mark.parametrize("include_git_history", [False, True], ids=["files", "history"])
+def test_scan_reads_its_own_repository_under_a_hook_git_dir(
+    git_repo, tmp_path_factory, scanner_cls, include_git_history
+):
+    """#915: another repository's GIT_DIR, as a git hook exports it, does not change the scan.
+
+    The gitleaks and Infisical history scans read the hook repository's history and reported
+    nothing, and Talisman failed.
+    """
+    _write_secret_file(git_repo, "app.env")
+    _commit_all(git_repo)
+    hook_repo = tmp_path_factory.mktemp("hook-repo")
+    identity = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+    for args in (["init", "-q"], [*identity, "commit", "-q", "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *args], cwd=hook_repo, capture_output=True, check=True)
+    scanner = scanner_cls(auto_install=False)
+
+    # Only the scan runs under the hook's GIT_DIR: the commit above went to git_repo.
+    with pytest.MonkeyPatch.context() as hook_env:
+        hook_env.setenv("GIT_DIR", str(hook_repo / ".git"))
+        result = scanner.scan([git_repo], include_git_history=include_git_history)
+
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert any(Path(f.file_path).name == "app.env" for f in result.findings), result.findings
 
 
 @pytest.mark.parametrize(

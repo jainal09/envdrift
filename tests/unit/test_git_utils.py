@@ -17,6 +17,7 @@ from envdrift.utils.git import (
     is_file_tracked,
     is_git_repo,
     restore_file_from_git,
+    without_git_location,
 )
 
 
@@ -451,3 +452,108 @@ class TestNonAsciiLocaleSafety:
         assert "Traceback" not in result.stderr, result.stderr
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == repo.name
+
+
+def _git(cwd: Path, *args: str) -> None:
+    config = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", *config, *args], cwd=cwd, check=True, capture_output=True)
+
+
+class TestHookGitVariables:
+    """The repository lookups answer for the path's repository, whatever a git hook exported.
+
+    git exports GIT_DIR, GIT_INDEX_FILE and the like to its hooks (#915). is_file_tracked asks
+    the index the hook was given unless it is passed ``without_git_location()``.
+    """
+
+    def test_without_git_location_drops_the_location_variables_only(self):
+        environ = {
+            "GIT_DIR": "/hook/.git",
+            "GIT_WORK_TREE": "/hook",
+            "GIT_INDEX_FILE": "/hook/.git/index.lock",
+            "GIT_COMMON_DIR": "/hook/.git",
+            "GIT_AUTHOR_NAME": "t",
+            "PATH": "/usr/bin",
+        }
+
+        assert without_git_location(environ) == {"GIT_AUTHOR_NAME": "t", "PATH": "/usr/bin"}
+
+    def test_without_git_location_reads_os_environ_by_default(self, monkeypatch):
+        monkeypatch.setenv("GIT_INDEX_FILE", "/hook/.git/index.lock")
+        monkeypatch.setenv("ENVDRIFT_TEST_PROBE", "kept")
+
+        environ = without_git_location()
+
+        assert "GIT_INDEX_FILE" not in environ
+        assert environ["ENVDRIFT_TEST_PROBE"] == "kept"
+
+    def test_lookups_in_a_linked_worktree_answer_for_the_worktree(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """In a linked worktree, git exports an absolute GIT_DIR and GIT_INDEX_FILE to each hook.
+
+        With GIT_DIR set, git took the directory it ran in as the top of the work tree, so the
+        root of ``src`` was ``src`` itself and its tracked file read as untracked.
+        """
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        _git(repo, "init", "-q")
+        (repo / "src" / "app.txt").write_text("hello\n")
+        _git(repo, "add", "src/app.txt")
+        _git(repo, "commit", "-qm", "init")
+        worktree = tmp_path / "worktree"
+        _git(repo, "worktree", "add", "-q", str(worktree))
+        git_dir = Path((worktree / ".git").read_text().split(":", 1)[1].strip())
+        monkeypatch.setenv("GIT_DIR", str(git_dir))
+        monkeypatch.setenv("GIT_INDEX_FILE", str(git_dir / "index"))
+
+        assert get_git_root(worktree / "src") == worktree.resolve()
+        assert is_file_tracked(worktree / "src" / "app.txt") is True
+
+    def test_lookups_answer_for_the_path_under_another_repositorys_variables(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """GIT_DIR and GIT_INDEX_FILE of another repository do not change the answers."""
+        hook = tmp_path / "hook"
+        hook.mkdir()
+        _git(hook, "init", "-q")
+        scanned = tmp_path / "scanned"
+        scanned.mkdir()
+        _git(scanned, "init", "-q")
+        (scanned / "app.txt").write_text("hello\n")
+        _git(scanned, "add", "app.txt")
+        _git(scanned, "commit", "-qm", "init")
+        monkeypatch.setenv("GIT_DIR", str(hook / ".git"))
+        monkeypatch.setenv("GIT_INDEX_FILE", str(hook / ".git" / "index"))
+
+        assert is_git_repo(scanned) is True
+        assert has_git_head(scanned) is True
+        assert is_file_tracked(scanned / "app.txt", env=without_git_location()) is True
+
+    def test_is_file_tracked_asks_the_index_a_hook_exported_by_default(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """Smart encryption restores a file into the index a git hook exported, so it asks that one.
+
+        ``without_git_location()`` asks the index of the file's own repository.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        (repo / "app.txt").write_text("hello\n")
+        (repo / "other.txt").write_text("hello\n")
+        _git(repo, "add", "app.txt")
+        hook_index = repo / ".git" / "hook-index"
+        subprocess.run(
+            ["git", "add", "other.txt"],
+            cwd=repo,
+            env={**os.environ, "GIT_INDEX_FILE": str(hook_index)},
+            check=True,
+            capture_output=True,
+        )
+        monkeypatch.setenv("GIT_INDEX_FILE", str(hook_index))
+
+        assert is_file_tracked(repo / "other.txt") is True
+        assert is_file_tracked(repo / "app.txt") is False
+        assert is_file_tracked(repo / "other.txt", env=without_git_location()) is False
+        assert is_file_tracked(repo / "app.txt", env=without_git_location()) is True

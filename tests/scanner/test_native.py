@@ -1353,6 +1353,29 @@ class TestPrivateKeyFileScanResult:
         assert len(key_findings) == 1
         assert key_findings[0].severity == FindingSeverity.CRITICAL
 
+    @pytest.mark.parametrize(
+        ("variable", "path"), [("GIT_DIR", ".git"), ("GIT_INDEX_FILE", ".git/index")]
+    )
+    def test_staged_key_file_flagged_whatever_index_a_hook_exported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, path: str
+    ):
+        """Another repository's GIT_DIR or GIT_INDEX_FILE, as a git hook exports it, hides nothing.
+
+        is_file_tracked read that repository's index, so a staged key file went unflagged (#915).
+        """
+        repo, hook = tmp_path / "repo", tmp_path / "hook"
+        repo.mkdir()
+        hook.mkdir()
+        git = self._git_repo(repo)
+        self._git_repo(hook)
+        (repo / ".env.keys").write_text(self._KEY_CONTENT)
+        git("add", "-f", ".env.keys")
+        monkeypatch.setenv(variable, str(hook / path))
+
+        result = NativeScanner().scan([repo])
+
+        assert [f.rule_id for f in result.findings] == ["committed-private-key"]
+
 
 class TestSecretPatternDetection:
     """Tests for secret pattern detection."""

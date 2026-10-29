@@ -55,7 +55,7 @@ from envdrift.scanner.platform_utils import (
 from envdrift.scanner.rule_severity import RULE_SEVERITY_MAP as RULE_SEVERITY_MAP
 from envdrift.scanner.rule_severity import rule_severity
 from envdrift.utils.deadline import run_tool
-from envdrift.utils.git import get_git_root, has_git_head
+from envdrift.utils.git import get_git_root, has_git_head, without_git_location
 from envdrift.utils.text import strip_ansi
 
 if TYPE_CHECKING:
@@ -758,6 +758,8 @@ class InfisicalScanner(ScannerBackend):
                     encoding="utf-8",
                     errors="replace",
                     timeout=300,  # 5 minute timeout
+                    # Its git reads the scanned repository, not a git hook's (#915).
+                    env=without_git_location(),
                 )
 
                 report_data = _load_findings(report_path)

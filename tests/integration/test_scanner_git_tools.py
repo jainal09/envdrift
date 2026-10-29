@@ -267,6 +267,28 @@ class TestGitSecretsRealBinary:
         # An AWS access key ID is CRITICAL whichever scanner finds it (#850).
         assert [f.severity for f in result.findings] == [FindingSeverity.CRITICAL]
 
+    def test_scan_registers_and_reads_the_patterns_of_its_own_repository(
+        self, scanner_test_env, tmp_path_factory, monkeypatch
+    ):
+        """#915: another repository's GIT_DIR, as a git hook exports it, does not change the scan.
+
+        git-secrets registered its AWS patterns in the hook repository's config instead, and read
+        them from there.
+        """
+        work_dir = scanner_test_env["work_dir"]
+        subprocess.run(["git", "init", "-q"], cwd=str(work_dir), check=True, capture_output=True)
+        (work_dir / "leak.txt").write_text("AWS_KEY=" + "AKIA" + "Z9Q8W7E6R5T4Y3U2" + "\n")
+        hook_repo = tmp_path_factory.mktemp("hook-repo")
+        subprocess.run(["git", "init", "-q"], cwd=str(hook_repo), check=True, capture_output=True)
+        hook_config = (hook_repo / ".git" / "config").read_text()
+        monkeypatch.setenv("GIT_DIR", str(hook_repo / ".git"))
+
+        result = GitSecretsScanner(auto_install=False, register_aws=True).scan([work_dir])
+
+        assert result.error is None
+        assert any("aws" in f.rule_id for f in result.findings), result.findings
+        assert (hook_repo / ".git" / "config").read_text() == hook_config
+
     def test_scan_grades_an_aws_secret_access_key_critical(self, scanner_test_env):
         """git-secrets' AWS provider also flags a secret access key: CRITICAL like gitleaks."""
         work_dir = scanner_test_env["work_dir"]

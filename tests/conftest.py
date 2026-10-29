@@ -5,6 +5,19 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.install_integrity import INSECURE_SKIP_ENV
+from envdrift.utils.git import GIT_LOCATION_VARIABLES
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_location(monkeypatch):
+    """Never inherit the git location variables of a git hook that runs pytest (#915).
+
+    git exports GIT_DIR, GIT_INDEX_FILE and the like to its hooks. Inherited, they would point
+    the git that a test runs in its temporary repository at the hook's repository or index, and
+    the test would write there. Tests that exercise them set them explicitly via monkeypatch.
+    """
+    for name in GIT_LOCATION_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)

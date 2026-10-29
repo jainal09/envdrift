@@ -38,7 +38,7 @@ from envdrift.scanner.base import (
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.scanner.platform_utils import get_platform_info, get_venv_bin_dir
 from envdrift.utils.deadline import run_tool
-from envdrift.utils.git import get_git_root, has_git_head
+from envdrift.utils.git import get_git_root, has_git_head, without_git_location
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -562,6 +562,8 @@ class TalismanScanner(ScannerBackend):
                         errors="replace",
                         timeout=300,  # 5 minute timeout
                         cwd=str(work_dir),
+                        # Its git reads the repository at work_dir, not a git hook's (#915).
+                        env=without_git_location(),
                     )
 
                     report_data, unreadable = _load_report(report_path)

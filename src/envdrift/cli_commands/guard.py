@@ -64,6 +64,7 @@ from envdrift.scanner.output import (
     format_sarif,
     format_sarif_error,
 )
+from envdrift.utils.git import without_git_location
 from envdrift.utils.text import strip_ansi
 
 console = Console()
@@ -259,9 +260,7 @@ def _git_index_mirror(mirror_root: Path) -> None:
     """
     import subprocess  # nosec B404
 
-    env = os.environ.copy()
-    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
-        env.pop(key, None)
+    env = without_git_location()
     # An injected global/system git config (core.hooksPath, init.templateDir,
     # core.fsmonitor, ...) must not shape the throwaway mirror repo either.
     # Point both at the null device — merely unsetting them would fall back to

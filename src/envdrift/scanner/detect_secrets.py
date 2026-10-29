@@ -15,7 +15,6 @@ This module provides:
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess  # nosec B404
@@ -34,7 +33,7 @@ from envdrift.scanner.base import (
     unparsable_report_error,
 )
 from envdrift.utils.deadline import run_tool
-from envdrift.utils.git import get_git_root
+from envdrift.utils.git import get_git_root, without_git_location
 from envdrift.utils.text import strip_ansi
 
 if TYPE_CHECKING:
@@ -472,7 +471,8 @@ def _check_git_file_list(path: Path, plan: _ScanPlan) -> tuple[dict[str, str], l
         plan: How detect-secrets is run over ``path``; its ``git_root`` is None when it does not
             use git's list.
     """
-    env = dict(os.environ)
+    # detect-secrets lists the files of the repository at git_root, not a git hook's (#915).
+    env = without_git_location()
     if plan.git_root is None:
         return env, []
     listing = _git_ls_files(plan.git_root, env, nul=True)

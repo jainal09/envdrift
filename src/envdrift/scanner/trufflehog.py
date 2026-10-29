@@ -46,7 +46,7 @@ from envdrift.scanner.base import (
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.utils.deadline import run_tool
-from envdrift.utils.git import get_git_root, has_git_head
+from envdrift.utils.git import get_git_root, has_git_head, without_git_location
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -700,6 +700,10 @@ class TrufflehogScanner(ScannerBackend):
                 encoding="utf-8",
                 errors="replace",
                 timeout=600,  # 10 minute timeout (trufflehog can be slow)
+                # trufflehog clones a history target. Under a git hook's GIT_INDEX_FILE the
+                # clone's checkout wrote its index there: the index git was about to commit
+                # (#916).
+                env=without_git_location(),
             )
             # Parse JSON lines output (trufflehog outputs one JSON per line)
             items, complete = _load_findings(result.stdout)

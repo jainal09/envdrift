@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess  # nosec B404
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
+from envdrift.utils.git import without_git_location
 
 
 class TestShouldSkipReencryption:
@@ -306,3 +310,126 @@ class TestShouldSkipReencryption:
 
         assert should_skip is False
         assert "not encrypted" in reason
+
+
+def _git(cwd: Path, *args: str, index: Path | None = None) -> str:
+    """Run git in ``cwd``, on the index file ``index`` when one is given."""
+    env = without_git_location()
+    if index is not None:
+        env["GIT_INDEX_FILE"] = str(index)
+    config = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+    return subprocess.run(
+        ["git", *config, *args], cwd=cwd, env=env, check=True, capture_output=True, text=True
+    ).stdout
+
+
+class TestSmartEncryptionInAGitHook:
+    """A git hook's GIT_INDEX_FILE is the index git is about to commit (#915).
+
+    Smart encryption restores an unchanged file into that index, so the commit holds the
+    encrypted version. A file of another repository must never land in it.
+    """
+
+    _ENCRYPTED = 'SECRET="encrypted:abc123xyz"'
+    _DECRYPTED = "SECRET=actual_secret_value"
+
+    def _decrypted_env_file(self, repo: Path) -> Path:
+        """``repo`` as a repository that commits an encrypted ``.env.production``, now decrypted."""
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        env_file = repo / ".env.production"
+        env_file.write_text(self._ENCRYPTED)
+        _git(repo, "add", ".env.production")
+        _git(repo, "commit", "-qm", "init")
+        env_file.write_text(self._DECRYPTED)
+        return env_file
+
+    def _backend(self) -> MagicMock:
+        """A dotenvx backend whose decrypt gives back the decrypted file."""
+        backend = MagicMock()
+        backend.name = "dotenvx"
+
+        def decrypt(path: Path) -> SimpleNamespace:
+            path.write_text(self._DECRYPTED)
+            return SimpleNamespace(success=True, message="")
+
+        backend.decrypt = decrypt
+        return backend
+
+    def test_restores_the_file_into_the_index_being_committed(self, tmp_path: Path, monkeypatch):
+        """``git commit -a`` staged the decrypted file in the hook's index; the restore undoes it."""
+        env_file = self._decrypted_env_file(tmp_path / "repo")
+        repo = env_file.parent
+        index = repo / ".git" / "index.lock"
+        shutil.copyfile(repo / ".git" / "index", index)
+        _git(repo, "add", ".env.production", index=index)
+        monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert should_skip is True, reason
+        assert env_file.read_text() == self._ENCRYPTED
+        committed = _git(repo, "rev-parse", "HEAD:.env.production").strip()
+        assert _git(repo, "ls-files", "-s", index=index).split()[1] == committed
+
+    def test_leaves_a_file_of_another_repository_out_of_it(self, tmp_path: Path, monkeypatch):
+        """A hook in one repository encrypts a file of another one, a submodule say.
+
+        is_file_tracked asks the hook's index, the one the restore writes, so the restore does not
+        put the other repository's file there, unless the hook's repository tracks the same path
+        (the xfail test below).
+        """
+        hook_repo = tmp_path / "hook"
+        hook_repo.mkdir()
+        _git(hook_repo, "init", "-q")
+        (hook_repo / "app.txt").write_text("hello\n")
+        _git(hook_repo, "add", "app.txt")
+        index = hook_repo / ".git" / "index"
+        staged = index.read_bytes()
+        env_file = self._decrypted_env_file(tmp_path / "other")
+        monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+
+        should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert index.read_bytes() == staged
+
+    @pytest.mark.xfail(
+        strict=False,
+        raises=AssertionError,
+        reason="a file of another repository, at a path the hook's repository also tracks, is "
+        "restored through the hook's index (see #919)",
+    )
+    @pytest.mark.parametrize("hook", ["commit -a", "linked worktree"])
+    def test_leaves_it_alone_when_the_hook_repository_tracks_the_same_path(
+        self, tmp_path: Path, monkeypatch, hook: str
+    ):
+        """is_file_tracked, asking the hook's index, finds the hook repository's file there.
+
+        The restore then writes the other repository's file into that index. In a linked worktree
+        the hook's GIT_DIR also makes the committed version the hook repository's, so that file
+        is checked out over the other repository's.
+        """
+        env_file = self._decrypted_env_file(tmp_path / "other")
+        hook_repo = tmp_path / "hook"
+        hook_repo.mkdir()
+        _git(hook_repo, "init", "-q")
+        hook_file = 'SECRET="encrypted:hook"'
+        (hook_repo / ".env.production").write_text(hook_file)
+        _git(hook_repo, "add", ".env.production")
+        _git(hook_repo, "commit", "-qm", "init")
+        if hook == "linked worktree":
+            worktree = tmp_path / "worktree"
+            _git(hook_repo, "worktree", "add", "-q", str(worktree))
+            git_dir = Path((worktree / ".git").read_text().split(":", 1)[1].strip())
+            index = git_dir / "index"
+            monkeypatch.setenv("GIT_DIR", str(git_dir))
+        else:
+            index = hook_repo / ".git" / "index.lock"
+            shutil.copyfile(hook_repo / ".git" / "index", index)
+        staged = index.read_bytes()
+        monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+
+        should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert env_file.read_text() != hook_file, "the hook repository's file was checked out"
+        assert index.read_bytes() == staged, "the restore wrote into the hook's index"

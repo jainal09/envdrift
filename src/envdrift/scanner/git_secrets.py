@@ -42,6 +42,7 @@ from envdrift.scanner.base import (
 )
 from envdrift.scanner.patterns import hash_secret, redact_secret
 from envdrift.utils.deadline import run_tool
+from envdrift.utils.git import without_git_location
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -549,15 +550,18 @@ class GitSecretsScanner(ScannerBackend):
             CompletedProcess object.
         """
         script = _script_file(self._binary_path)
+        # git-secrets reads, and with --register-aws writes, the config of the repository at cwd,
+        # not a git hook's (#915).
+        env = without_git_location()
         if script is not None:
             # The git-secrets _find_binary found or installed, on PATH or not (#908). Its
             # directory goes on the child's PATH as well: git-secrets runs the providers
             # registered as `git secrets ...` (the AWS one from --register-aws) through git.
-            path = os.pathsep.join(filter(None, [str(script.parent), os.environ.get("PATH")]))
-            command, env = [str(script), *args], {**os.environ, "PATH": path}
+            path = os.pathsep.join(filter(None, [str(script.parent), env.get("PATH")]))
+            command, env = [str(script), *args], {**env, "PATH": path}
         else:
             # Fall back to git subcommand
-            command, env = ["git", "secrets", *args], None
+            command = ["git", "secrets", *args]
         return run_tool(
             command,
             capture_output=True,

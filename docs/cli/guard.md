@@ -580,6 +580,15 @@ envdrift guard --ci --sarif > guard.sarif
 envdrift guard --staged
 ```
 
+git exports `GIT_DIR`, `GIT_INDEX_FILE` and the like to its hooks: on every
+commit in a linked worktree, and for `git commit -a` or `git commit <path>`,
+where `GIT_INDEX_FILE` is the index git is about to commit. guard runs every
+scanner without `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and
+`GIT_COMMON_DIR`, and so does the git it runs to find a scanned path's
+repository. A scan from a hook reads the repository each scanned path is in, and
+leaves the index git is committing alone. `--staged` still reads the staged
+files from the index the hook was given, the one being committed.
+
 ### CI/CD PR scanning
 
 ```bash
@@ -781,9 +790,7 @@ directory it scans: the untracked files, or the ignored `.env` files it always
 checks. It still scans the files git did list, including the ones a listing
 printed before it failed or timed out, except those its usual ignore rules skip.
 Its error names the directory and why the listing failed: git's message, or that
-it timed out. When guard runs from a git hook, git still lists the repository
-each scanned directory is in, whatever `GIT_DIR`, `GIT_WORK_TREE`,
-`GIT_INDEX_FILE` or `GIT_COMMON_DIR` the hook exported.
+it timed out.
 
 A scanner still running 10 minutes after it started has failed: guard stops
 waiting for it and records `Scanner timed out after 600s` as its error, the

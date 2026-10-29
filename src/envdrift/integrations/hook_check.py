@@ -16,6 +16,7 @@ from envdrift.config import (
     find_config,
 )
 from envdrift.integrations.precommit import verify_hooks_installed
+from envdrift.utils.git import without_git_location
 
 _PRECOMMIT_METHODS = {
     "precommit",
@@ -187,9 +188,7 @@ def _read_git_path(*args: str) -> Path | None:
     git_path = shutil.which("git")
     if not git_path:
         return None
-    env = os.environ.copy()
-    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
-        env.pop(key, None)
+    env = without_git_location()
     try:
         result = subprocess.run(  # nosec B603
             [git_path, *args],
