@@ -125,6 +125,20 @@ _SOPS_VALUE_SPAN_RE = re.compile(
 )
 # The value of an assignment, as far as its first whitespace (and closing quote).
 _VALUE_TOKEN_RE = re.compile(r"\s*[\"']?[^\s\"']*[\"']?")
+# Where str.splitlines() breaks a line and git does not. A line counts to its line break (#937),
+# but an assignment can start after one of these, as at the start of the line.
+_NON_GIT_LINE_BREAK_RE = re.compile("[\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
+
+
+def _segments(line: str) -> list[tuple[int, str]]:
+    """``line`` cut where ``str.splitlines()`` would cut it, each piece with its offset."""
+    segments: list[tuple[int, str]] = []
+    start = 0
+    for separator in _NON_GIT_LINE_BREAK_RE.finditer(line):
+        segments.append((start, line[start : separator.start()]))
+        start = separator.end()
+    segments.append((start, line[start:]))
+    return segments
 
 
 def _encrypted_value_spans(line: str) -> list[tuple[int, int]]:
@@ -139,12 +153,15 @@ def _encrypted_value_spans(line: str) -> list[tuple[int, int]]:
     canonical SOPS ``ENC[AES256_GCM,`` envelope — not a bare ``ENC[``.
 
     Only the value is skipped, not its whole line: a plaintext secret after it
-    on the same line, past a space or a form feed, is still found (#937).
+    on the same line, past a space or a form feed, is still found (#937). A
+    dotenvx value is looked for at the start of each piece of the line that
+    ``str.splitlines()`` would cut, as it was before lines ran to their break.
     """
     spans = [match.span() for match in _SOPS_VALUE_SPAN_RE.finditer(line)]
-    dotenvx = _DOTENVX_VALUE_SPAN_RE.match(line)
-    if dotenvx:
-        spans.append(dotenvx.span())
+    for offset, segment in _segments(line):
+        dotenvx = _DOTENVX_VALUE_SPAN_RE.match(segment)
+        if dotenvx:
+            spans.append((offset + dotenvx.start(), offset + dotenvx.end()))
     return spans
 
 
@@ -155,10 +172,11 @@ def _skipped_value_spans(line: str) -> list[tuple[int, int]]:
     both scans so they stay in sync.
     """
     spans = _encrypted_value_spans(line)
-    name, equals, _ = line.partition("=")
-    if equals and is_dotenvx_public_key_var(name.strip()):
-        value = _VALUE_TOKEN_RE.match(line, len(name) + 1)
-        spans.append((0, value.end() if value else len(line)))
+    for offset, segment in _segments(line):
+        name, equals, _ = segment.partition("=")
+        if equals and is_dotenvx_public_key_var(name.strip()):
+            value = _VALUE_TOKEN_RE.match(segment, len(name) + 1)
+            spans.append((offset, offset + (value.end() if value else len(segment))))
     return spans
 
 

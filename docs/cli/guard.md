@@ -942,7 +942,10 @@ The comment applies to the line a scanner reports the finding on. guard counts l
 the scanners do: a line ends at a line break only, not at a form feed, a vertical tab or a Unicode
 line separator. Earlier releases also ended a line there, so after one the native scanner reported
 a finding a line lower than gitleaks did, and a comment on the finding's line did not suppress
-other scanners' findings ([#937](https://github.com/jainal09/envdrift/issues/937)).
+other scanners' findings ([#937](https://github.com/jainal09/envdrift/issues/937)). One exception
+remains: guard also ends a line at a lone carriage return (`\r` with no `\n` after it), as its
+`.env` parser does, and git and the external scanners do not. In a file with such line endings,
+their line numbers differ from guard's.
 
 ### TOML Configuration
 

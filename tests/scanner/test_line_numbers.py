@@ -253,6 +253,32 @@ class TestPlaintextAfterAnEncryptedValue:
         assert kept == [past_the_value]
 
 
+class TestAnEncryptedValueAfterASeparator:
+    """An encrypted value after a form feed or the like is still recognized (#937).
+
+    str.splitlines() started a line there, so the value started one too. Counted to its line
+    break, the line holds it after other text, and the anchored check missed it: the native
+    scanner reported the ciphertext as a high-entropy string, and the engine kept an external
+    finding in it (reported by CodeRabbit on #936).
+    """
+
+    @separators
+    def test_the_native_scanner_leaves_the_ciphertext_out(self, tmp_path: Path, separator: str):
+        path = _write(tmp_path / ".env", f'CLEAR=ok{separator}API_TOKEN="{DOTENVX_CIPHERTEXT}"\n')
+
+        assert NativeScanner(check_entropy=True).scan([path]).findings == []
+
+    @separators
+    def test_the_engine_drops_an_external_finding_in_it(self, tmp_path: Path, separator: str):
+        line = f'CLEAR=ok{separator}API_TOKEN="{DOTENVX_CIPHERTEXT}"'
+        path = _write(tmp_path / ".env", f"{line}\n")
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        in_the_value = _external_finding(path, 1, column=line.index("encrypted:") + 1)
+        before_it = _external_finding(path, 1, column=1)
+
+        assert engine._filter_encrypted_files([in_the_value, before_it]) == [before_it]
+
+
 class TestTrivyValueRecovery:
     """The value trivy redacts is read back from the line trivy names."""
 
