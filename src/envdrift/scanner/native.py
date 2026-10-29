@@ -347,6 +347,31 @@ def _decode_unicode_text(raw: bytes) -> str | None:
     return None
 
 
+def _decode_scannable_text(raw: bytes) -> str | None:
+    """Return ``raw`` as text, or ``None`` for a genuinely-binary blob.
+
+    The native scanner decides it so for a whole file, and for the start of a file too large
+    to scan (#933).
+    """
+    # Decode demonstrably-Unicode text before the binary heuristic can see it
+    # (#477): a UTF-16 env file is ~50% NUL bytes, which the ratio check would
+    # misclassify as a compiled blob and skip wholesale — silently passing a
+    # human-readable file full of plaintext secrets. A BOM or a clean 2-byte
+    # NUL stride identifies the bytes as text, so decode through the right
+    # codec first.
+    content = _decode_unicode_text(raw)
+    if content is not None:
+        return content
+    # Skip genuinely-binary files (compiled blobs etc.) to avoid noise —
+    # but a single stray NUL must NOT hide secrets in an otherwise-text
+    # file. The old "any NUL in the first 8 KiB -> discard ALL findings"
+    # rule let an attacker evade guard by injecting one NUL byte, leaving
+    # a real plaintext key undetected with a clean [OK] (#22).
+    if _looks_binary(raw):
+        return None
+    return raw.decode("utf-8", errors="ignore")
+
+
 def _too_large_warning(file_path: Path, cwd: Path) -> str:
     """The warning for a text file the native scanner did not read for its size (#933)."""
     return (
@@ -840,28 +865,14 @@ class NativeScanner(ScannerBackend):
         try:
             raw = read_raw_scannable_bytes(file_path)
         except FileTooLargeError as too_large:
-            if _decode_unicode_text(too_large.head) is None and _looks_binary(too_large.head):
+            if _decode_scannable_text(too_large.head) is None:
                 return None
             raise
         if raw is None:
             return None
-
-        # Decode demonstrably-Unicode text before the binary heuristic can see it
-        # (#477): a UTF-16 env file is ~50% NUL bytes, which the ratio check would
-        # misclassify as a compiled blob and skip wholesale — silently passing a
-        # human-readable file full of plaintext secrets. A BOM or a clean 2-byte
-        # NUL stride identifies the bytes as text, so decode through the right
-        # codec first.
-        content = _decode_unicode_text(raw)
+        content = _decode_scannable_text(raw)
         if content is None:
-            # Skip genuinely-binary files (compiled blobs etc.) to avoid noise —
-            # but a single stray NUL must NOT hide secrets in an otherwise-text
-            # file. The old "any NUL in the first 8 KiB -> discard ALL findings"
-            # rule let an attacker evade guard by injecting one NUL byte, leaving
-            # a real plaintext key undetected with a clean [OK] (#22).
-            if _looks_binary(raw):
-                return None
-            content = raw.decode("utf-8", errors="ignore")
+            return None
 
         # Neutralize any stray NULs so they can't break pattern matching downstream.
         content = content.replace("\x00", "")
