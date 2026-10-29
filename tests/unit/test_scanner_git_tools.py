@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +17,7 @@ from envdrift.scanner.git_secrets import (
     GitSecretsInstallError,
     GitSecretsNotFoundError,
     GitSecretsScanner,
+    _existing_binary,
     _get_git_secrets_commit,
     _installed_binary,
     get_venv_bin_dir,
@@ -483,6 +485,18 @@ class TestGitSecretsInstalledBinary:
         ):
             assert _installed_binary() is None
 
+    def test_windows_passes_over_the_bash_script_on_path(self, tmp_path: Path) -> None:
+        """shutil.which() of Python 3.12 matches the extensionless script, which Windows cannot run.
+
+        upstream's install.ps1 puts that script on PATH: it was run as a program, and every scan
+        failed. A wrapper with an extension Windows runs is still used.
+        """
+        with patch("platform.system", return_value="Windows"):
+            with patch("shutil.which", return_value=str(tmp_path / "git-secrets")):
+                assert _existing_binary() is None
+            with patch("shutil.which", return_value=str(tmp_path / "git-secrets.cmd")):
+                assert _existing_binary() == tmp_path / "git-secrets.cmd"
+
     @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
     def test_an_install_creates_the_install_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -908,6 +922,19 @@ class TestGitSecretsInstallerPaths:
         home.write_text("a file, not a directory")
         monkeypatch.delenv("VIRTUAL_ENV", raising=False)
         monkeypatch.setenv("HOME", str(home))
+        with (
+            patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with pytest.raises(GitSecretsInstallError, match="Installation failed"):
+                GitSecretsInstaller()._install_from_source()
+
+    def test_install_from_source_reports_a_temporary_directory_it_cannot_make(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The clone goes in a temporary directory, whose OSError escaped the auto-install too."""
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "missing"))
         with (
             patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
             patch("subprocess.run") as mock_run,

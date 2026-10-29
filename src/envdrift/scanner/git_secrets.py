@@ -209,9 +209,18 @@ def _make_runnable(script: Path) -> None:
 def _existing_binary() -> Path | None:
     """git-secrets on PATH, or else where the installer puts it, which need not be on PATH (#908)."""
     system_path = shutil.which("git-secrets")
-    if system_path:
+    if system_path and not _bash_script_on_windows(Path(system_path)):
         return Path(system_path)
     return _installed_binary()
+
+
+def _bash_script_on_windows(path: Path) -> bool:
+    """Whether path is git-secrets' own Bash script on Windows, where only `git secrets` runs it.
+
+    shutil.which() of Python 3.12 also matches a name that has no extension, as upstream's
+    install.ps1 puts the script on PATH, but Windows cannot run that file as a program.
+    """
+    return platform.system() == "Windows" and not path.suffix
 
 
 def _script_file(binary: Path | None) -> Path | None:
@@ -354,13 +363,14 @@ class GitSecretsInstaller:
         if not shutil.which("make"):
             raise GitSecretsInstallError("make not found. Please install make first.")
 
-        commit = _pinned_commit()
+        try:
+            commit = _pinned_commit()
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            repo_path = tmp_path / "git-secrets"
+            # A temporary directory left behind after an install that worked does not fail it
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                repo_path = tmp_path / "git-secrets"
 
-            try:
                 self._clone_at(commit, repo_path)
 
                 # Install to user's local bin
@@ -381,14 +391,14 @@ class GitSecretsInstaller:
 
                 return self._installed_script(target_dir)
 
-            except subprocess.CalledProcessError as e:
-                raise GitSecretsInstallError(f"Installation failed: {e.stderr or e.stdout}") from e
-            except subprocess.TimeoutExpired as e:
-                raise GitSecretsInstallError("Installation timed out") from e
-            except OSError as e:
-                # A directory it cannot make, a mode it may not change: the scanner's auto-install
-                # reports an install error as such, where an OSError escaped it
-                raise GitSecretsInstallError(f"Installation failed: {e}") from e
+        except subprocess.CalledProcessError as e:
+            raise GitSecretsInstallError(f"Installation failed: {e.stderr or e.stdout}") from e
+        except subprocess.TimeoutExpired as e:
+            raise GitSecretsInstallError("Installation timed out") from e
+        except OSError as e:
+            # A temporary or install directory it cannot make, a mode it may not change: the
+            # scanner's auto-install reports an install error as such, where an OSError escaped it
+            raise GitSecretsInstallError(f"Installation failed: {e}") from e
 
     def _installed_script(self, target_dir: Path) -> Path:
         """The git-secrets ``make install`` put in target_dir, made runnable, or else on PATH."""
