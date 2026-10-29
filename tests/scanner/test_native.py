@@ -94,6 +94,12 @@ class _GitFailure(NamedTuple):
     hangs: bool = False
 
 
+def _git(cwd: Path, *args: str) -> None:
+    """Run git in ``cwd`` with a throwaway identity and no commit signing."""
+    config = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", *config, *args], cwd=cwd, check=True, capture_output=True)
+
+
 class TestNativeScannerInternals:
     """Tests for internal native scanner behaviors."""
 
@@ -366,31 +372,59 @@ class TestNativeScannerInternals:
         if shutil.which("git") is None:
             pytest.skip("git not available")
 
-        def git(cwd: Path, *args: str) -> None:
-            config = ["-c", "user.name=t", "-c", "user.email=t@example.com"]
-            config += ["-c", "commit.gpgsign=false"]
-            subprocess.run(["git", *config, *args], cwd=cwd, check=True, capture_output=True)
-
         other = tmp_path / "other"
         other.mkdir()
-        git(other, "init", "-q")
+        _git(other, "init", "-q")
         (other / "readme.txt").write_text("hello\n")
-        git(other, "add", "readme.txt")
-        git(other, "commit", "-qm", "init")
+        _git(other, "add", "readme.txt")
+        _git(other, "commit", "-qm", "init")
         scanned = tmp_path / "scanned"
         scanned.mkdir()
-        git(scanned, "init", "-q")
+        _git(scanned, "init", "-q")
         (scanned / ".gitignore").write_text("secrets.txt\n")
         (scanned / "secrets.txt").write_text(
             "GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n"
         )
-        git(scanned, "add", ".gitignore")
-        git(scanned, "add", "--force", "secrets.txt")
-        git(scanned, "commit", "-qm", "init")
+        _git(scanned, "add", ".gitignore")
+        _git(scanned, "add", "--force", "secrets.txt")
+        _git(scanned, "commit", "-qm", "init")
         location = other / ".git" if variable == "GIT_DIR" else other / ".git" / "index"
         monkeypatch.setenv(variable, str(location))
 
         result = NativeScanner().scan([scanned])
+
+        assert result.error is None
+        assert "secrets.txt" in {finding.file_path.name for finding in result.findings}
+
+    def test_git_lists_a_subdirectory_of_a_linked_worktree_from_its_hook(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """In a linked worktree, git exports GIT_DIR and GIT_INDEX_FILE to every hook.
+
+        With GIT_DIR set, git took the scanned subdirectory as the top of the work tree and read
+        the index paths against it. A tracked file that src/.gitignore matches went unscanned.
+        """
+        import shutil
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        _git(repo, "init", "-q")
+        (repo / "src" / ".gitignore").write_text("secrets.txt\n")
+        (repo / "src" / "secrets.txt").write_text("GITHUB_TOKEN=ghp_" + "x" * 36 + "\n")
+        _git(repo, "add", "src/.gitignore")
+        _git(repo, "add", "--force", "src/secrets.txt")
+        _git(repo, "commit", "-qm", "init")
+        worktree = tmp_path / "worktree"
+        _git(repo, "worktree", "add", "-q", str(worktree))
+        # The worktree's .git file names its git directory, which is what git exports to its hooks.
+        git_dir = Path((worktree / ".git").read_text().split(":", 1)[1].strip())
+        monkeypatch.setenv("GIT_DIR", str(git_dir))
+        monkeypatch.setenv("GIT_INDEX_FILE", str(git_dir / "index"))
+
+        result = NativeScanner().scan([worktree / "src"])
 
         assert result.error is None
         assert "secrets.txt" in {finding.file_path.name for finding in result.findings}
