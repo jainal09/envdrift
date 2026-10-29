@@ -13,10 +13,15 @@ import os
 import signal
 import subprocess  # nosec B404
 import sys
+import time
 from pathlib import Path
 
 # A tree deeper than this is no tool's: the walk stops there.
 _MAX_DEPTH = 64
+# How long the walk may spend listing processes, in all. The engine gives the tools of the
+# scanners that time out 5 seconds to be killed: the processes the walk has stopped must be
+# killed within them, or guard could exit first and leave them stopped.
+_LISTING_SECONDS = 2.0
 
 
 def kill_process_tree(process: subprocess.Popen) -> None:
@@ -49,14 +54,22 @@ def _kill_posix_tree(pid: int) -> None:
 
 
 def _stop_tree(pid: int, stopped: list[int]) -> None:
-    """Stop ``pid`` and the processes below it, level by level, adding each to ``stopped``."""
+    """Stop ``pid`` and the processes below it, level by level, adding each to ``stopped``.
+
+    Once listing the processes has taken ``_LISTING_SECONDS``, the walk ends with the levels it
+    has stopped.
+    """
+    listing_ends = time.monotonic() + _LISTING_SECONDS
     level = [pid]
     for _ in range(_MAX_DEPTH):
         frozen = [p for p in level if _signal(p, signal.SIGSTOP)]
         if not frozen:
             return
         stopped.extend(frozen)
-        children = _children_by_parent()
+        time_left = listing_ends - time.monotonic()
+        if time_left <= 0:
+            return
+        children = _children_by_parent(time_left)
         level = [child for p in frozen for child in children.get(p, ()) if child not in stopped]
 
 
@@ -69,17 +82,20 @@ def _signal(pid: int, sig: int) -> bool:
     return True
 
 
-def _children_by_parent() -> dict[int, list[int]]:
-    """The pid of every process, by the pid of its parent."""
+def _children_by_parent(timeout: float) -> dict[int, list[int]]:
+    """The pid of every process, by the pid of its parent, listed within ``timeout`` seconds."""
     children: dict[int, list[int]] = {}
-    for pid, ppid in _process_table():
+    for pid, ppid in _process_table(timeout):
         children.setdefault(ppid, []).append(pid)
     return children
 
 
-def _process_table() -> list[tuple[int, int]]:
-    """``(pid, ppid)`` of every process: from ``/proc`` on Linux, from ``ps`` elsewhere."""
-    return _proc_table() if Path("/proc/self/stat").is_file() else _ps_table()
+def _process_table(timeout: float) -> list[tuple[int, int]]:
+    """``(pid, ppid)`` of every process: from ``/proc`` on Linux, from ``ps`` elsewhere.
+
+    ``ps`` has ``timeout`` seconds; reading ``/proc`` does not wait on another process.
+    """
+    return _proc_table() if Path("/proc/self/stat").is_file() else _ps_table(timeout)
 
 
 def _proc_table() -> list[tuple[int, int]]:
@@ -92,14 +108,14 @@ def _proc_table() -> list[tuple[int, int]]:
     return table
 
 
-def _ps_table() -> list[tuple[int, int]]:
-    """``(pid, ppid)`` of every process that ``ps`` lists: none when it cannot run."""
+def _ps_table(timeout: float) -> list[tuple[int, int]]:
+    """``(pid, ppid)`` of every process that ``ps`` lists: none when it cannot run in time."""
     try:
         listing = subprocess.run(  # nosec B603, B607
             ["ps", "-A", "-o", "pid=,ppid="],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=timeout,
             check=True,
         ).stdout
     except (OSError, subprocess.SubprocessError):

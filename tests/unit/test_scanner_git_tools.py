@@ -484,6 +484,17 @@ class TestGitSecretsInstalledBinary:
         with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
             assert _installed_binary() is None
 
+    @pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="Windows has no execute permission; root reads any file",
+    )
+    def test_a_file_this_user_cannot_read_is_no_installed_binary(self, tmp_path: Path) -> None:
+        """Bash reads the script it runs: one this user may run but not read cannot run either."""
+        (tmp_path / "git-secrets").write_text("#!/usr/bin/env bash\n")
+        (tmp_path / "git-secrets").chmod(0o311)
+        with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
+            assert _installed_binary() is None
+
     def test_windows_has_no_installed_binary(self, tmp_path: Path) -> None:
         """git-secrets is a Bash script: Windows runs it only as `git secrets`, not by its path.
 
@@ -508,6 +519,33 @@ class TestGitSecretsInstalledBinary:
                 assert _existing_binary() is None
             with patch("shutil.which", return_value=str(tmp_path / "git-secrets.cmd")):
                 assert _existing_binary() == tmp_path / "git-secrets.cmd"
+
+    @pytest.mark.parametrize("suffix", [".ps1", ".vbs", ".js"])
+    def test_windows_runs_git_secrets_past_a_script_that_needs_an_interpreter(
+        self, tmp_path: Path, suffix: str
+    ) -> None:
+        """PATHEXT can list .ps1 or .vbs: such a match was run as a program, and each scan failed.
+
+        Windows starts only a program or a batch file. git-secrets now runs as `git secrets`.
+        """
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("shutil.which", return_value=str(tmp_path / f"git-secrets{suffix}")),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            scanner = GitSecretsScanner()
+            assert scanner._find_binary() == Path("git-secrets-subcommand")
+            scanner._run_git_secrets(["--scan"], tmp_path)
+        assert mock_run.call_args.args[0] == ["git", "secrets", "--scan"]
+
+    def test_windows_reads_an_extension_in_any_case(self, tmp_path: Path) -> None:
+        """Windows extensions have no case: GIT-SECRETS.EXE is a program to run."""
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("shutil.which", return_value=str(tmp_path / "GIT-SECRETS.EXE")),
+        ):
+            assert _existing_binary() == tmp_path / "GIT-SECRETS.EXE"
 
     @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
     def test_an_install_creates_the_install_directory(
@@ -957,6 +995,32 @@ class TestGitSecretsInstallerPaths:
                 GitSecretsInstaller()._install_from_source()
         assert isinstance(raised.value.__cause__, FileNotFoundError), "not the temp directory's"
         mock_run.assert_not_called()  # nothing was cloned
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no execute permission")
+    def test_an_install_over_a_write_only_file_can_run(self, tmp_path: Path) -> None:
+        """``cp -f`` keeps the mode 0200 of the file it writes over, and no one could read it.
+
+        Execute was added only where read was allowed, so nothing was, and the installer returned
+        a git-secrets that could not run.
+        """
+        (tmp_path / "git-secrets").write_text("#!/usr/bin/env bash\n")
+        (tmp_path / "git-secrets").chmod(0o200)
+        installed = GitSecretsInstaller()._installed_script(tmp_path)
+        assert installed == tmp_path / "git-secrets"
+        assert os.access(installed, os.R_OK | os.X_OK), (
+            "the install left a git-secrets that cannot run"
+        )
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no execute permission")
+    def test_an_install_that_still_cannot_run_is_an_install_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """As on a file system mounted noexec, or one that ignores chmod: the install fails loud."""
+        (tmp_path / "git-secrets").write_text("#!/usr/bin/env bash\n")
+        (tmp_path / "git-secrets").chmod(0o644)
+        monkeypatch.setattr(Path, "chmod", lambda self, mode: None)  # a mode that does not take
+        with pytest.raises(GitSecretsInstallError, match="cannot run"):
+            GitSecretsInstaller()._installed_script(tmp_path)
 
     def test_install_from_source_checks_out_the_pinned_commit(self, tmp_path: Path) -> None:
         """The source install builds the commit constants.json pins, not master (#902).

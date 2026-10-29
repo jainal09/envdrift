@@ -431,11 +431,11 @@ def test_a_failed_listing_still_kills_the_processes_it_stopped(
     children_by_parent = process_tree._children_by_parent
     listings = []
 
-    def listing() -> dict[int, list[int]]:
+    def listing(timeout: float) -> dict[int, list[int]]:
         listings.append(None)
         if len(listings) > 1:
             raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
-        return children_by_parent()
+        return children_by_parent(timeout)
 
     monkeypatch.setattr(process_tree, "_children_by_parent", listing)
     tool = subprocess.Popen([sys.executable, "-c", PARENT, str(heartbeat), str(beat)])
@@ -476,11 +476,11 @@ def test_a_failed_listing_does_not_replace_the_timeout(
     children_by_parent = process_tree._children_by_parent
     listings = []
 
-    def listing() -> dict[int, list[int]]:
+    def listing(timeout: float) -> dict[int, list[int]]:
         listings.append(None)
         if len(listings) > 1:
             raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
-        return children_by_parent()
+        return children_by_parent(timeout)
 
     monkeypatch.setattr(process_tree, "_children_by_parent", listing)
     try:
@@ -605,13 +605,44 @@ def test_the_parent_is_read_past_the_command_name(stat: bytes, ppid: int) -> Non
 )
 def test_ps_lists_the_parent_of_each_process() -> None:
     """The listing used where there is no /proc, checked against this process's own parent."""
-    assert dict(process_tree._ps_table())[os.getpid()] == os.getppid()
+    assert dict(process_tree._ps_table(timeout=30))[os.getpid()] == os.getppid()
 
 
 def test_without_ps_no_process_is_listed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The walk then finds no child, and the tool alone is killed, as subprocess.run kills it."""
     monkeypatch.setenv("PATH", str(tmp_path))
-    assert process_tree._ps_table() == []
+    assert process_tree._ps_table(timeout=30) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
+def test_a_listing_that_does_not_end_does_not_hold_the_kill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The walk lists for _LISTING_SECONDS at most, then kills the processes it has stopped.
+
+    With a ps that does not end, it waited 30 s for ps with the tool stopped, past the engine's
+    grace period of 5 s, after which guard can exit and leave the stopped tool so for good.
+    """
+    (tmp_path / "ps").write_text("#!/bin/sh\nexec sleep 60\n")
+    (tmp_path / "ps").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(process_tree, "_process_table", process_tree._ps_table)  # as on macOS
+    tool = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        started = time.monotonic()
+        kill_process_tree(tool)
+        took = time.monotonic() - started
+
+        try:
+            returncode = tool.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            returncode = None
+        assert returncode == -signal.SIGKILL, "the tool was left stopped"
+        grace = engine_module._TOOL_KILL_GRACE_SECONDS
+        assert took < grace, f"the kill took {took:.1f} s, past the engine's {grace} s grace"
+    finally:
+        tool.kill()  # SIGKILL ends a stopped process too; it sends nothing to a reaped tool
+        tool.wait()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")

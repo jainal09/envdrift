@@ -27,6 +27,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess  # nosec B404
 import tempfile
 import time
@@ -189,38 +190,54 @@ def _installed_binary() -> Path | None:
     try:
         # Looking creates no directory, and a directory that cannot be read holds no binary to run
         candidate = get_venv_bin_dir(create=False) / "git-secrets"
-        # As shutil.which() on PATH: a file there that cannot be run is an install to redo
-        return candidate if candidate.is_file() and os.access(candidate, os.X_OK) else None
+        # A file there that this user cannot run is an install to redo
+        return candidate if candidate.is_file() and _runnable(candidate) else None
     except (RuntimeError, OSError):
         return None
 
 
+def _runnable(script: Path) -> bool:
+    """Whether this user can run ``script``: Bash reads the script it runs, so read it too."""
+    return os.access(script, os.R_OK | os.X_OK)
+
+
 def _make_runnable(script: Path) -> None:
-    """Let whoever may read ``script`` run it, if it cannot be run.
+    """Let this user run ``script``, and whoever may read it, if this user cannot run it.
 
     ``make install`` copies git-secrets with ``cp -f``, which keeps the mode of a file it writes
     over, so an install over a git-secrets that could not be run left it so.
+
+    Raises:
+        GitSecretsInstallError: It still cannot be run, as on a file system mounted noexec.
     """
-    if not os.access(script, os.X_OK):
+    if not _runnable(script):
         mode = script.stat().st_mode
-        script.chmod(mode | ((mode & 0o444) >> 2))
+        script.chmod(mode | stat.S_IRUSR | stat.S_IXUSR | ((mode & 0o444) >> 2))
+    if not _runnable(script):
+        raise GitSecretsInstallError(f"git-secrets was installed to {script}, but cannot run there")
+
+
+# The files Windows starts as programs. git-secrets' own Bash script, which has no extension, or
+# a .ps1 or .vbs, needs an interpreter.
+_WINDOWS_PROGRAM_SUFFIXES = frozenset({".exe", ".com", ".bat", ".cmd"})
 
 
 def _existing_binary() -> Path | None:
     """git-secrets on PATH, or else where the installer puts it, which need not be on PATH (#908)."""
     system_path = shutil.which("git-secrets")
-    if system_path and not _bash_script_on_windows(Path(system_path)):
+    if system_path and not _not_a_program_on_windows(Path(system_path)):
         return Path(system_path)
     return _installed_binary()
 
 
-def _bash_script_on_windows(path: Path) -> bool:
-    """Whether path is git-secrets' own Bash script on Windows, where only `git secrets` runs it.
+def _not_a_program_on_windows(path: Path) -> bool:
+    """Whether Windows cannot start path as a program; git-secrets then runs as `git secrets`.
 
     shutil.which() of Python 3.12 also matches a name that has no extension, as upstream's
-    install.ps1 puts the script on PATH, but Windows cannot run that file as a program.
+    install.ps1 puts git-secrets' Bash script on PATH, and PATHEXT can list the extensions of
+    files that need an interpreter, such as .ps1 or .vbs.
     """
-    return platform.system() == "Windows" and not path.suffix
+    return platform.system() == "Windows" and path.suffix.lower() not in _WINDOWS_PROGRAM_SUFFIXES
 
 
 def _script_file(binary: Path | None) -> Path | None:

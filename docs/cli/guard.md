@@ -213,7 +213,9 @@ commit envdrift pins in `constants.json`, and fails when that commit cannot be c
 installs the Homebrew formula. envdrift runs the git-secrets it installed, in the active venv or
 `~/.local/bin`, even when that directory is not on your `PATH`. Older releases did not find it there,
 so the scan failed with "git-secrets reported a match ... that envdrift cannot parse" and every run
-installed it again.
+installed it again. On Windows, git-secrets is a Bash script that only Git's shell runs: envdrift runs
+it as `git secrets`, unless your `PATH` holds a git-secrets program or batch file (`.exe`, `.com`,
+`.bat` or `.cmd`).
 
 ### `--talisman` / `--no-talisman`
 
