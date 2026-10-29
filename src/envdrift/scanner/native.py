@@ -51,7 +51,7 @@ from envdrift.scanner.patterns import (
 )
 from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import is_file_tracked, without_git_location
-from envdrift.utils.text import split_lines
+from envdrift.utils.text import line_and_column, split_lines
 
 # Encryption markers for dotenvx
 DOTENVX_MARKERS = (
@@ -1259,8 +1259,8 @@ class NativeScanner(ScannerBackend):
             # JSON blocks; search() would report only the first.
             for match in pattern.pattern.finditer(content):
                 secret = match.group(1) if match.groups() else match.group(0)
-                line_num = content.count("\n", 0, match.start()) + 1
-                col_num = match.start() - content.rfind("\n", 0, match.start())
+                # Lines as the per-line pass splits them, a lone \r included (#937).
+                line_num, col_num = line_and_column(content, match.start())
                 findings.append(_build_finding(pattern, secret, line_num, col_num))
 
         return findings

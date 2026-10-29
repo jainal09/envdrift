@@ -20,7 +20,7 @@ from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.ignores import IgnoreFilter
 from envdrift.scanner.native import NativeScanner
 from envdrift.scanner.trivy import TrivyScanner
-from envdrift.utils.text import split_lines
+from envdrift.utils.text import line_and_column, split_lines
 
 AWS_KEY = "AKIA" + "IOSFODNN7" + "EXAMPLX"
 DOTENVX_CIPHERTEXT = "encrypted:BEj2" + "Zq9yKxw0Lr3VtP8sN1mD5cH7aG4fU6eB2oI9kJ3lQ0wR5tY8uA1sD4f=="
@@ -88,6 +88,24 @@ class TestSplitLines:
         assert split_lines(text) == lines == text.splitlines()
 
 
+class TestLineAndColumn:
+    """``line_and_column`` counts the lines ``split_lines`` splits, to a position in the text."""
+
+    @pytest.mark.parametrize(
+        ("text", "index", "expected"),
+        [
+            ("abc", 0, (1, 1)),
+            ("abc", 2, (1, 3)),
+            ("a\nbc", 3, (2, 2)),
+            ("a\r\nbc", 4, (2, 2)),
+            ("a\rbc", 2, (2, 1)),
+            ("a\fb\nc", 4, (2, 1)),  # the form feed is no line break
+        ],
+    )
+    def test_it_finds_the_line_and_the_column(self, text: str, index: int, expected):
+        assert line_and_column(text, index) == expected
+
+
 class TestNativeLineNumbers:
     """The native scanner puts a finding on the line git, grep and gitleaks name."""
 
@@ -105,6 +123,23 @@ class TestNativeLineNumbers:
         result = NativeScanner(check_entropy=True).scan([path])
 
         assert [(f.rule_id, f.line_number) for f in result.findings] == [("high-entropy-string", 3)]
+
+    def test_a_multiline_finding_is_counted_as_the_per_line_ones_are(self, tmp_path: Path):
+        """A file with bare \\r line endings puts a multiline finding on its line too."""
+        token = "Zx9Kq2Wm7" + "Lp4Rt8Nv6" + "Bs3Yd1Hf5Gj0Qc"
+        account = (
+            f"SESSION_TOKEN={token}\r"
+            '{"type": "service_account",\r'
+            '  "private_key": "-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----"}\r'
+        )
+        path = _write(tmp_path / "service-account.json", account)
+
+        result = NativeScanner(check_entropy=True).scan([path])
+
+        located = {(f.rule_id, f.line_number, f.column_number) for f in result.findings}
+        assert ("gcp-service-account", 2, 2) in located  # at "type", after the {
+        assert ("private-key-generic", 3, 19) in located
+        assert ("high-entropy-string", 1, None) in located
 
 
 class TestInlineIgnore:
