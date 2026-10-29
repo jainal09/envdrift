@@ -4,17 +4,24 @@ The engine gives each scanner a time limit and stops waiting for one still runni
 thread cannot be stopped, so the scanner is left behind (#870). The tools it runs through
 ``run_tool`` are held to its deadline instead: a tool's timeout is capped at it, no tool or
 download starts once it has passed, and the engine waits for the tools still running then to be
-killed, so that none outlives guard (#900).
+killed, so that none outlives guard (#900). A tool is killed together with the processes it
+started (#911).
 """
 
 from __future__ import annotations
 
+import logging
 import subprocess  # nosec B404
+import sys
 import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
+
+from envdrift.utils.process_tree import kill_process_tree
+
+logger = logging.getLogger(__name__)
 
 
 class ScannerTimedOut(BaseException):
@@ -100,12 +107,70 @@ def check_deadline() -> None:
 def run_tool(args: Any, *, timeout: float, **kwargs: Any) -> subprocess.CompletedProcess[Any]:
     """``subprocess.run(args, timeout=timeout, **kwargs)`` for a tool that a scanner runs.
 
-    In a scanner (see ``scanner_deadline``) the timeout is capped at its deadline, so the tool is
+    A tool that times out is killed together with every process it started (#911). In a
+    scanner (see ``scanner_deadline``) the timeout is capped at its deadline, so the tool is
     killed then, and once the deadline has passed the tool does not start: ``ScannerTimedOut``
-    is raised instead. Outside a scan this is ``subprocess.run`` as it is.
+    is raised instead.
     """
     deadline = current_deadline()
     if deadline is None:
-        return subprocess.run(args, timeout=timeout, **kwargs)  # nosec B603
+        return _run(args, timeout=timeout, **kwargs)
     with deadline.tool():
-        return subprocess.run(args, timeout=deadline.timeout(timeout), **kwargs)  # nosec B603
+        return _run(args, timeout=deadline.timeout(timeout), **kwargs)
+
+
+def _run(
+    args: Any,
+    *,
+    timeout: float,
+    input: Any = None,
+    capture_output: bool = False,
+    check: bool = False,
+    **kwargs: Any,
+) -> subprocess.CompletedProcess[Any]:
+    """``subprocess.run``, but a timeout or an interrupt kills the processes the tool started too.
+
+    ``subprocess.run`` kills only the process it started (#911). This follows its code, with
+    ``_kill_tree`` where it calls ``process.kill()``.
+    """
+    if input is not None:
+        if kwargs.get("stdin") is not None:
+            raise ValueError("stdin and input arguments may not both be used.")
+        kwargs["stdin"] = subprocess.PIPE
+    if capture_output:
+        if kwargs.get("stdout") is not None or kwargs.get("stderr") is not None:
+            raise ValueError("stdout and stderr arguments may not be used with capture_output.")
+        kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
+    with subprocess.Popen(args, **kwargs) as process:  # nosec B603
+        try:
+            stdout, stderr = process.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            _kill_tree(process)
+            if sys.platform == "win32":
+                # Windows reads the output on threads: collect it after the kill.
+                exc.stdout, exc.stderr = process.communicate()
+            else:
+                # POSIX communicate() has put the output so far on the exception.
+                process.wait()
+            raise
+        except BaseException:  # KeyboardInterrupt included, as in subprocess.run
+            _kill_tree(process)
+            raise
+        returncode = process.wait()  # it has exited: communicate() returned
+        if check and returncode:
+            raise subprocess.CalledProcessError(
+                returncode, process.args, output=stdout, stderr=stderr
+            )
+    return subprocess.CompletedProcess(process.args, returncode, stdout, stderr)
+
+
+def _kill_tree(process: subprocess.Popen) -> None:
+    """``kill_process_tree`` while the runner handles a timeout or an interrupt.
+
+    The tool and the processes stopped so far are killed even when listing the processes fails.
+    That error is logged, not raised: the caller must see the timeout or interrupt it handles.
+    """
+    try:
+        kill_process_tree(process)
+    except OSError as exc:
+        logger.warning("Could not kill every process that %s started: %s", process.args, exc)

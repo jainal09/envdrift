@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +18,7 @@ from envdrift.scanner.git_secrets import (
     GitSecretsInstallError,
     GitSecretsNotFoundError,
     GitSecretsScanner,
+    _existing_binary,
     _get_git_secrets_commit,
     _installed_binary,
     get_venv_bin_dir,
@@ -31,6 +34,17 @@ def no_installed_git_secrets():
     """
     with patch("envdrift.scanner.git_secrets._installed_binary", return_value=None):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _posix_platform(monkeypatch):
+    """Run these tests as on Linux, whatever runs them.
+
+    They stub git-secrets at a POSIX path, with no extension. On Windows the lookup passes over
+    such a file, a Bash script that runs there only as `git secrets`; the tests of that patch
+    platform.system themselves.
+    """
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
 
 
 class TestGetVenvBinDir:
@@ -426,14 +440,28 @@ class TestGitSecretsInstalledBinary:
     def test_find_binary_finds_an_install_that_is_not_on_path(self, tmp_path: Path) -> None:
         """No `git secrets --list` probe and no second install: the installed binary is used."""
         installed = tmp_path / "git-secrets"
-        installed.touch()
+        installed.touch(mode=0o755)
         with (
             patch("shutil.which", return_value=None),
             patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
+            patch("platform.system", return_value="Linux"),
             patch("subprocess.run") as mock_run,
         ):
             scanner = GitSecretsScanner(auto_install=True)
             assert scanner._find_binary() == installed
+        mock_run.assert_not_called()
+
+    def test_install_finds_an_install_that_is_not_on_path(self, tmp_path: Path) -> None:
+        """The installer does not clone and build again over the git-secrets it put there."""
+        installed = tmp_path / "git-secrets"
+        installed.touch(mode=0o755)
+        with (
+            patch("shutil.which", return_value=None),
+            patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
+            patch("platform.system", return_value="Linux"),
+            patch("subprocess.run") as mock_run,
+        ):
+            assert GitSecretsInstaller().install() == installed
         mock_run.assert_not_called()
 
     def test_no_install_directory_means_no_installed_binary(self) -> None:
@@ -447,6 +475,77 @@ class TestGitSecretsInstalledBinary:
     def test_an_empty_install_directory_has_no_installed_binary(self, tmp_path: Path) -> None:
         with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
             assert _installed_binary() is None
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no execute permission")
+    def test_a_file_that_cannot_run_is_no_installed_binary(self, tmp_path: Path) -> None:
+        """As shutil.which() passes one over on PATH: the scanner cannot run it, so it reinstalls."""
+        (tmp_path / "git-secrets").write_text("#!/usr/bin/env bash\n")
+        (tmp_path / "git-secrets").chmod(0o644)
+        with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
+            assert _installed_binary() is None
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="Windows has no execute permission; root reads any file",
+    )
+    def test_a_file_this_user_cannot_read_is_no_installed_binary(self, tmp_path: Path) -> None:
+        """Bash reads the script it runs: one this user may run but not read cannot run either."""
+        (tmp_path / "git-secrets").write_text("#!/usr/bin/env bash\n")
+        (tmp_path / "git-secrets").chmod(0o311)
+        with patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path):
+            assert _installed_binary() is None
+
+    def test_windows_has_no_installed_binary(self, tmp_path: Path) -> None:
+        """git-secrets is a Bash script: Windows runs it only as `git secrets`, not by its path.
+
+        The extensionless script in the venv's Scripts was taken for a binary to run, and
+        install() returned it instead of saying Windows has no automatic install.
+        """
+        (tmp_path / "git-secrets").touch(mode=0o755)
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("envdrift.scanner.git_secrets.get_venv_bin_dir", return_value=tmp_path),
+        ):
+            assert _installed_binary() is None
+
+    def test_windows_passes_over_the_bash_script_on_path(self, tmp_path: Path) -> None:
+        """shutil.which() of Python 3.12 matches the extensionless script, which Windows cannot run.
+
+        upstream's install.ps1 puts that script on PATH: it was run as a program, and every scan
+        failed. A wrapper with an extension Windows runs is still used.
+        """
+        with patch("platform.system", return_value="Windows"):
+            with patch("shutil.which", return_value=str(tmp_path / "git-secrets")):
+                assert _existing_binary() is None
+            with patch("shutil.which", return_value=str(tmp_path / "git-secrets.cmd")):
+                assert _existing_binary() == tmp_path / "git-secrets.cmd"
+
+    @pytest.mark.parametrize("suffix", [".ps1", ".vbs", ".js"])
+    def test_windows_runs_git_secrets_past_a_script_that_needs_an_interpreter(
+        self, tmp_path: Path, suffix: str
+    ) -> None:
+        """PATHEXT can list .ps1 or .vbs: such a match was run as a program, and each scan failed.
+
+        Windows starts only a program or a batch file. git-secrets now runs as `git secrets`.
+        """
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("shutil.which", return_value=str(tmp_path / f"git-secrets{suffix}")),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            scanner = GitSecretsScanner()
+            assert scanner._find_binary() == Path("git-secrets-subcommand")
+            scanner._run_git_secrets(["--scan"], tmp_path)
+        assert mock_run.call_args.args[0] == ["git", "secrets", "--scan"]
+
+    def test_windows_reads_an_extension_in_any_case(self, tmp_path: Path) -> None:
+        """Windows extensions have no case: GIT-SECRETS.EXE is a program to run."""
+        with (
+            patch("platform.system", return_value="Windows"),
+            patch("shutil.which", return_value=str(tmp_path / "GIT-SECRETS.EXE")),
+        ):
+            assert _existing_binary() == tmp_path / "GIT-SECRETS.EXE"
 
     @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
     def test_an_install_creates_the_install_directory(
@@ -860,6 +959,68 @@ class TestGitSecretsInstallerPaths:
             installer = GitSecretsInstaller()
             with pytest.raises(GitSecretsInstallError, match="timed out"):
                 installer._install_from_source()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="~/.local/bin is a POSIX install directory")
+    def test_install_from_source_reports_a_filesystem_error_as_an_install_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scanner's auto-install reports a GitSecretsInstallError: an OSError escaped it.
+
+        The home directory is a file, so ~/.local/bin, where the install goes, cannot be made.
+        """
+        home = tmp_path / "home"
+        home.write_text("a file, not a directory")
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.setenv("HOME", str(home))
+        with (
+            patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with pytest.raises(GitSecretsInstallError, match="Installation failed") as raised:
+                GitSecretsInstaller()._install_from_source()
+        assert isinstance(raised.value.__cause__, NotADirectoryError), "not ~/.local/bin's error"
+
+    def test_install_from_source_reports_a_temporary_directory_it_cannot_make(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The clone goes in a temporary directory, whose OSError escaped the auto-install too."""
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "missing"))
+        with (
+            patch("shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with pytest.raises(GitSecretsInstallError, match="Installation failed") as raised:
+                GitSecretsInstaller()._install_from_source()
+        assert isinstance(raised.value.__cause__, FileNotFoundError), "not the temp directory's"
+        mock_run.assert_not_called()  # nothing was cloned
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no execute permission")
+    def test_an_install_over_a_write_only_file_can_run(self, tmp_path: Path) -> None:
+        """``cp -f`` keeps the mode 0200 of the file it writes over, and no one could read it.
+
+        Execute was added only where read was allowed, so nothing was, and the installer returned
+        a git-secrets that could not run.
+        """
+        (tmp_path / "git-secrets").write_text("#!/usr/bin/env bash\n")
+        (tmp_path / "git-secrets").chmod(0o200)
+        installed = GitSecretsInstaller()._installed_script(tmp_path)
+        assert installed == tmp_path / "git-secrets"
+        assert os.access(installed, os.R_OK | os.X_OK), (
+            "the install left a git-secrets that cannot run"
+        )
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no execute permission")
+    def test_an_install_that_still_cannot_run_is_an_install_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """As on a file system mounted noexec, or one that ignores chmod: the install fails loud."""
+        (tmp_path / "git-secrets").write_text("#!/usr/bin/env bash\n")
+        (tmp_path / "git-secrets").chmod(0o644)
+        monkeypatch.setattr(Path, "chmod", lambda self, mode: None)  # a mode that does not take
+        with pytest.raises(GitSecretsInstallError, match="cannot run"):
+            GitSecretsInstaller()._installed_script(tmp_path)
 
     def test_install_from_source_checks_out_the_pinned_commit(self, tmp_path: Path) -> None:
         """The source install builds the commit constants.json pins, not master (#902).

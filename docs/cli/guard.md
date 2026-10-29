@@ -213,7 +213,9 @@ commit envdrift pins in `constants.json`, and fails when that commit cannot be c
 installs the Homebrew formula. envdrift runs the git-secrets it installed, in the active venv or
 `~/.local/bin`, even when that directory is not on your `PATH`. Older releases did not find it there,
 so the scan failed with "git-secrets reported a match ... that envdrift cannot parse" and every run
-installed it again.
+installed it again. On Windows, git-secrets is a Bash script that only Git's shell runs: envdrift runs
+it as `git secrets`, unless your `PATH` holds a git-secrets program or batch file (`.exe`, `.com`,
+`.bat` or `.cmd`).
 
 ### `--talisman` / `--no-talisman`
 
@@ -798,12 +800,14 @@ other scanners' results stand, and with no blocking finding guard exits 5. At
 most four scanners run at once, and each one's 10 minutes count from when it
 starts. A scanner that timed out no longer counts toward the four. The tool it
 was running (gitleaks, trufflehog, ...) is killed when its time is up, and guard
-waits up to 5 seconds for that before it goes on. The scanner starts no tool and
+waits up to 5 seconds for that before it goes on, once for all the scanners that
+time out together. The scanner starts no tool and
 no download after that, so none of its tools keeps running after guard exits.
 A scanner that finishes only after its time is up has timed out too, since a tool
-it ran may have been cut short. Only the tool's own process is killed: a process
-the tool started, such as the `git grep` that git-secrets runs, runs on until it
-next writes its output or its work is done
+it ran may have been cut short. A tool is killed together with the processes it
+started, such as the `git grep` that git-secrets runs. Earlier releases killed
+only the tool, and those processes ran on after guard had exited, until they next
+wrote their output or their work was done
 ([#911](https://github.com/jainal09/envdrift/issues/911)).
 
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]

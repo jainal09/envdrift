@@ -27,6 +27,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess  # nosec B404
 import tempfile
 import time
@@ -182,21 +183,61 @@ def _pinned_commit() -> str:
 
 
 def _installed_binary() -> Path | None:
-    """The git-secrets the installer put in its target directory, if it is there."""
+    """The git-secrets the installer put in its target directory, if it is there to run."""
+    if platform.system() == "Windows":
+        # A Bash script, which Windows runs only as `git secrets`, through Git's own shell
+        return None
     try:
         # Looking creates no directory, and a directory that cannot be read holds no binary to run
         candidate = get_venv_bin_dir(create=False) / "git-secrets"
-        return candidate if candidate.is_file() else None
+        # A file there that this user cannot run is an install to redo
+        return candidate if candidate.is_file() and _runnable(candidate) else None
     except (RuntimeError, OSError):
         return None
+
+
+def _runnable(script: Path) -> bool:
+    """Whether this user can run ``script``: Bash reads the script it runs, so read it too."""
+    return os.access(script, os.R_OK | os.X_OK)
+
+
+def _make_runnable(script: Path) -> None:
+    """Let this user run ``script``, and whoever may read it, if this user cannot run it.
+
+    ``make install`` copies git-secrets with ``cp -f``, which keeps the mode of a file it writes
+    over, so an install over a git-secrets that could not be run left it so.
+
+    Raises:
+        GitSecretsInstallError: It still cannot be run, as on a file system mounted noexec.
+    """
+    if not _runnable(script):
+        mode = script.stat().st_mode
+        script.chmod(mode | stat.S_IRUSR | stat.S_IXUSR | ((mode & 0o444) >> 2))
+    if not _runnable(script):
+        raise GitSecretsInstallError(f"git-secrets was installed to {script}, but cannot run there")
+
+
+# The files Windows starts as programs. git-secrets' own Bash script, which has no extension, or
+# a .ps1 or .vbs, needs an interpreter.
+_WINDOWS_PROGRAM_SUFFIXES = frozenset({".exe", ".com", ".bat", ".cmd"})
 
 
 def _existing_binary() -> Path | None:
     """git-secrets on PATH, or else where the installer puts it, which need not be on PATH (#908)."""
     system_path = shutil.which("git-secrets")
-    if system_path:
+    if system_path and not _not_a_program_on_windows(Path(system_path)):
         return Path(system_path)
     return _installed_binary()
+
+
+def _not_a_program_on_windows(path: Path) -> bool:
+    """Whether Windows cannot start path as a program; git-secrets then runs as `git secrets`.
+
+    shutil.which() of Python 3.12 also matches a name that has no extension, as upstream's
+    install.ps1 puts git-secrets' Bash script on PATH, and PATHEXT can list the extensions of
+    files that need an interpreter, such as .ps1 or .vbs.
+    """
+    return platform.system() == "Windows" and path.suffix.lower() not in _WINDOWS_PROGRAM_SUFFIXES
 
 
 def _script_file(binary: Path | None) -> Path | None:
@@ -267,11 +308,11 @@ class GitSecretsInstaller:
         Raises:
             GitSecretsInstallError: If installation fails.
         """
-        # Check if already installed
-        existing = shutil.which("git-secrets")
-        if existing and not force:
+        # Check if already installed: on PATH, or where this installer puts it
+        existing = _existing_binary()
+        if existing is not None and not force:
             self.progress("git-secrets already installed")
-            return Path(existing)
+            return existing
 
         system = platform.system()
 
@@ -339,13 +380,14 @@ class GitSecretsInstaller:
         if not shutil.which("make"):
             raise GitSecretsInstallError("make not found. Please install make first.")
 
-        commit = _pinned_commit()
+        try:
+            commit = _pinned_commit()
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            repo_path = tmp_path / "git-secrets"
+            # A temporary directory left behind after an install that worked does not fail it
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                repo_path = tmp_path / "git-secrets"
 
-            try:
                 self._clone_at(commit, repo_path)
 
                 # Install to user's local bin
@@ -364,22 +406,31 @@ class GitSecretsInstaller:
                     check=True,
                 )
 
-                git_secrets_path = target_dir / "git-secrets"
-                if git_secrets_path.exists():
-                    self.progress(f"Installed to {git_secrets_path}")
-                    return git_secrets_path
+                return self._installed_script(target_dir)
 
-                # Try system-wide check
-                system_path = shutil.which("git-secrets")
-                if system_path:
-                    return Path(system_path)
+        except subprocess.CalledProcessError as e:
+            raise GitSecretsInstallError(f"Installation failed: {e.stderr or e.stdout}") from e
+        except subprocess.TimeoutExpired as e:
+            raise GitSecretsInstallError("Installation timed out") from e
+        except OSError as e:
+            # A temporary or install directory it cannot make, a mode it may not change: the
+            # scanner's auto-install reports an install error as such, where an OSError escaped it
+            raise GitSecretsInstallError(f"Installation failed: {e}") from e
 
-                raise GitSecretsInstallError("git-secrets not found after installation")
+    def _installed_script(self, target_dir: Path) -> Path:
+        """The git-secrets ``make install`` put in target_dir, made runnable, or else on PATH."""
+        git_secrets_path = target_dir / "git-secrets"
+        if git_secrets_path.exists():
+            _make_runnable(git_secrets_path)
+            self.progress(f"Installed to {git_secrets_path}")
+            return git_secrets_path
 
-            except subprocess.CalledProcessError as e:
-                raise GitSecretsInstallError(f"Installation failed: {e.stderr or e.stdout}") from e
-            except subprocess.TimeoutExpired as e:
-                raise GitSecretsInstallError("Installation timed out") from e
+        # Try system-wide check
+        system_path = shutil.which("git-secrets")
+        if system_path:
+            return Path(system_path)
+
+        raise GitSecretsInstallError("git-secrets not found after installation")
 
     def _clone_at(self, commit: str, repo_path: Path) -> None:
         """Clone git-secrets to repo_path and check out commit there."""
