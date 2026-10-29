@@ -56,26 +56,20 @@ def _hook_env(git_root: Path) -> dict[str, str] | None:
     repository instead (#919).
 
     A relative value, ``.git/index`` during a plain ``git commit``, means what it means to a git
-    run here, not to one run in ``git_root``, so a kept one is passed as absolute.
+    run here, not to one run in ``git_root``: when the variables are kept, the environment then
+    holds their absolute paths.
     """
     exported = {name: os.environ[name] for name in GIT_LOCATION_VARIABLES if name in os.environ}
     if not exported:
         return None
     env = without_git_location()
-    relative = not all(Path(value).is_absolute() for value in exported.values())
-    paths = (
-        _hook_paths(exported)
-        if relative
-        else {name: Path(value) for name, value in exported.items()}
-    )
+    paths = _hook_paths(exported)
     if paths is None or not _paths_of(paths, git_root, env):
         return env
-    if relative:
-        return {**os.environ, **{name: str(path) for name, path in paths.items()}}
-    return None
+    return None if paths == exported else {**os.environ, **paths}
 
 
-def _paths_of(paths: Mapping[str, Path], git_root: Path, env: Mapping[str, str]) -> bool:
+def _paths_of(paths: Mapping[str, str], git_root: Path, env: Mapping[str, str]) -> bool:
     """Whether the paths that a hook's location variables point at are ``git_root``'s.
 
     ``paths`` is by variable name, and ``env`` the environment without them.
@@ -87,11 +81,21 @@ def _paths_of(paths: Mapping[str, Path], git_root: Path, env: Mapping[str, str])
     own = {"GIT_DIR": git_dir, "GIT_COMMON_DIR": common_dir, "GIT_WORK_TREE": git_root.resolve()}
     for name, path in paths.items():
         if name == "GIT_INDEX_FILE":
-            if not _index_of(path.resolve(), git_dir, named="GIT_DIR" in paths, env=env):
+            if not _index_of(Path(path).resolve(), git_dir, named="GIT_DIR" in paths, env=env):
                 return False
-        elif path.resolve() != own[name]:
+        elif Path(path).resolve() != own[name]:
             return False
     return True
+
+
+def _hook_paths(exported: Mapping[str, str]) -> dict[str, str] | None:
+    """The absolute paths that the location variables ``exported`` point at, if known.
+
+    An absolute value is its own; for a relative one, git says (``_git_paths``).
+    """
+    if all(Path(value).is_absolute() for value in exported.values()):
+        return dict(exported)
+    return _git_paths(list(exported))
 
 
 # The rev-parse options that print the path each location variable names, as git reads it.
@@ -103,7 +107,7 @@ _LOCATION_OPTIONS = {
 }
 
 
-def _hook_paths(names: Iterable[str]) -> dict[str, Path] | None:
+def _git_paths(names: list[str]) -> dict[str, str] | None:
     """Where the location variables ``names`` point for a git run here, as absolute paths.
 
     git reads a relative GIT_DIR or GIT_WORK_TREE against the directory it runs in, but a
@@ -111,7 +115,6 @@ def _hook_paths(names: Iterable[str]) -> dict[str, Path] | None:
     subdirectory say. So git, run in this process's working directory and environment, says
     where they point, relative to that directory. None when it cannot.
     """
-    names = list(names)
     try:
         cwd = Path.cwd()
         result = run_tool(
@@ -128,7 +131,7 @@ def _hook_paths(names: Iterable[str]) -> dict[str, Path] | None:
     lines = result.stdout.splitlines()
     if result.returncode != 0 or len(lines) != len(names):
         return None
-    return {name: cwd / line for name, line in zip(names, lines, strict=True)}
+    return {name: str(cwd / line) for name, line in zip(names, lines, strict=True)}
 
 
 def _git_dirs(cwd: Path, env: Mapping[str, str]) -> tuple[Path, Path] | None:
