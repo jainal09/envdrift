@@ -44,14 +44,21 @@ pytestmark = pytest.mark.real_tool_runner
 
 # A tool that never ends. It rewrites its heartbeat file, which holds its pid, every 50 ms, so a
 # test on any platform can tell whether it still runs, even after the process that started it
-# has exited.
+# has exited. The file is replaced whole: written in place, a tool stopped and killed between
+# the truncation and the write left it empty, and the test that read its pid said it had never
+# started (#924).
 HEARTBEAT = """
 import os, sys, time
 from pathlib import Path
 
 beat = Path(sys.argv[1])
+staged = beat.with_name(beat.name + ".new")
 while True:
-    beat.write_text(f"{os.getpid()} {time.monotonic()}")
+    staged.write_text(f"{os.getpid()} {time.monotonic()}")
+    try:
+        os.replace(staged, beat)
+    except PermissionError:  # Windows, while a test reads it: the next beat replaces it
+        pass
     time.sleep(0.05)
 """
 
@@ -61,8 +68,9 @@ LIMIT_SECONDS = 1.5
 # then, kills it a second after the engine has given up on the scanner.
 STARTUP_DELAY_SECONDS = 1.0
 TIMED_OUT = f"Scanner timed out after {LIMIT_SECONDS}s"
-# The timeout of a tool that starts a child: long enough for both, two Python processes, to start
-# on a loaded machine. A child killed before it started would prove nothing (#924).
+# The timeout of a tool that starts a child, or the limit of a scanner whose tool does: long
+# enough for two Python processes to start on a loaded machine. A child killed before it started
+# would prove nothing (#924).
 CHILD_TIMEOUT_SECONDS = 4.0
 
 
@@ -324,7 +332,7 @@ def test_a_git_helper_is_held_to_the_scanners_deadline(
     git.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{heartbeat}" "{beat}"\n')
     git.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    engine = _engine(RepositoryRoot(), monkeypatch)
+    engine = _engine(RepositoryRoot(), monkeypatch, limit=CHILD_TIMEOUT_SECONDS)
 
     try:
         result = engine.scan([tmp_path])
@@ -334,7 +342,9 @@ def test_a_git_helper_is_held_to_the_scanners_deadline(
     finally:
         _stop(beat)
 
-    assert [r.error for r in result.results] == [TIMED_OUT]
+    assert [r.error for r in result.results] == [
+        f"Scanner timed out after {CHILD_TIMEOUT_SECONDS}s"
+    ]
 
 
 @pytest.mark.skipif(
