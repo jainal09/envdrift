@@ -28,8 +28,9 @@ Files are decoded through UTF-8/UTF-16/UTF-32 BOMs (and BOM-less UTF-16), so a
 UTF-16 env file written by Windows tools is scanned like its UTF-8 equivalent.
 
 The native scanner reads files of up to 10 MiB. It does not scan a text file over that size: the
-Scanner Warnings name the file (`scanner_results[].warnings` in `--json`), it is not counted as
-scanned, and the exit code does not change. Scan it with another scanner, or add it to
+Scanner Warnings name the file (`scanner_results[].warnings` in `--json`; under `--staged`, its
+path in the repository, not the temporary copy scanned), it is not counted as scanned, and the
+exit code does not change. Scan it with another scanner, or add it to
 `[guard] ignore_paths` to skip it on purpose. A binary file is skipped whatever its size. Earlier
 releases skipped a text file over 10 MiB without a word and counted it as scanned
 ([#933](https://github.com/jainal09/envdrift/issues/933)).

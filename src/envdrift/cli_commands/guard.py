@@ -204,7 +204,9 @@ def _materialize_staged_index(
     import subprocess  # nosec B404
 
     tmpdir = tempfile.TemporaryDirectory(prefix="envdrift-staged-", ignore_cleanup_errors=True)
-    mirror_root = Path(tmpdir.name)
+    # Resolved, so a path a scanner prints is spelled as a key of display_paths
+    # is: macOS's /var is /private/var, and Windows may name the temp dir in 8.3.
+    mirror_root = Path(tmpdir.name).resolve()
     scan_paths: list[Path] = []
     display_paths: dict[Path, Path] = {}
     cwd = Path.cwd()
@@ -297,8 +299,28 @@ def _remap_finding_paths(
     collection branches (#476). Descriptions are rewritten too: scanners embed
     the scanned path in prose (e.g. native's "Run 'envdrift encrypt <path>'"),
     and a mirror temp path there is both a leak and a dead suggestion — the
-    directory is deleted right after the scan.
+    directory is deleted right after the scan. Scanner warnings are rewritten
+    for the same reason: the native scanner names a file too big to scan in one.
     """
+
+    # A warning names a file as display_path shows it: absolute, or relative to the
+    # cwd, resolved or not, when the mirror is under it. Longest first, so that no
+    # path is rewritten through a shorter one it begins with ("a" in "a.bak").
+    cwds = {Path.cwd(), Path.cwd().resolve()}
+    renames = sorted(
+        {
+            (str(form), str(display))
+            for mirror, display in display_paths.items()
+            for form in (mirror, *(display_path(mirror, cwd) for cwd in cwds))
+        },
+        key=lambda rename: len(rename[0]),
+        reverse=True,
+    )
+
+    def remap_warning(warning: str) -> str:
+        for mirror_str, display_str in renames:
+            warning = warning.replace(mirror_str, display_str)
+        return warning
 
     def remap(finding: ScanFinding) -> ScanFinding:
         try:
@@ -319,7 +341,11 @@ def _remap_finding_paths(
     return dataclasses.replace(
         result,
         results=[
-            dataclasses.replace(scan, findings=[remap(f) for f in scan.findings])
+            dataclasses.replace(
+                scan,
+                findings=[remap(f) for f in scan.findings],
+                warnings=[remap_warning(w) for w in scan.warnings],
+            )
             for scan in result.results
         ],
         unique_findings=[remap(f) for f in result.unique_findings],
