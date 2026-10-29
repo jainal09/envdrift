@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -454,11 +455,11 @@ def test_a_failed_listing_still_kills_the_processes_it_stopped(
             os.kill(child, signal.SIGCONT)  # a child left stopped would beat again
         assert not _still_beating(beat), "the tool's child was left stopped"
     finally:
-        for pid in (tool.pid, child):
-            if pid is not None:
-                with contextlib.suppress(OSError):
-                    os.kill(pid, signal.SIGKILL)  # which ends a stopped process too
+        tool.kill()  # SIGKILL ends a stopped process too; it sends nothing to a reaped tool
         tool.wait()
+        if child is not None:
+            with contextlib.suppress(OSError):
+                os.kill(child, signal.SIGKILL)
 
 
 @pytest.mark.xfail(
@@ -487,6 +488,41 @@ def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
         _stop(beat)
 
 
+class InterruptError(Exception):
+    """Raised by a signal handler while the runner waits, as Ctrl-C raises KeyboardInterrupt."""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the interrupt is a POSIX signal")
+def test_an_interrupted_tool_is_killed_with_the_processes_it_started(tmp_path: Path) -> None:
+    """An exception that breaks off the wait, as Ctrl-C's does, kills the tree as a timeout does."""
+    beat = tmp_path / "beat"
+    heartbeat = tmp_path / "heartbeat.py"
+    heartbeat.write_text(HEARTBEAT)
+
+    def interrupt(signum: int, frame: object) -> None:
+        raise InterruptError
+
+    previous = signal.signal(signal.SIGUSR1, interrupt)
+    # Sent to this thread, which waits for the tool: a signal to the process could go to another.
+    timer = threading.Timer(1.5, signal.pthread_kill, (threading.get_ident(), signal.SIGUSR1))
+    timer.start()
+    try:
+        with pytest.raises(InterruptError):
+            run_tool(
+                [sys.executable, "-c", PARENT, str(heartbeat), str(beat)],
+                capture_output=True,
+                timeout=60,
+            )
+
+        assert beat.exists(), "the tool's child never started"
+        assert not _still_beating(beat), "the tool's child still runs after the interrupt"
+    finally:
+        timer.cancel()
+        timer.join()
+        signal.signal(signal.SIGUSR1, previous)
+        _stop(beat)
+
+
 def test_the_runner_takes_what_subprocess_run_takes() -> None:
     """``run_tool`` runs a tool as ``subprocess.run`` would, input and errors included."""
     echo = [sys.executable, "-c", "import sys; sys.stdout.write(sys.stdin.read().upper())"]
@@ -494,6 +530,8 @@ def test_the_runner_takes_what_subprocess_run_takes() -> None:
 
     done = run_tool(echo, input="secret", capture_output=True, text=True, timeout=60)
     assert (done.returncode, done.stdout, done.stderr) == (0, "SECRET", "")
+    quiet = run_tool([sys.executable, "-c", ""], timeout=60)
+    assert (quiet.returncode, quiet.stdout, quiet.stderr) == (0, None, None)
     assert run_tool(fail, capture_output=True, timeout=60).returncode == 3
     with pytest.raises(subprocess.CalledProcessError) as raised:
         run_tool(fail, capture_output=True, text=True, timeout=60, check=True)
@@ -516,6 +554,28 @@ def test_the_runner_takes_what_subprocess_run_takes() -> None:
 def test_the_parent_is_read_past_the_command_name(stat: bytes, ppid: int) -> None:
     """A command name in /proc/<pid>/stat may hold spaces and parentheses, and need not be text."""
     assert _ppid_from_stat(stat) == ppid
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("ps") is None,
+    reason="ps lists the processes on macOS and the BSDs",
+)
+def test_ps_lists_the_parent_of_each_process() -> None:
+    """The listing used where there is no /proc, checked against this process's own parent."""
+    assert dict(process_tree._ps_table())[os.getpid()] == os.getppid()
+
+
+def test_without_ps_no_process_is_listed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The walk then finds no child, and the tool alone is killed, as subprocess.run kills it."""
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert process_tree._ps_table() == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
+def test_a_process_it_cannot_signal_is_not_counted_as_stopped() -> None:
+    """One that is gone, or not this user's, is neither stopped nor walked below."""
+    gone = 2**22 + 1  # above the highest pid of Linux (PID_MAX_LIMIT) and of macOS
+    assert process_tree._signal(gone, signal.SIGSTOP) is False
 
 
 class StuckTool(ScannerBackend):

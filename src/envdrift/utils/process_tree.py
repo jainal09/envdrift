@@ -79,14 +79,21 @@ def _children_by_parent() -> dict[int, list[int]]:
 
 def _process_table() -> list[tuple[int, int]]:
     """``(pid, ppid)`` of every process: from ``/proc`` on Linux, from ``ps`` elsewhere."""
-    proc = Path("/proc")
-    if (proc / "self" / "stat").is_file():
-        table = []
-        for entry in proc.iterdir():
-            if entry.name.isdigit():
-                with contextlib.suppress(OSError, ValueError, IndexError):
-                    table.append((int(entry.name), _ppid_from_stat((entry / "stat").read_bytes())))
-        return table
+    return _proc_table() if Path("/proc/self/stat").is_file() else _ps_table()
+
+
+def _proc_table() -> list[tuple[int, int]]:
+    """``(pid, ppid)`` of every process that Linux's ``/proc`` lists."""
+    table = []
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            with contextlib.suppress(OSError, ValueError, IndexError):
+                table.append((int(entry.name), _ppid_from_stat((entry / "stat").read_bytes())))
+    return table
+
+
+def _ps_table() -> list[tuple[int, int]]:
+    """``(pid, ppid)`` of every process that ``ps`` lists: none when it cannot run."""
     try:
         listing = subprocess.run(  # nosec B603, B607
             ["ps", "-A", "-o", "pid=,ppid="],
