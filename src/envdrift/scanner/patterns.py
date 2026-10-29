@@ -517,9 +517,10 @@ HIGH_PATTERNS: list[SecretPattern] = [
         id="sha512crypt-hash",
         description="SHA-512 Crypt Password Hash",
         # crypt(3) writes an optional rounds= field, and a salt of 0 to 16 characters (#934).
-        # A salt need not keep to crypt's own alphabet: libxcrypt also takes "_", "'", "-" and
-        # other punctuation, so it is anything but whitespace and the "$" and ":" separators.
-        pattern=re.compile(r"(\$6\$(?:rounds=[0-9]{1,9}\$)?[^\s$:]{0,16}\$[a-zA-Z0-9./]{86})"),
+        # A salt need not keep to crypt's own alphabet: libxcrypt takes "_", "'", "-" and other
+        # punctuation, and OpenSSL's passwd -6 writes spaces, tabs and ":" too. So it is anything
+        # but the "$" that ends it and a line break.
+        pattern=re.compile(r"(\$6\$(?:rounds=[0-9]{1,9}\$)?[^$\r\n]{0,16}\$[a-zA-Z0-9./]{86})"),
         severity=FindingSeverity.CRITICAL,
     ),
     # Docker registry auth

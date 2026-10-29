@@ -16,8 +16,8 @@ from envdrift.scanner.patterns import (
 
 # crypt(3)'s SHA-512 hashes of "pw" in each form it writes: the default 16-character salt, an
 # explicit rounds= field at passlib's default rounds, a 2-character salt, an empty salt, and
-# salts with characters outside crypt's own alphabet, which libxcrypt takes (#934). Built by
-# concatenation, as the other fixtures are.
+# salts with characters outside crypt's own alphabet, as libxcrypt takes them and as OpenSSL's
+# passwd -6 writes them (#934). Built by concatenation, as the other fixtures are.
 SHA512CRYPT_FORMS = {
     "default": (
         "$6$"
@@ -48,6 +48,11 @@ SHA512CRYPT_FORMS = {
         "$6$"
         + "x-y'z@w$"
         + "AL5QqMAPOEwgj9SoddfXxe0OTZ4aNsLCcOZ10ISgSOZ0ra3wlh4FZj6uqzceYavICHNF1arCqFD8GE0SNxYJw/"
+    ),
+    "openssl-salt": (
+        "$6$"
+        + "a b!c:d$"
+        + "1ykilPn5z.fmgK8tU.PcnAV.EkvcLBfkTgIYFtCpzE3BwUVmq8JVL3Ytork22PIuxojwO4u6IknFKxMFmKaDA."
     ),
 }
 
