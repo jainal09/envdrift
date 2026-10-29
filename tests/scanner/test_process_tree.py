@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -374,6 +375,46 @@ def test_the_search_for_a_tools_output_ends_with_the_time_for_listing(
         holder.wait()
         assert holder.stdout is not None
         holder.stdout.close()
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/fd").is_dir(), reason="Linux lists a process's files in /proc"
+)
+def test_a_process_with_many_files_is_read_only_until_the_time_for_listing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process's file descriptors are read an entry at a time, and no longer than the time.
+
+    The whole directory was listed before the time was looked at: for a process with a very
+    large file table, past the time, while the tool and its processes waited stopped.
+    """
+    fd_dir = tmp_path / "fd"
+    fd_dir.mkdir()
+    for fd in range(200):
+        (fd_dir / str(fd)).symlink_to(os.devnull)
+    scandir, read = os.scandir, []
+
+    class SlowListing:
+        """``os.scandir``, but each entry takes 10 ms to read, as in a very large directory."""
+
+        def __init__(self, path: Path) -> None:
+            self._entries = scandir(path)
+
+        def __enter__(self) -> SlowListing:
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            self._entries.close()
+
+        def __iter__(self) -> Iterator[os.DirEntry[str]]:
+            for entry in self._entries:
+                read.append(entry.name)
+                time.sleep(0.01)
+                yield entry
+
+    monkeypatch.setattr(os, "scandir", SlowListing)
+    assert not process_tree._holds(fd_dir, {"pipe:[1]"}, time.monotonic() + 0.2)
+    assert 0 < len(read) < 200, f"read {len(read)} of the 200 entries"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")

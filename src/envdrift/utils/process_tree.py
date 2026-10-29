@@ -15,6 +15,7 @@ import signal
 import subprocess  # nosec B404
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 # A tree deeper than this is no tool's: the walk stops there.
@@ -115,18 +116,18 @@ def _pipe_holders(pipes: set[str], listing_ends: float) -> list[int]:
 
     It reads each process's ``/proc/<pid>/fd``, which, unlike its ``environ`` or ``cmdline``,
     never waits on the process: a process that is stuck cannot hold the kill up. Reading them
-    all takes about 10 microseconds a file descriptor, seconds on a host with many processes, so
-    the search ends at ``listing_ends`` with the holders it has found.
+    all takes about 10 microseconds a file descriptor, seconds on a host with many processes or
+    files, so ``/proc`` and each of them are read an entry at a time, and the search ends at
+    ``listing_ends`` with the holders it has found.
     """
     me = str(os.getpid())
     holders = []
-    for entry in Path("/proc").iterdir():
-        if time.monotonic() >= listing_ends:
-            break
-        if not entry.name.isdigit() or entry.name == me:
-            continue
-        if _holds(entry / "fd", pipes, listing_ends):
-            holders.append(int(entry.name))
+    with os.scandir("/proc") as entries:
+        for entry in _until(entries, listing_ends):
+            if not entry.name.isdigit() or entry.name == me:
+                continue
+            if _holds(Path(entry.path, "fd"), pipes, listing_ends):
+                holders.append(int(entry.name))
     return holders
 
 
@@ -136,16 +137,26 @@ def _holds(fd_dir: Path, pipes: set[str], listing_ends: float) -> bool:
     None that it may not read is.
     """
     try:
-        fds = list(fd_dir.iterdir())
+        with os.scandir(fd_dir) as fds:
+            return any(_link(fd.path) in pipes for fd in _until(fds, listing_ends))
     except OSError:  # gone, or not this user's
         return False
-    for fd in fds:
-        if time.monotonic() >= listing_ends:
-            return False
-        with contextlib.suppress(OSError):  # closed since
-            if str(fd.readlink()) in pipes:
-                return True
-    return False
+
+
+def _until(entries: Iterator[os.DirEntry[str]], ends: float) -> Iterator[os.DirEntry[str]]:
+    """``entries``, as they are read, until ``ends``."""
+    for entry in entries:
+        if time.monotonic() >= ends:
+            return
+        yield entry
+
+
+def _link(path: str) -> str | None:
+    """Where the symbolic link ``path`` points, or None once it is gone."""
+    try:
+        return str(Path(path).readlink())
+    except OSError:  # closed since
+        return None
 
 
 def _signal(pid: int, sig: int) -> bool:
