@@ -460,10 +460,13 @@ class ScanEngine:
                 on_scanner_complete(self.scanners[index].name, len(results), total, scan_result)
 
         while queued or running:
+            # A monotonic clock: setting the system time neither ends nor extends a run. The
+            # scanners started together share a deadline, so they time out together and their
+            # tools get one grace period, however long each scanner's thread takes to start.
+            ends = time.monotonic() + _SCANNER_TIMEOUT_SECONDS
             while queued and len(running) < _MAX_PARALLEL_SCANNERS:
                 index = queued.popleft()
-                # A monotonic clock: setting the system time neither ends nor extends a run.
-                running[index] = ScannerDeadline(time.monotonic() + _SCANNER_TIMEOUT_SECONDS)
+                running[index] = ScannerDeadline(ends)
                 self._start_scanner(index, paths, finished, running[index])
 
             for index, scan_result in self._delivered(finished):

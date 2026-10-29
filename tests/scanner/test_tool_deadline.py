@@ -18,6 +18,7 @@ import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -766,21 +767,35 @@ class StuckTool(ScannerBackend):
         return ScanResult(scanner_name=self.name)
 
 
+@pytest.mark.parametrize("start_seconds", [0.0, 0.3], ids=["prompt starts", "slow starts"])
 def test_scanners_that_time_out_together_share_one_grace_period(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start_seconds: float
 ) -> None:
-    """The engine waits once for the tools of all the scanners that timed out together."""
+    """The engine waits once for the tools of all the scanners that timed out together.
+
+    Each scanner's deadline was taken when its thread had been started. With threads slow to
+    start, as on a loaded machine, the second scanner timed out a poll after the first, and the
+    engine waited a grace period for each.
+    """
+    grace = 2.0
     engine = _engine(StuckTool("stuck-a"), monkeypatch)
     engine.scanners = [StuckTool("stuck-a"), StuckTool("stuck-b")]
-    monkeypatch.setattr(engine_module, "_TOOL_KILL_GRACE_SECONDS", 1.0)
+    monkeypatch.setattr(engine_module, "_TOOL_KILL_GRACE_SECONDS", grace)
+    start_scanner = engine._start_scanner
+
+    def slow_start(*args: Any) -> None:
+        start_scanner(*args)
+        time.sleep(start_seconds)
+
+    monkeypatch.setattr(engine, "_start_scanner", slow_start)
 
     started = time.monotonic()
     result = engine.scan([tmp_path])
     elapsed = time.monotonic() - started
 
     assert [r.error for r in result.results] == [TIMED_OUT, TIMED_OUT]
-    # One grace period after the limit, not one per scanner (LIMIT_SECONDS + 2).
-    assert elapsed < LIMIT_SECONDS + 1.8, f"waited {elapsed:.1f}s"
+    # One grace period after the limit, not one per scanner (LIMIT_SECONDS + 2 * grace).
+    assert elapsed < LIMIT_SECONDS + 1.5 * grace, f"waited {elapsed:.1f}s"
 
 
 def test_a_scanner_done_only_after_its_deadline_has_timed_out(
