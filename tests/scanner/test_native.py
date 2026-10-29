@@ -9,14 +9,16 @@ import subprocess
 import sys
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import pytest
 
 from envdrift.scanner import _native_io as native_io
+from envdrift.scanner import native as native_module
 from envdrift.scanner._native_io import NATIVE_MAX_SCAN_BYTES, read_raw_scannable_bytes
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
-from envdrift.scanner.native import _ENV_FILE_PATHSPECS, NativeScanner
+from envdrift.scanner.native import _ENV_FILE_PATHSPECS, NativeScanner, _complete_paths
 
 
 def _native_io_os(**replaced: object) -> SimpleNamespace:
@@ -77,6 +79,25 @@ class TestNativeScanner:
 
         assert result.findings == []
         assert result.files_scanned == 0
+
+
+class _GitFailure(NamedTuple):
+    """How the stand-in for git fails a listing (#910).
+
+    ``listing`` is "untracked" (``git ls-files --others`` without ``--ignored``) or "ignored"
+    (with it). The stand-in writes ``prints`` (a printf format) for those calls, then fails, or
+    with ``hangs`` sleeps past any timeout.
+    """
+
+    listing: str
+    prints: str = ""
+    hangs: bool = False
+
+
+def _git(cwd: Path, *args: str) -> None:
+    """Run git in ``cwd`` with a throwaway identity and no commit signing."""
+    config = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git", *config, *args], cwd=cwd, check=True, capture_output=True)
 
 
 class TestNativeScannerInternals:
@@ -233,18 +254,12 @@ class TestNativeScannerInternals:
         assert untracked.resolve() in finding_paths
         assert oversized.resolve() not in finding_paths
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in for git is a shell script")
-    @pytest.mark.xfail(
-        strict=False,
-        reason="untracked files drop out of the scan when git cannot list them (see #910)",
-    )
-    def test_untracked_files_are_not_dropped_when_git_cannot_list_them(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """A secret in an untracked file is reported, or the scan fails, if git ls-files fails.
+    @staticmethod
+    def _repo_whose_git_fails(tmp_path: Path, monkeypatch, failure: _GitFailure) -> Path:
+        """A repository, and a stand-in for git first on PATH that fails one of its listings.
 
-        The stand-in for git fails ``git ls-files --others``, as a timeout would, and hands every
-        other call to the real git.
+        The stand-in fails the listing as ``failure`` says and hands every other call to the
+        real git.
         """
         import shutil
 
@@ -254,23 +269,192 @@ class TestNativeScannerInternals:
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run([real_git, "init", "-q"], cwd=repo, check=True)
-        untracked = repo / "config.txt"
-        untracked.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         git = bin_dir / "git"
         git.write_text(
             "#!/bin/sh\n"
-            'for a in "$@"; do [ "$a" = "--others" ] && exit 128; done\n'
+            "others=0; ignored=0\n"
+            'for a in "$@"; do\n'
+            '  [ "$a" = "--others" ] && others=1\n'
+            '  [ "$a" = "--ignored" ] && ignored=1\n'
+            "done\n"
+            f"if [ $others = 1 ] && [ $ignored = {int(failure.listing == 'ignored')} ]; then\n"
+            f"  printf '{failure.prints}'\n"
+            + (
+                "  exec sleep 10\n"
+                if failure.hangs
+                else '  echo "fatal: simulated failure" >&2; exit 128\n'
+            )
+            + "fi\n"
             f'exec "{real_git}" "$@"\n'
         )
         git.chmod(0o755)
         monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        return repo
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in for git is a shell script")
+    @pytest.mark.parametrize(
+        ("failing", "unlisted"),
+        [("untracked", "the untracked files"), ("ignored", "the ignored .env files")],
+    )
+    def test_files_git_cannot_list_fail_the_scan(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: str, unlisted: str
+    ):
+        """The files git did list are scanned, and the scan fails for the rest (#910).
+
+        A secret in a file git did not list used to pass the scan without a word.
+        """
+        repo = self._repo_whose_git_fails(tmp_path, monkeypatch, _GitFailure(failing))
+        untracked = repo / "config.txt"
+        untracked.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
 
         result = NativeScanner().scan([repo])
 
+        assert result.error == (
+            f"git could not list files in {repo.resolve()}: {unlisted}: fatal: simulated failure"
+        )
         reported = {finding.file_path.resolve() for finding in result.findings}
-        assert untracked.resolve() in reported or result.error is not None
+        if failing == "ignored":
+            assert untracked.resolve() in reported
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in for git is a shell script")
+    @pytest.mark.parametrize(
+        ("hangs", "failure"),
+        [(False, "fatal: simulated failure"), (True, "timed out after 1s")],
+        ids=["failed", "timed-out"],
+    )
+    def test_files_git_listed_before_it_failed_are_scanned(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hangs: bool, failure: str
+    ):
+        """Every path git ended with its NUL before it failed is scanned; one cut short is not.
+
+        The scan still fails for the files git never listed (#910).
+        """
+        monkeypatch.setattr(native_module, "_GIT_LIST_TIMEOUT_SECONDS", 1)
+        repo = self._repo_whose_git_fails(
+            tmp_path, monkeypatch, _GitFailure("untracked", "listed.txt\\000cut.txt", hangs)
+        )
+        for name in ("listed.txt", "cut.txt"):
+            (repo / name).write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+
+        result = NativeScanner().scan([repo])
+
+        assert result.error == (
+            f"git could not list files in {repo.resolve()}: the untracked files: {failure}"
+        )
+        assert {finding.file_path.name for finding in result.findings} == {"listed.txt"}
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="the stand-in for git is a shell script")
+    def test_guard_does_not_pass_files_git_cannot_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A clean scan of what git listed is no pass when git could not list the rest (#910)."""
+        repo = self._repo_whose_git_fails(tmp_path, monkeypatch, _GitFailure("untracked"))
+        (repo / "config.txt").write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+
+        result = ScanEngine(GuardConfig(use_gitleaks=False)).scan([repo])
+
+        assert result.exit_code == 5
+        assert [r.error is not None for r in result.results] == [True]
+
+    @pytest.mark.parametrize(
+        ("variable", "location"),
+        [
+            ("GIT_DIR", ".git"),
+            ("GIT_INDEX_FILE", ".git/index"),
+            ("GIT_WORK_TREE", "."),
+            ("GIT_COMMON_DIR", ".git"),
+        ],
+    )
+    def test_git_lists_the_repository_the_directory_is_in(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variable: str, location: str
+    ):
+        """The git location variables, which a git hook exports, do not change what git lists.
+
+        Inherited from a hook in another repository, they made git read that repository's index,
+        work tree or exclude file. A tracked file that .gitignore matches, or an untracked file
+        that only the other repository excludes, then went unscanned, with no error.
+        """
+        import shutil
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        other = tmp_path / "other"
+        other.mkdir()
+        _git(other, "init", "-q")
+        (other / "readme.txt").write_text("hello\n")
+        _git(other, "add", "readme.txt")
+        _git(other, "commit", "-qm", "init")
+        info = other / ".git" / "info"
+        info.mkdir(exist_ok=True)
+        with (info / "exclude").open("a") as exclude:
+            exclude.write("untracked.txt\n")
+        scanned = tmp_path / "scanned"
+        scanned.mkdir()
+        _git(scanned, "init", "-q")
+        (scanned / ".gitignore").write_text("secrets.txt\n")
+        (scanned / "secrets.txt").write_text("GITHUB_TOKEN=ghp_" + "x" * 36 + "\n")
+        (scanned / "untracked.txt").write_text("GITHUB_TOKEN=ghp_" + "y" * 36 + "\n")
+        _git(scanned, "add", ".gitignore")
+        _git(scanned, "add", "--force", "secrets.txt")
+        _git(scanned, "commit", "-qm", "init")
+        monkeypatch.setenv(variable, str(other / location))
+
+        result = NativeScanner().scan([scanned])
+
+        assert result.error is None
+        found = {finding.file_path.name for finding in result.findings}
+        assert {"secrets.txt", "untracked.txt"} <= found
+
+    def test_git_lists_a_subdirectory_of_a_linked_worktree_from_its_hook(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """In a linked worktree, git exports GIT_DIR and GIT_INDEX_FILE to every hook.
+
+        With GIT_DIR set, git took the scanned subdirectory as the top of the work tree and read
+        the index paths against it. A tracked file that src/.gitignore matches went unscanned.
+        """
+        import shutil
+
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        _git(repo, "init", "-q")
+        (repo / "src" / ".gitignore").write_text("secrets.txt\n")
+        (repo / "src" / "secrets.txt").write_text("GITHUB_TOKEN=ghp_" + "x" * 36 + "\n")
+        _git(repo, "add", "src/.gitignore")
+        _git(repo, "add", "--force", "src/secrets.txt")
+        _git(repo, "commit", "-qm", "init")
+        worktree = tmp_path / "worktree"
+        _git(repo, "worktree", "add", "-q", str(worktree))
+        # The worktree's .git file names its git directory, which is what git exports to its hooks.
+        git_dir = Path((worktree / ".git").read_text().split(":", 1)[1].strip())
+        monkeypatch.setenv("GIT_DIR", str(git_dir))
+        monkeypatch.setenv("GIT_INDEX_FILE", str(git_dir / "index"))
+
+        result = NativeScanner().scan([worktree / "src"])
+
+        assert result.error is None
+        assert "secrets.txt" in {finding.file_path.name for finding in result.findings}
+
+    @pytest.mark.parametrize(
+        ("output", "paths"),
+        [
+            ("a.txt\0sub/b.env\0", ["a.txt", "sub/b.env"]),
+            ("a.txt\0cut", ["a.txt"]),
+            (b"a.txt\0caf\xe9.env\0cu", ["a.txt", "caf\udce9.env"]),
+            ("", []),
+            (None, []),
+        ],
+        ids=["complete", "cut-short", "bytes-not-utf8", "empty", "none"],
+    )
+    def test_complete_paths_are_those_their_nul_ends(self, output, paths):
+        """A listing killed by its timeout hands over bytes on POSIX and text on Windows."""
+        assert _complete_paths(output) == paths
 
     def test_collect_files_includes_gitignored_mapped_env_file(self, tmp_path: Path):
         """A gitignored custom env filename from vault.sync must still be collected."""

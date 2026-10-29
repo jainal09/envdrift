@@ -342,6 +342,69 @@ def _decode_unicode_text(raw: bytes) -> str | None:
     return None
 
 
+class _FileListError(Exception):
+    """git could not list some of the files below a directory; ``files`` holds the rest (#910)."""
+
+    def __init__(self, files: list[Path], message: str) -> None:
+        super().__init__(message)
+        self.files = files
+
+
+def _git_failure(stderr: str, returncode: int) -> str:
+    """git's own message for a call that failed, or its exit code."""
+    lines = stderr.strip().splitlines()
+    return lines[-1] if lines else f"exit code {returncode}"
+
+
+# How long one ``git ls-files`` may take before the native scanner gives up on it.
+_GIT_LIST_TIMEOUT_SECONDS = 30
+
+# git lists the repository that each scanned directory is in. A git hook exports these, and
+# inherited they point git at the hook's repository or index instead.
+_GIT_LOCATION_VARIABLES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+
+
+def _complete_paths(output: str | bytes | None) -> list[str]:
+    """The paths in ``git ls-files -z`` output that their NUL ends; a last one cut short is out.
+
+    A listing killed by its timeout hands over what it wrote so far: as bytes on POSIX, as text
+    on Windows. ``surrogateescape`` round-trips any non-UTF-8 bytes into ``Path``.
+    """
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="surrogateescape")
+    return [path for path in (output or "").split("\0")[:-1] if path]
+
+
+def _git_list(directory: Path, args: list[str]) -> tuple[list[str], str | None]:
+    """The paths ``git ls-files <args>`` lists in ``directory``, and why it failed, if it did.
+
+    A listing that fails or times out can have written some paths first. Those are complete, so
+    they are scanned too, and the failure still fails the scan (#910).
+    """
+    import os
+    import subprocess  # nosec B404
+
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_LOCATION_VARIABLES}
+    try:
+        result = run_tool(
+            ["git", "ls-files", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            cwd=directory,
+            env=env,
+            timeout=_GIT_LIST_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        return _complete_paths(e.stdout), f"timed out after {e.timeout:g}s"
+    except OSError as e:
+        return [], str(e)
+    if result.returncode != 0:
+        return _complete_paths(result.stdout), _git_failure(result.stderr, result.returncode)
+    return _complete_paths(result.stdout), None
+
+
 def _resolved(path: Path) -> Path | None:
     """``path`` with its symlinks resolved, or ``None`` when that fails."""
     try:
@@ -473,13 +536,19 @@ class NativeScanner(ScannerBackend):
         start_time = time.time()
         findings: list[ScanFinding] = []
         files_scanned = 0
+        errors: list[str] = []
         cwd = Path.cwd().resolve()
 
         for path in paths:
             if not path.exists():
                 continue
 
-            files_to_scan = [path] if path.is_file() else self._collect_files(path)
+            try:
+                files_to_scan = [path] if path.is_file() else self._collect_files(path)
+            except _FileListError as e:
+                # Scan the files git did list, and fail the scan for the rest (#910).
+                errors.append(str(e))
+                files_to_scan = e.files
 
             for file_path in files_to_scan:
                 if self._should_ignore(file_path, path, cwd):
@@ -495,6 +564,7 @@ class NativeScanner(ScannerBackend):
             scanner_name=self.name,
             findings=findings,
             files_scanned=files_scanned,
+            error="; ".join(errors) or None,
             duration_ms=duration_ms,
         )
 
@@ -511,67 +581,36 @@ class NativeScanner(ScannerBackend):
 
         Returns:
             List of file paths.
-        """
-        import subprocess  # nosec B404
 
+        Raises:
+            _FileListError: git listed the tracked files but could not list the
+                untracked ones or the ignored env stores (#910). It holds the files
+                that were listed.
+        """
         files: set[Path] = set()
+        unlisted: list[str] = []
         directory = directory.resolve()
 
         # ``-z`` keeps filenames byte-for-byte rather than applying Git's
-        # C-style quotepath escaping to non-ASCII or newline-containing paths.
-        # ``surrogateescape`` round-trips any non-UTF-8 bytes into ``Path``;
-        # every git invocation below therefore uses NUL-separated output.
+        # C-style quotepath escaping to non-ASCII or newline-containing paths;
+        # every git invocation below therefore uses NUL-terminated output.
 
         # Method 1: Get tracked files from git (fast - reads index)
-        try:
-            result = run_tool(
-                ["git", "ls-files", "-z"],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="surrogateescape",
-                cwd=directory,
-                timeout=30,
-            )
-            if result.returncode != 0:
-                # Not a git repo or git error - use fallback
-                return self._collect_files_fallback(directory)
-
-            for rel_path in result.stdout.split("\0"):
-                if rel_path:
-                    files.add(directory / rel_path)
-
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            # git not available - fall back to os.walk
+        paths, failure = _git_list(directory, ["-z"])
+        if failure is not None:
+            # Not a git repo, git error or no git at all - walk the directory instead
             return self._collect_files_fallback(directory)
+        files.update(directory / rel_path for rel_path in paths)
 
         # Method 2: Get every ordinary untracked file (respects .gitignore).
         # Restricting this pass to .env-shaped names let secrets in config.txt,
         # secrets.yaml, and other would-be commit inputs bypass the native scanner
         # with exit 0. Git already applies the repository's ignore policy, and the
         # normal _should_ignore/_looks_binary filters still apply before scanning.
-        try:
-            result = run_tool(
-                [
-                    "git",
-                    "ls-files",
-                    "--others",
-                    "--exclude-standard",
-                    "-z",
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="surrogateescape",
-                cwd=directory,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                for rel_path in result.stdout.split("\0"):
-                    if rel_path:
-                        files.add(directory / rel_path)
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            pass
+        paths, failure = _git_list(directory, ["--others", "--exclude-standard", "-z"])
+        files.update(directory / rel_path for rel_path in paths)
+        if failure is not None:
+            unlisted.append(f"the untracked files: {failure}")
 
         # Method 3: Get untracked .env* files that ARE gitignored.
         # Partial-encryption secret/combined files are typically gitignored, and a
@@ -583,35 +622,17 @@ class NativeScanner(ScannerBackend):
         # private key file, always plaintext, and meant to stay local-only. Scanning
         # it here would wrongly flag a properly-configured project as having an
         # "unencrypted env file". A *tracked* .env.keys is still caught by Method 1.
-        try:
-            result = run_tool(
-                [
-                    "git",
-                    "ls-files",
-                    "--others",
-                    "--ignored",
-                    "--exclude-standard",
-                    "-z",
-                    "--",
-                    *_ENV_FILE_PATHSPECS,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="surrogateescape",
-                cwd=directory,
-                timeout=30,
-            )
-            if result.returncode == 0:
-                for rel_path in result.stdout.split("\0"):
-                    if (
-                        rel_path
-                        and _is_env_file(rel_path)
-                        and Path(rel_path).name != DOTENVX_KEYS_FILENAME
-                    ):
-                        files.add(directory / rel_path)
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            pass
+        paths, failure = _git_list(
+            directory,
+            ["--others", "--ignored", "--exclude-standard", "-z", "--", *_ENV_FILE_PATHSPECS],
+        )
+        files.update(
+            directory / rel_path
+            for rel_path in paths
+            if _is_env_file(rel_path) and Path(rel_path).name != DOTENVX_KEYS_FILENAME
+        )
+        if failure is not None:
+            unlisted.append(f"the ignored .env files: {failure}")
 
         # Method 4: Add explicitly configured custom env files from vault.sync.
         # These may not match ".env*" and can otherwise be missed when untracked.
@@ -626,7 +647,13 @@ class NativeScanner(ScannerBackend):
                 files.add(candidate)
 
         # Return deterministically ordered list for stable scan results
-        return sorted(files, key=lambda p: str(p))
+        collected = sorted(files, key=lambda p: str(p))
+        if unlisted:
+            # A file git did not list is a file the scan never saw: fail closed (#910).
+            raise _FileListError(
+                collected, f"git could not list files in {directory}: " + "; ".join(unlisted)
+            )
+        return collected
 
     def _collect_files_fallback(self, directory: Path) -> list[Path]:
         """Fallback file collection using os.walk with early directory pruning.

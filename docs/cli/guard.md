@@ -776,6 +776,15 @@ holds no findings is a clean scan: that is what the binaries write when they fin
 nothing. So is no report at all after a successful run, except from
 detect-secrets, which always prints one.
 
+The native scanner fails too when git cannot list some of the files in a
+directory it scans: the untracked files, or the ignored `.env` files it always
+checks. It still scans the files git did list, including the ones a listing
+printed before it failed or timed out, except those its usual ignore rules skip.
+Its error names the directory and why the listing failed: git's message, or that
+it timed out. When guard runs from a git hook, git still lists the repository
+each scanned directory is in, whatever `GIT_DIR`, `GIT_WORK_TREE`,
+`GIT_INDEX_FILE` or `GIT_COMMON_DIR` the hook exported.
+
 A scanner still running 10 minutes after it started has failed: guard stops
 waiting for it and records `Scanner timed out after 600s` as its error, the
 other scanners' results stand, and with no blocking finding guard exits 5. At
