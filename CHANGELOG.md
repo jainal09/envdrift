@@ -1,5 +1,14 @@
 # Changelog
 
+## [11.1.6](https://github.com/jainal09/envdrift/compare/v11.1.5...v11.1.6) (2026-10-29)
+
+
+### Bug Fixes
+
+* **git:** keep a git hook's variables only for a file of the hook's repository ([#927](https://github.com/jainal09/envdrift/issues/927)) ([ea22784](https://github.com/jainal09/envdrift/commit/ea22784d080be9e517c7d526f412b4d05208d531))
+* **scanner:** kill a timed-out tool's process tree and find git-secrets' install off PATH ([#921](https://github.com/jainal09/envdrift/issues/921)) ([0598dca](https://github.com/jainal09/envdrift/commit/0598dcae1bd0444c78746f72e44d6d03e18c0253))
+* **scanner:** kill the processes that still hold a timed-out tool's output ([#929](https://github.com/jainal09/envdrift/issues/929)) ([2b19471](https://github.com/jainal09/envdrift/commit/2b19471d5e0e17c04e45270073798be2d726269b))
+
 ## [11.1.5](https://github.com/jainal09/envdrift/compare/v11.1.4...v11.1.5) (2026-10-29)
 
 
