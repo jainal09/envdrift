@@ -535,13 +535,14 @@ class TestGitSecretsSourceInstall:
         leftover.write_text("partial")
         leftover.chmod(0o644)
         monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "venv"))
-        path_entries = os.environ["PATH"].split(os.pathsep)
-        monkeypatch.setenv(
-            "PATH",
-            os.pathsep.join(
-                entry for entry in path_entries if not Path(entry, "git-secrets").exists()
-            ),
-        )
+        # A git-secrets on this machine's PATH is hidden from the installer's lookup alone:
+        # dropping its directory from PATH could drop git and make with it.
+        which = shutil.which
+
+        def which_but_git_secrets(name, *args, **kwargs):
+            return None if name == "git-secrets" else which(name, *args, **kwargs)
+
+        monkeypatch.setattr(shutil, "which", which_but_git_secrets)
 
         installed = GitSecretsInstaller().install()
 

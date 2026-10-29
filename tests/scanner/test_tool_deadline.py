@@ -463,14 +463,19 @@ def test_a_failed_listing_still_kills_the_processes_it_stopped(
 
 
 @pytest.mark.xfail(
-    strict=False, reason="a child its tool left running is no longer below the tool (see #922)"
+    strict=False,
+    raises=AssertionError,
+    reason="a child its tool left running is no longer below the tool (see #922)",
 )
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="the tool is a shell script that starts its child in the background",
 )
 def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
-    """A tool that exits at once, leaving its child running with the tool's output pipe open."""
+    """A tool that exits at once, leaving its child running with the tool's output pipe open.
+
+    Only the child's running on is #922: a setup that goes wrong fails the test, not the xfail.
+    """
     beat = tmp_path / "beat"
     heartbeat = tmp_path / "heartbeat.py"
     heartbeat.write_text(HEARTBEAT)
@@ -482,7 +487,8 @@ def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
         with pytest.raises(subprocess.TimeoutExpired):
             run_tool([str(tool)], capture_output=True, timeout=1.5)
 
-        assert beat.exists(), "the tool's child never started"
+        if not beat.exists():
+            pytest.fail("the tool's child never started")
         assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
     finally:
         _stop(beat)
