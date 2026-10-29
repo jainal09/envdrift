@@ -54,6 +54,17 @@ SHA512CRYPT_FORMS = {
         + "a b!c:d$"
         + "1ykilPn5z.fmgK8tU.PcnAV.EkvcLBfkTgIYFtCpzE3BwUVmq8JVL3Ytork22PIuxojwO4u6IknFKxMFmKaDA."
     ),
+    # Where str.splitlines() breaks a line, and the native scanner no longer does (#937).
+    "vertical-tab-salt": (
+        "$6$"
+        + "a\vb$"
+        + "IHm76j9dyeuKZIRBmhwYltMU/9Bli3FIsMnLujs8sVJeWnCP8nUal2GU2r7ufMricyWCcXaAaIWsSkmtVJ0kZ/"
+    ),
+    "form-feed-salt": (
+        "$6$"
+        + "c\fd$"
+        + "f4eBp9zpkCTShP9D2G9BVfQuW/VPcYQXWBu0vrvpBl8c0jfqnkQOmgKNOYYdCOTe1dP4nzSGinBYP9xMCGLvn/"
+    ),
 }
 
 

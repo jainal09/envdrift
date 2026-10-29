@@ -51,6 +51,7 @@ from envdrift.scanner.patterns import (
 )
 from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import is_file_tracked, without_git_location
+from envdrift.utils.text import split_lines
 
 # Encryption markers for dotenvx
 DOTENVX_MARKERS = (
@@ -1129,7 +1130,7 @@ class NativeScanner(ScannerBackend):
             List of pattern-matched findings.
         """
         findings: list[ScanFinding] = []
-        lines = content.splitlines()
+        lines = split_lines(content)
 
         # File-scope keyword gate (#355): a keyword-gated pattern only fires when
         # one of its context keywords appears anywhere in the file. Computed once
@@ -1275,7 +1276,7 @@ class NativeScanner(ScannerBackend):
             List of entropy-based findings.
         """
         findings: list[ScanFinding] = []
-        lines = content.splitlines()
+        lines = split_lines(content)
 
         # Pattern for assignment-like statements. The LHS allows lower/upper/mixed
         # case (#369) so lowercase or camelCase var names — api_key=, apiKey:,

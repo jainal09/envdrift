@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING
 
+from envdrift.utils.text import split_lines
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
@@ -335,7 +337,7 @@ class IgnoreFilter:
 
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
-            lines = content.splitlines()
+            lines = split_lines(content)
             self._file_cache[file_path] = lines
             return lines
         except (OSError, UnicodeDecodeError):

@@ -45,6 +45,7 @@ from envdrift.scanner.native import (
 from envdrift.scanner.patterns import hash_secret
 from envdrift.utils.deadline import ScannerDeadline, scanner_deadline
 from envdrift.utils.git import without_git_location
+from envdrift.utils.text import split_lines
 
 if TYPE_CHECKING:
     pass
@@ -991,7 +992,7 @@ class ScanEngine:
             if file_path not in lines_cache:
                 try:
                     with open(file_path, encoding="utf-8", errors="ignore") as f:
-                        lines_cache[file_path] = f.read().splitlines()
+                        lines_cache[file_path] = split_lines(f.read())
                 except OSError:
                     lines_cache[file_path] = []
             lines = lines_cache[file_path]

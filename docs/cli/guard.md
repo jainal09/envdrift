@@ -933,6 +933,12 @@ Supported comment formats:
 - `// envdrift:ignore` - JavaScript, Go, C, TypeScript
 - `/* envdrift:ignore */` - CSS, C-style block comments
 
+The comment applies to the line a scanner reports the finding on. guard counts lines as git and
+the scanners do: a line ends at a line break only, not at a form feed, a vertical tab or a Unicode
+line separator. Earlier releases also ended a line there, so after one the native scanner reported
+a finding a line lower than gitleaks did, and a comment on the finding's line did not suppress
+other scanners' findings ([#937](https://github.com/jainal09/envdrift/issues/937)).
+
 ### TOML Configuration
 
 For bulk ignores across many files:
