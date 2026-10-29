@@ -429,3 +429,34 @@ class TestSmartEncryptionInAGitHook:
         assert index.read_bytes() == staged, "the restore wrote into the hook's index"
         assert should_skip is True, reason
         assert env_file.read_text() == self._ENCRYPTED
+
+    @pytest.mark.parametrize("in_hook", [False, True], ids=["no hook", "outer repository's hook"])
+    def test_restores_a_submodules_file_in_the_submodule(
+        self, tmp_path: Path, monkeypatch, in_hook: bool
+    ):
+        """A file of a real submodule is checked and restored in the submodule's own repository.
+
+        The outer repository tracks the same relative path. In its ``git commit -a`` hook, the
+        restore wrote the submodule's file into the outer repository's index (#919).
+        """
+        other = self._decrypted_env_file(tmp_path / "other").parent
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        _git(outer, "init", "-q")
+        (outer / ".env.production").write_text('SECRET="encrypted:outer"')
+        _git(outer, "add", ".env.production")
+        _git(outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(other), "sub")
+        _git(outer, "commit", "-qm", "init")
+        env_file = outer / "sub" / ".env.production"
+        env_file.write_text(self._DECRYPTED)
+        index = outer / ".git" / "index.lock"
+        shutil.copyfile(outer / ".git" / "index", index)
+        staged = index.read_bytes()
+        if in_hook:
+            monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert index.read_bytes() == staged, "the restore wrote into the outer repository's index"
+        assert should_skip is True, reason
+        assert env_file.read_text() == self._ENCRYPTED

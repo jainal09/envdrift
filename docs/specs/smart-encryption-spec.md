@@ -233,12 +233,13 @@ def should_skip_reencryption(
 5. **Line ending differences** - Normalized before comparison (CRLF → LF)
 6. **Leading/trailing whitespace** - The whole file's leading/trailing whitespace is
    stripped before comparison
+7. **Submodules** - A file of a submodule is checked and restored in the submodule's
+   own repository and index, in a git hook of the outer repository too
 
 ### Not Handled (Documented Limitations)
 
 1. **Binary files** - Smart encryption only works with text-based .env files
-2. **Submodules** - File tracking may not work correctly in submodules
-3. **Shallow clones** - May not have full git history
+2. **Shallow clones** - May not have full git history
 
 ## Security Considerations
 
