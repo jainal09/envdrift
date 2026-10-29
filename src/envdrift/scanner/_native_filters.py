@@ -167,6 +167,18 @@ def _within_spans(spans: list[tuple[int, int]], start: int, end: int) -> bool:
     return any(start < span_end and span_start < end for span_start, span_end in spans)
 
 
+def _outside_encrypted_values(line: str, column_number: int | None) -> bool:
+    """True if a finding at 1-based ``column_number`` of ``line`` is in none of its encrypted values.
+
+    Without a column, only a line that holds no encrypted value qualifies. With one, a
+    plaintext secret after an encrypted value on the same line does (#937).
+    """
+    spans = _encrypted_value_spans(line)
+    if column_number is None:
+        return not spans
+    return not _within_spans(spans, column_number - 1, column_number)
+
+
 def _content_has_sops_markers(content: str) -> bool:
     """True if ``content`` carries canonical SOPS structural markers.
 

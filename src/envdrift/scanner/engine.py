@@ -27,7 +27,7 @@ from envdrift.config import (
     normalize_ignore_rules,
 )
 from envdrift.env_files import resolve_custom_env_file
-from envdrift.scanner._native_filters import _encrypted_value_spans, _within_spans
+from envdrift.scanner._native_filters import _outside_encrypted_values
 from envdrift.scanner.base import (
     AggregatedScanResult,
     FindingSeverity,
@@ -1003,17 +1003,13 @@ class ScanEngine:
             file_path = str(finding.file_path)
             if not is_file_encrypted(file_path):
                 return True
-            # File has encryption markers. Keep findings on a specific cleartext
-            # line; drop findings on a ciphertext line or with no line info.
+            # File has encryption markers. Keep findings in its plaintext; drop
+            # findings in a ciphertext, or with no line info.
             if finding.line_number is None:
                 return False
-            spans = _encrypted_value_spans(line_at(file_path, finding.line_number))
-            if finding.column_number is None:
-                return not spans
-            # Where the scanner gives a column, only a finding inside the ciphertext is
-            # dropped: a plaintext secret after it on the same line stays (#937).
-            column = finding.column_number - 1
-            return not _within_spans(spans, column, column + 1)
+            return _outside_encrypted_values(
+                line_at(file_path, finding.line_number), finding.column_number
+            )
 
         return [finding for finding in findings if keep(finding)]
 
