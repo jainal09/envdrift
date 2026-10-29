@@ -27,6 +27,13 @@ Only the templates `.env.example`, `.env.sample`, and `.env.template` are skippe
 Files are decoded through UTF-8/UTF-16/UTF-32 BOMs (and BOM-less UTF-16), so a
 UTF-16 env file written by Windows tools is scanned like its UTF-8 equivalent.
 
+The native scanner reads files of up to 10 MiB. It does not scan a text file over that size: the
+Scanner Warnings name the file (`scanner_results[].warnings` in `--json`), it is not counted as
+scanned, and the exit code does not change. Scan it with another scanner, or add it to
+`[guard] ignore_paths` to skip it on purpose. A binary file is skipped whatever its size. Earlier
+releases skipped a text file over 10 MiB without a word and counted it as scanned
+([#933](https://github.com/jainal09/envdrift/issues/933)).
+
 The native scanner always runs. By default, gitleaks runs too. You can enable
 trufflehog, detect-secrets, or kingfisher with flags or `envdrift.toml`. If no
 paths are provided, the current directory is scanned.
@@ -623,8 +630,8 @@ envdrift guard ./db/users.sql --native-only
 
 Name each dump file. In a git checkout a directory scan skips the untracked files git ignores,
 apart from env files (`.env`, `.env.*` and `*.env`, but not `.env.keys`), and dumps often are such
-files. The native scanner also skips any file over 10 MiB without a warning
-([#933](https://github.com/jainal09/envdrift/issues/933)).
+files. The native scanner does not scan a dump over 10 MiB, and names it in the Scanner Warnings
+(see [Description](#description)).
 
 ## Severity
 

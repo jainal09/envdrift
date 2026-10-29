@@ -30,13 +30,18 @@ from envdrift.scanner._native_filters import (
     _is_encrypted_value_line,
     _looks_like_code_member_access,
 )
-from envdrift.scanner._native_io import read_raw_scannable_bytes
+from envdrift.scanner._native_io import (
+    NATIVE_MAX_SCAN_BYTES,
+    FileTooLargeError,
+    read_raw_scannable_bytes,
+)
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
     ScannerBackend,
     ScanResult,
 )
+from envdrift.scanner.finding_paths import display_path
 from envdrift.scanner.patterns import (
     ALL_PATTERNS,
     SecretPattern,
@@ -342,6 +347,15 @@ def _decode_unicode_text(raw: bytes) -> str | None:
     return None
 
 
+def _too_large_warning(file_path: Path, cwd: Path) -> str:
+    """The warning for a text file the native scanner did not read for its size (#933)."""
+    return (
+        f"Not scanned: {display_path(file_path, cwd)} is larger than the native scanner's "
+        f"{NATIVE_MAX_SCAN_BYTES // (1024 * 1024)} MiB limit. Scan it with another scanner, "
+        "or add it to [guard] ignore_paths to skip it on purpose."
+    )
+
+
 class _FileListError(Exception):
     """git could not list some of the files below a directory; ``files`` holds the rest (#910)."""
 
@@ -532,6 +546,7 @@ class NativeScanner(ScannerBackend):
         findings: list[ScanFinding] = []
         files_scanned = 0
         errors: list[str] = []
+        warnings: list[str] = []
         cwd = Path.cwd().resolve()
 
         for path in paths:
@@ -549,8 +564,13 @@ class NativeScanner(ScannerBackend):
                 if self._should_ignore(file_path, path, cwd):
                     continue
 
+                try:
+                    file_findings = self._scan_file(file_path)
+                except FileTooLargeError:
+                    # Not read, so not scanned: say so instead of passing it for clean (#933).
+                    warnings.append(_too_large_warning(file_path, cwd))
+                    continue
                 files_scanned += 1
-                file_findings = self._scan_file(file_path)
                 findings.extend(file_findings)
 
         duration_ms = int((time.time() - start_time) * 1000)
@@ -561,6 +581,7 @@ class NativeScanner(ScannerBackend):
             files_scanned=files_scanned,
             error="; ".join(errors) or None,
             duration_ms=duration_ms,
+            warnings=warnings,
         )
 
     def _collect_files(self, directory: Path) -> list[Path]:
@@ -807,13 +828,21 @@ class NativeScanner(ScannerBackend):
     def _read_scannable_content(file_path: Path) -> str | None:
         """Read ``file_path`` and return its text content, or ``None`` to skip it.
 
-        Rejects oversized files before opening them, then performs a bounded read
-        so a concurrently growing file cannot bypass the cap. Raw bytes let the
-        binary check see the true content (``read_text(errors="ignore")`` would
-        silently drop the bytes that identify a binary file). Returns ``None``
-        for an unreadable/oversized file, a genuine binary blob, or empty content.
+        Reads no more than the cap, so a concurrently growing file cannot bypass it. Raw
+        bytes let the binary check see the true content (``read_text(errors="ignore")``
+        would silently drop the bytes that identify a binary file). Returns ``None`` for
+        an unreadable file, a genuine binary blob, or empty content.
+
+        Raises:
+            FileTooLargeError: A text file over the cap, which it does not read (#933). A binary
+                file over the cap is skipped, as any binary file is.
         """
-        raw = read_raw_scannable_bytes(file_path)
+        try:
+            raw = read_raw_scannable_bytes(file_path)
+        except FileTooLargeError as too_large:
+            if _decode_unicode_text(too_large.head) is None and _looks_binary(too_large.head):
+                return None
+            raise
         if raw is None:
             return None
 
