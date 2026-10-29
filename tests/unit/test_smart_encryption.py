@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import shutil
 import subprocess  # nosec B404
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import envdrift
 from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
 from envdrift.utils.git import without_git_location
 
@@ -323,6 +325,29 @@ def _git(cwd: Path, *args: str, index: Path | None = None) -> str:
     ).stdout
 
 
+# A pre-commit hook that re-encrypts argv[1] with smart encryption, with a backend whose decrypt
+# writes argv[2], and fails the commit unless the committed version is restored.
+SMART_ENCRYPTION_HOOK = """
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
+
+
+class Backend:
+    name = "dotenvx"
+
+    def decrypt(self, path):
+        path.write_text(sys.argv[2])
+        return SimpleNamespace(success=True, message="")
+
+
+should_skip, reason = should_skip_reencryption(Path(sys.argv[1]), Backend(), enabled=True)
+sys.exit(0 if should_skip else reason)
+"""
+
+
 class TestSmartEncryptionInAGitHook:
     """A git hook's GIT_INDEX_FILE is the index git is about to commit (#915).
 
@@ -372,12 +397,114 @@ class TestSmartEncryptionInAGitHook:
         committed = _git(repo, "rev-parse", "HEAD:.env.production").strip()
         assert _git(repo, "ls-files", "-s", index=index).split()[1] == committed
 
+    def test_restores_the_file_into_an_alternate_index_being_committed(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """An index the user set outside the git directory is still the one being committed.
+
+        git exports it to the hook as GIT_INDEX_FILE, ``<index>.lock`` during ``git commit -a``.
+        It was dropped for lying outside the git directory: the restore wrote the default index,
+        and the commit took the decrypted file that ``-a`` had staged in the alternate one.
+        """
+        env_file = self._decrypted_env_file(tmp_path / "repo")
+        repo = env_file.parent
+        (tmp_path / "alternate").mkdir()
+        index = tmp_path / "alternate" / "index.lock"
+        shutil.copyfile(repo / ".git" / "index", index)
+        _git(repo, "add", ".env.production", index=index)
+        monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+        monkeypatch.chdir(repo)  # git runs a hook in its work tree
+
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert should_skip is True, reason
+        committed = _git(repo, "rev-parse", "HEAD:.env.production").strip()
+        assert _git(repo, "ls-files", "-s", index=index).split()[1] == committed
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="the hook is a shell script")
+    @pytest.mark.parametrize("alternate", [False, True], ids=["plain commit", "alternate index"])
+    def test_a_commit_holds_the_encrypted_file(self, tmp_path: Path, alternate: bool):
+        """End to end: a commit of the decrypted file, with a smart encryption hook.
+
+        A plain ``git commit`` exports ``GIT_INDEX_FILE=.git/index``, relative. ``git commit -a``
+        from an alternate index exports ``<alternate>.lock``: it was dropped, and the commit held
+        the decrypted file while the work tree held the encrypted one.
+        """
+        env_file = self._decrypted_env_file(tmp_path / "repo")
+        repo = env_file.parent
+        (repo / "app.txt").write_text("one\n")
+        _git(repo, "add", "app.txt")
+        _git(repo, "commit", "-qm", "app")
+        (repo / "app.txt").write_text("two\n")  # so that the commit is not empty
+        index: dict[str, str] = {}
+        if alternate:
+            (tmp_path / "alternate").mkdir()
+            index["GIT_INDEX_FILE"] = str(tmp_path / "alternate" / "index")
+            shutil.copyfile(repo / ".git" / "index", index["GIT_INDEX_FILE"])
+        else:
+            _git(repo, "add", "app.txt", ".env.production")
+        script = tmp_path / "hook.py"
+        script.write_text(SMART_ENCRYPTION_HOOK)
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{script}" "{env_file}" \'{self._DECRYPTED}\'\n'
+        )
+        hook.chmod(0o755)
+        env = {
+            **without_git_location(),
+            **index,
+            "PYTHONPATH": str(Path(envdrift.__file__).resolve().parents[1]),
+        }
+        config = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+        ]
+
+        commit = subprocess.run(
+            ["git", *config, "commit", "-qam" if alternate else "-qm", "app two"],
+            cwd=repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        assert commit.returncode == 0, commit.stderr
+        assert _git(repo, "show", "HEAD:app.txt") == "two\n", "not the hook's commit"
+        assert _git(repo, "show", "HEAD:.env.production") == self._ENCRYPTED
+
+    def test_leaves_a_file_of_another_repository_out_of_an_alternate_index(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """The hook runs in its own repository, so its alternate index is not another one's."""
+        hook_repo = tmp_path / "hook"
+        hook_repo.mkdir()
+        _git(hook_repo, "init", "-q")
+        (hook_repo / ".env.production").write_text('SECRET="encrypted:hook"')
+        _git(hook_repo, "add", ".env.production")
+        _git(hook_repo, "commit", "-qm", "init")
+        (tmp_path / "alternate").mkdir()
+        index = tmp_path / "alternate" / "index.lock"
+        shutil.copyfile(hook_repo / ".git" / "index", index)
+        staged = index.read_bytes()
+        env_file = self._decrypted_env_file(tmp_path / "other")
+        monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+        monkeypatch.chdir(hook_repo)
+
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert index.read_bytes() == staged, "the restore wrote into the hook's alternate index"
+        assert should_skip is True, reason
+        assert env_file.read_text() == self._ENCRYPTED
+
     def test_leaves_a_file_of_another_repository_out_of_it(self, tmp_path: Path, monkeypatch):
         """A hook in one repository encrypts a file of another one, a submodule say.
 
-        is_file_tracked asks the hook's index, the one the restore writes, so the restore does not
-        put the other repository's file there, unless the hook's repository tracks the same path
-        (the xfail test below).
+        The hook's variables name another repository, so smart encryption drops them and the
+        restore never puts the other repository's file into the hook's index.
         """
         hook_repo = tmp_path / "hook"
         hook_repo.mkdir()
@@ -393,21 +520,16 @@ class TestSmartEncryptionInAGitHook:
 
         assert index.read_bytes() == staged
 
-    @pytest.mark.xfail(
-        strict=False,
-        raises=AssertionError,
-        reason="a file of another repository, at a path the hook's repository also tracks, is "
-        "restored through the hook's index (see #919)",
-    )
     @pytest.mark.parametrize("hook", ["commit -a", "linked worktree"])
     def test_leaves_it_alone_when_the_hook_repository_tracks_the_same_path(
         self, tmp_path: Path, monkeypatch, hook: str
     ):
-        """is_file_tracked, asking the hook's index, finds the hook repository's file there.
+        """The file is restored in its own repository, though the hook's tracks the same path (#919).
 
-        The restore then writes the other repository's file into that index. In a linked worktree
-        the hook's GIT_DIR also makes the committed version the hook repository's, so that file
-        is checked out over the other repository's.
+        is_file_tracked, asking the hook's index, found the hook repository's file there, and the
+        restore wrote the other repository's file into that index. In a linked worktree the hook's
+        GIT_DIR also made the committed version the hook repository's, so that file was checked
+        out over the other repository's.
         """
         env_file = self._decrypted_env_file(tmp_path / "other")
         hook_repo = tmp_path / "hook"
@@ -429,7 +551,40 @@ class TestSmartEncryptionInAGitHook:
         staged = index.read_bytes()
         monkeypatch.setenv("GIT_INDEX_FILE", str(index))
 
-        should_skip_reencryption(env_file, self._backend(), enabled=True)
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
 
         assert env_file.read_text() != hook_file, "the hook repository's file was checked out"
         assert index.read_bytes() == staged, "the restore wrote into the hook's index"
+        assert should_skip is True, reason
+        assert env_file.read_text() == self._ENCRYPTED
+
+    @pytest.mark.parametrize("in_hook", [False, True], ids=["no hook", "outer repository's hook"])
+    def test_restores_a_submodules_file_in_the_submodule(
+        self, tmp_path: Path, monkeypatch, in_hook: bool
+    ):
+        """A file of a real submodule is checked and restored in the submodule's own repository.
+
+        The outer repository tracks the same relative path. In its ``git commit -a`` hook, the
+        restore wrote the submodule's file into the outer repository's index (#919).
+        """
+        other = self._decrypted_env_file(tmp_path / "other").parent
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        _git(outer, "init", "-q")
+        (outer / ".env.production").write_text('SECRET="encrypted:outer"')
+        _git(outer, "add", ".env.production")
+        _git(outer, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(other), "sub")
+        _git(outer, "commit", "-qm", "init")
+        env_file = outer / "sub" / ".env.production"
+        env_file.write_text(self._DECRYPTED)
+        index = outer / ".git" / "index.lock"
+        shutil.copyfile(outer / ".git" / "index", index)
+        staged = index.read_bytes()
+        if in_hook:
+            monkeypatch.setenv("GIT_INDEX_FILE", str(index))
+
+        should_skip, reason = should_skip_reencryption(env_file, self._backend(), enabled=True)
+
+        assert index.read_bytes() == staged, "the restore wrote into the outer repository's index"
+        assert should_skip is True, reason
+        assert env_file.read_text() == self._ENCRYPTED

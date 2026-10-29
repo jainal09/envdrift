@@ -46,6 +46,21 @@ When re-encrypting a file, smart encryption:
 5. **If identical**: Restore original encrypted file from git (no re-encryption)
 6. **If different**: Proceed with normal encryption
 
+### In a git hook
+
+git exports `GIT_DIR`, `GIT_INDEX_FILE` and the like to its hooks. During
+`git commit -a`, `GIT_INDEX_FILE` is the index git is about to commit, so for a
+file of the hook's own repository smart encryption restores the file into that
+index, and the commit takes the encrypted version. For a file of another
+repository, a submodule say, every step runs in that file's own repository and
+index, whatever the hook exported. An alternate index that you set with
+`GIT_INDEX_FILE`, outside the git directory, which git exports to the hook too,
+is taken for an index of the repository that `GIT_DIR` names or, without it, of
+the repository the hook runs in. A relative value, such as the `.git/index` that
+a plain `git commit` exports, is read the way git reads it in the hook: a
+relative `GIT_INDEX_FILE` against the top of the hook's work tree, even when the
+hook runs from a subdirectory.
+
 ### Implementation Details
 
 The feature is implemented in `src/envdrift/cli_commands/encryption_helpers.py`:
@@ -224,12 +239,13 @@ def should_skip_reencryption(
 5. **Line ending differences** - Normalized before comparison (CRLF → LF)
 6. **Leading/trailing whitespace** - The whole file's leading/trailing whitespace is
    stripped before comparison
+7. **Submodules** - A file of a submodule is checked and restored in the submodule's
+   own repository and index, in a git hook of the outer repository too
 
 ### Not Handled (Documented Limitations)
 
 1. **Binary files** - Smart encryption only works with text-based .env files
-2. **Submodules** - File tracking may not work correctly in submodules
-3. **Shallow clones** - May not have full git history
+2. **Shallow clones** - May not have full git history
 
 ## Security Considerations
 
