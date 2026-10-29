@@ -9,6 +9,7 @@ they take a line or file content and answer a yes/no structural question.
 from __future__ import annotations
 
 import re
+import string
 
 from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.encryption.sops import SOPSEncryptionBackend
@@ -120,9 +121,13 @@ def _line_is_sops_metadata(line: str) -> bool:
 _DOTENVX_VALUE_SPAN_RE = re.compile(
     r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"']?encrypted:[^\s\"']*[\"']?",
 )
-_SOPS_VALUE_SPAN_RE = re.compile(
-    r"(?:[\"']?[A-Za-z_][\w.-]*[\"']?\s*[=:]\s*[\"']?)?ENC\[AES256_GCM,[^\]]*\]?",
-)
+# A SOPS value runs from its envelope to the envelope's ``]``, or to the end of the line. Its
+# assignment, ``NAME=`` or ``"name": "``, is found by stepping back from the envelope, not by a
+# regex: an optional name before the envelope made a regex retry a long run of name characters
+# at every position of the line, so a 40,000-character line took guard 49 seconds.
+_SOPS_VALUE_MARKER = "ENC[AES256_GCM,"
+_QUOTES = "\"'"
+_NAME_START = frozenset(string.ascii_letters + "_")
 # The value of an assignment, as far as its first whitespace (and closing quote).
 _VALUE_TOKEN_RE = re.compile(r"\s*[\"']?[^\s\"']*[\"']?")
 # Where str.splitlines() breaks a line and git does not. A line counts to its line break (#937),
@@ -141,6 +146,50 @@ def _segments(line: str) -> list[tuple[int, str]]:
     return segments
 
 
+def _sops_assignment_start(line: str, marker: int, floor: int) -> int:
+    """Where the assignment of the SOPS value at ``marker`` starts, or ``marker`` if it has none.
+
+    The assignment is the text ``["']?[A-Za-z_][\\w.-]*["']?\\s*[=:]\\s*["']?`` matches right
+    before the envelope, at its leftmost start, found in time linear in its length. ``floor`` is
+    where the previous value ended: an assignment does not reach back past it.
+    """
+    i = marker
+    if i > floor and line[i - 1] in _QUOTES:
+        i -= 1
+    while i > floor and line[i - 1].isspace():
+        i -= 1
+    if i == floor or line[i - 1] not in "=:":
+        return marker
+    i -= 1
+    while i > floor and line[i - 1].isspace():
+        i -= 1
+    if i > floor and line[i - 1] in _QUOTES:
+        i -= 1
+    name_end = i
+    while i > floor and (line[i - 1].isalnum() or line[i - 1] in "_.-"):
+        i -= 1
+    # The name starts at the first ASCII letter or underscore of the run of name characters,
+    # after the quote before it when it starts the run.
+    name = next((p for p in range(i, name_end) if line[p] in _NAME_START), None)
+    if name is None:
+        return marker
+    if name == i and name > floor and line[name - 1] in _QUOTES:
+        return name - 1
+    return name
+
+
+def _sops_value_spans(line: str) -> list[tuple[int, int]]:
+    """The spans of the SOPS values on ``line``, each with its assignment."""
+    spans: list[tuple[int, int]] = []
+    floor = 0
+    while (marker := line.find(_SOPS_VALUE_MARKER, floor)) != -1:
+        close = line.find("]", marker + len(_SOPS_VALUE_MARKER))
+        end = len(line) if close == -1 else close + 1
+        spans.append((_sops_assignment_start(line, marker, floor), end))
+        floor = end
+    return spans
+
+
 def _encrypted_value_spans(line: str) -> list[tuple[int, int]]:
     """The ``(start, end)`` spans of ``line`` that hold an already-encrypted value.
 
@@ -157,7 +206,7 @@ def _encrypted_value_spans(line: str) -> list[tuple[int, int]]:
     dotenvx value is looked for at the start of each piece of the line that
     ``str.splitlines()`` would cut, as it was before lines ran to their break.
     """
-    spans = [match.span() for match in _SOPS_VALUE_SPAN_RE.finditer(line)]
+    spans = _sops_value_spans(line)
     for offset, segment in _segments(line):
         dotenvx = _DOTENVX_VALUE_SPAN_RE.match(segment)
         if dotenvx:

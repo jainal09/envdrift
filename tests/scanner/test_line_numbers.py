@@ -11,10 +11,14 @@ Secret-shaped values are built by concatenation, so no realistic literal is in t
 
 from __future__ import annotations
 
+import random
+import re
+import time
 from pathlib import Path
 
 import pytest
 
+from envdrift.scanner._native_filters import _skipped_value_spans, _sops_value_spans
 from envdrift.scanner.base import FindingSeverity, ScanFinding
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.ignores import IgnoreFilter
@@ -277,6 +281,69 @@ class TestAnEncryptedValueAfterASeparator:
         before_it = _external_finding(path, 1, column=1)
 
         assert engine._filter_encrypted_files([in_the_value, before_it]) == [before_it]
+
+
+class TestSopsValueSpans:
+    """A SOPS value's span is found in time linear in the line's length.
+
+    The regex the spans came from takes an optional assignment before the envelope. On a long
+    run of name characters it retried that run at every position: 10,000 characters took about
+    3 seconds, and a 40,000-character line took guard 49 seconds (reported by CodeRabbit on #936).
+    """
+
+    # The pattern the spans followed. The new code must give exactly its matches.
+    PATTERN = re.compile(
+        r"(?:[\"']?[A-Za-z_][\w.-]*[\"']?\s*[=:]\s*[\"']?)?ENC\[AES256_GCM,[^\]]*\]?"
+    )
+    PIECES = ("a", "Z", "_", "9", ".", "-", '"', "'", " ", "\t", "\f", "\x1c", "=", ":", "]")
+    PIECES += ("é", "²", "x", "ENC[AES256_GCM,")
+
+    def test_the_spans_are_the_patterns_matches(self):
+        rng = random.Random(936)  # noqa: S311 - a fixed sample of lines, not a secret
+        for _ in range(20_000):
+            line = "".join(rng.choice(self.PIECES) for _ in range(rng.randint(0, 24)))
+            expected = [match.span() for match in self.PATTERN.finditer(line)]
+            assert _sops_value_spans(line) == expected, repr(line)
+
+    @pytest.mark.parametrize(
+        ("line", "start"),
+        [
+            (SOPS_VALUE, 0),
+            ('  "api_token": "ENC[AES256_GCM,data:x]",', 2),
+            ("9=ENC[AES256_GCM,data:x]", 2),
+            ("a b=ENC[AES256_GCM,data:x]", 2),
+            ("-.key-1 = 'ENC[AES256_GCM,data:x]'", 2),
+        ],
+        ids=["dotenv", "json", "no-name", "space", "punctuation"],
+    )
+    def test_the_span_starts_at_the_assignment(self, line: str, start: int):
+        assert _sops_value_spans(line) == [(start, line.index("]") + 1)]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "a" * 30_000,
+            "a" * 30_000 + " ENC[AES256_GCM,data:x]",
+            "a" * 30_000 + "=ENC[AES256_GCM,data:x]",
+            "a=ENC[AES256_GCM,x] " * 2_000,
+        ],
+        ids=["name-characters", "a-value-after-them", "a-long-name", "many-values"],
+    )
+    def test_a_long_line_is_quick(self, line: str):
+        started = time.perf_counter()
+
+        _skipped_value_spans(line)
+
+        assert time.perf_counter() - started < 1.0
+
+    def test_the_native_scanner_reads_a_minified_line_quickly(self, tmp_path: Path):
+        path = _write(tmp_path / "bundle.min.js", "a" * 200_000 + "\n")
+        started = time.perf_counter()
+
+        findings = NativeScanner(check_entropy=True).scan([path]).findings
+
+        assert time.perf_counter() - started < 10.0
+        assert findings == []
 
 
 class TestTrivyValueRecovery:
