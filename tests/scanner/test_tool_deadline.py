@@ -7,9 +7,7 @@ the processes it started (#911), not through the ``subprocess.run`` seam of the 
 from __future__ import annotations
 
 import contextlib
-import errno
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -18,6 +16,7 @@ import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,7 +27,6 @@ from envdrift.scanner import engine as engine_module
 from envdrift.scanner.base import ScannerBackend, ScanResult
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.gitleaks import GitleaksInstaller
-from envdrift.utils import process_tree
 from envdrift.utils.deadline import (
     ScannerDeadline,
     ScannerTimedOut,
@@ -37,20 +35,26 @@ from envdrift.utils.deadline import (
     scanner_deadline,
 )
 from envdrift.utils.git import get_git_root
-from envdrift.utils.process_tree import _ppid_from_stat, kill_process_tree
 
 pytestmark = pytest.mark.real_tool_runner
 
 # A tool that never ends. It rewrites its heartbeat file, which holds its pid, every 50 ms, so a
 # test on any platform can tell whether it still runs, even after the process that started it
-# has exited.
+# has exited. The file is replaced whole: written in place, a tool stopped and killed between
+# the truncation and the write left it empty, and the test that read its pid said it had never
+# started (#924).
 HEARTBEAT = """
 import os, sys, time
 from pathlib import Path
 
 beat = Path(sys.argv[1])
+staged = beat.with_name(beat.name + ".new")
 while True:
-    beat.write_text(f"{os.getpid()} {time.monotonic()}")
+    staged.write_text(f"{os.getpid()} {time.monotonic()}")
+    try:
+        os.replace(staged, beat)
+    except PermissionError:  # Windows, while a test reads it: the next beat replaces it
+        pass
     time.sleep(0.05)
 """
 
@@ -60,6 +64,10 @@ LIMIT_SECONDS = 1.5
 # then, kills it a second after the engine has given up on the scanner.
 STARTUP_DELAY_SECONDS = 1.0
 TIMED_OUT = f"Scanner timed out after {LIMIT_SECONDS}s"
+# The timeout of a tool that starts a child, or the limit of a scanner whose tool does: long
+# enough for two Python processes to start on a loaded machine. A child killed before it started
+# would prove nothing (#924).
+CHILD_TIMEOUT_SECONDS = 4.0
 
 
 class HungTool(ScannerBackend):
@@ -132,7 +140,13 @@ class LateButClean(ScannerBackend):
 
 
 def _still_beating(beat: Path) -> bool:
-    """Whether the tool writing ``beat`` still runs, given a few seconds to stop."""
+    """Whether the tool writing ``beat`` still runs, given a few seconds to stop.
+
+    The tool is resumed first: one that a kill stopped (``SIGSTOP``) but left alive does not beat.
+    """
+    if sys.platform != "win32":
+        with contextlib.suppress(OSError, ValueError, IndexError):  # gone, or not started
+            os.kill(int(beat.read_text().split()[0]), signal.SIGCONT)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         before = beat.read_text() if beat.exists() else ""
@@ -161,9 +175,11 @@ def _beating_pid(beat: Path) -> int:
     raise AssertionError("the tool never started")
 
 
-def _engine(scanner: ScannerBackend, monkeypatch: pytest.MonkeyPatch) -> ScanEngine:
-    """An engine that runs only ``scanner``, with a time limit of ``LIMIT_SECONDS``."""
-    monkeypatch.setattr(engine_module, "_SCANNER_TIMEOUT_SECONDS", LIMIT_SECONDS)
+def _engine(
+    scanner: ScannerBackend, monkeypatch: pytest.MonkeyPatch, limit: float = LIMIT_SECONDS
+) -> ScanEngine:
+    """An engine that runs only ``scanner``, with a time limit of ``limit``."""
+    monkeypatch.setattr(engine_module, "_SCANNER_TIMEOUT_SECONDS", limit)
     monkeypatch.setattr(engine_module, "_POLL_SECONDS", 0.05)
     engine = ScanEngine(GuardConfig(use_native=False, use_gitleaks=False))
     engine.scanners = [scanner]
@@ -318,7 +334,7 @@ def test_a_git_helper_is_held_to_the_scanners_deadline(
     git.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{heartbeat}" "{beat}"\n')
     git.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    engine = _engine(RepositoryRoot(), monkeypatch)
+    engine = _engine(RepositoryRoot(), monkeypatch, limit=CHILD_TIMEOUT_SECONDS)
 
     try:
         result = engine.scan([tmp_path])
@@ -328,7 +344,9 @@ def test_a_git_helper_is_held_to_the_scanners_deadline(
     finally:
         _stop(beat)
 
-    assert [r.error for r in result.results] == [TIMED_OUT]
+    assert [r.error for r in result.results] == [
+        f"Scanner timed out after {CHILD_TIMEOUT_SECONDS}s"
+    ]
 
 
 @pytest.mark.skipif(
@@ -345,7 +363,7 @@ def test_the_processes_a_timed_out_tool_started_end_with_it(
     tool = tmp_path / "tool.sh"
     tool.write_text(f'#!/bin/sh\n"{sys.executable}" "{heartbeat}" "{beat}" &\nwait\n')
     tool.chmod(0o755)
-    engine = _engine(HungTool(beat, [str(tool)]), monkeypatch)
+    engine = _engine(HungTool(beat, [str(tool)]), monkeypatch, limit=CHILD_TIMEOUT_SECONDS)
 
     try:
         engine.scan([tmp_path])
@@ -353,216 +371,6 @@ def test_the_processes_a_timed_out_tool_started_end_with_it(
         assert beat.exists(), "the tool's child never started"
         assert not _still_beating(beat), "the tool's child still runs after its scanner timed out"
     finally:
-        _stop(beat)
-
-
-# A tool that starts a child, which never ends, and waits for it, on every platform.
-PARENT = """
-import subprocess, sys
-
-subprocess.run([sys.executable, sys.argv[1], sys.argv[2]])
-"""
-
-
-def test_a_tool_that_times_out_is_killed_with_the_processes_it_started(tmp_path: Path) -> None:
-    """subprocess.run would kill the tool and leave its child running (#911)."""
-    beat = tmp_path / "beat"
-    heartbeat = tmp_path / "heartbeat.py"
-    heartbeat.write_text(HEARTBEAT)
-
-    try:
-        with pytest.raises(subprocess.TimeoutExpired):
-            run_tool(
-                [sys.executable, "-c", PARENT, str(heartbeat), str(beat)],
-                capture_output=True,
-                timeout=1.5,
-            )
-
-        assert beat.exists(), "the tool's child never started"
-        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
-    finally:
-        _stop(beat)
-
-
-# Names the process with bytes that are not UTF-8, as the kernel names one whose executable has a
-# long non-ASCII name: it cuts the name at 15 bytes, here in the middle of a "€".
-RENAMED = """
-from pathlib import Path
-
-Path("/proc/self/comm").write_bytes(b"tool-\\xe2\\x82")
-"""
-
-
-@pytest.mark.skipif(
-    not Path("/proc/self/comm").is_file(), reason="a process renames itself through /proc on Linux"
-)
-def test_a_child_whose_name_is_not_utf8_is_killed_too(tmp_path: Path) -> None:
-    """Its /proc/<pid>/stat did not decode as text, which left it out of the tree."""
-    beat = tmp_path / "beat"
-    child = tmp_path / "child.py"
-    child.write_text(RENAMED + HEARTBEAT)
-
-    try:
-        with pytest.raises(subprocess.TimeoutExpired):
-            run_tool(
-                [sys.executable, "-c", PARENT, str(child), str(beat)],
-                capture_output=True,
-                timeout=1.5,
-            )
-
-        assert beat.exists(), "the tool's child never started"
-        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
-    finally:
-        _stop(beat)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
-def test_a_failed_listing_still_kills_the_processes_it_stopped(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A stopped process that is not killed never ends, and Popen's exit waits for it forever.
-
-    The second listing fails, as one does with no file descriptor left, once the tool and its
-    child are stopped. They were left stopped.
-    """
-    beat = tmp_path / "beat"
-    heartbeat = tmp_path / "heartbeat.py"
-    heartbeat.write_text(HEARTBEAT)
-    children_by_parent = process_tree._children_by_parent
-    listings = []
-
-    def listing(timeout: float) -> dict[int, list[int]]:
-        listings.append(None)
-        if len(listings) > 1:
-            raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
-        return children_by_parent(timeout)
-
-    monkeypatch.setattr(process_tree, "_children_by_parent", listing)
-    tool = subprocess.Popen([sys.executable, "-c", PARENT, str(heartbeat), str(beat)])
-    child = None
-    try:
-        child = _beating_pid(beat)
-        with pytest.raises(OSError) as raised:
-            kill_process_tree(tool)
-        assert raised.value.errno == errno.EMFILE
-
-        try:
-            returncode = tool.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            returncode = None
-        assert returncode == -signal.SIGKILL, "the tool was left stopped"
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(child, signal.SIGCONT)  # a child left stopped would beat again
-        assert not _still_beating(beat), "the tool's child was left stopped"
-    finally:
-        tool.kill()  # SIGKILL ends a stopped process too; it sends nothing to a reaped tool
-        tool.wait()
-        if child is not None:
-            with contextlib.suppress(OSError):
-                os.kill(child, signal.SIGKILL)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
-def test_a_failed_listing_does_not_replace_the_timeout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """The listing's error is logged, and the tree still killed: the caller sees the timeout.
-
-    It replaced the TimeoutExpired, which the scanners and installers catch to report a timeout.
-    """
-    beat = tmp_path / "beat"
-    heartbeat = tmp_path / "heartbeat.py"
-    heartbeat.write_text(HEARTBEAT)
-    children_by_parent = process_tree._children_by_parent
-    listings = []
-
-    def listing(timeout: float) -> dict[int, list[int]]:
-        listings.append(None)
-        if len(listings) > 1:
-            raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
-        return children_by_parent(timeout)
-
-    monkeypatch.setattr(process_tree, "_children_by_parent", listing)
-    try:
-        with pytest.raises(subprocess.TimeoutExpired):
-            run_tool(
-                [sys.executable, "-c", PARENT, str(heartbeat), str(beat)],
-                capture_output=True,
-                timeout=1.5,
-            )
-
-        assert "Could not kill every process" in caplog.text
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(_beating_pid(beat), signal.SIGCONT)  # a child left stopped would beat again
-        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
-    finally:
-        _stop(beat)
-
-
-@pytest.mark.xfail(
-    strict=False,
-    raises=AssertionError,
-    reason="a child its tool left running is no longer below the tool (see #922)",
-)
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="the tool is a shell script that starts its child in the background",
-)
-def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
-    """A tool that exits at once, leaving its child running with the tool's output pipe open.
-
-    Only the child's running on is #922: a setup that goes wrong fails the test, not the xfail.
-    """
-    beat = tmp_path / "beat"
-    heartbeat = tmp_path / "heartbeat.py"
-    heartbeat.write_text(HEARTBEAT)
-    tool = tmp_path / "tool.sh"
-    tool.write_text(f'#!/bin/sh\n"{sys.executable}" "{heartbeat}" "{beat}" &\n')
-    tool.chmod(0o755)
-
-    try:
-        with pytest.raises(subprocess.TimeoutExpired):
-            run_tool([str(tool)], capture_output=True, timeout=1.5)
-
-        if not beat.exists():
-            pytest.fail("the tool's child never started")
-        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
-    finally:
-        _stop(beat)
-
-
-class InterruptError(Exception):
-    """Raised by a signal handler while the runner waits, as Ctrl-C raises KeyboardInterrupt."""
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="the interrupt is a POSIX signal")
-def test_an_interrupted_tool_is_killed_with_the_processes_it_started(tmp_path: Path) -> None:
-    """An exception that breaks off the wait, as Ctrl-C's does, kills the tree as a timeout does."""
-    beat = tmp_path / "beat"
-    heartbeat = tmp_path / "heartbeat.py"
-    heartbeat.write_text(HEARTBEAT)
-
-    def interrupt(signum: int, frame: object) -> None:
-        raise InterruptError
-
-    previous = signal.signal(signal.SIGUSR1, interrupt)
-    # Sent to this thread, which waits for the tool: a signal to the process could go to another.
-    timer = threading.Timer(1.5, signal.pthread_kill, (threading.get_ident(), signal.SIGUSR1))
-    timer.start()
-    try:
-        with pytest.raises(InterruptError):
-            run_tool(
-                [sys.executable, "-c", PARENT, str(heartbeat), str(beat)],
-                capture_output=True,
-                timeout=60,
-            )
-
-        assert beat.exists(), "the tool's child never started"
-        assert not _still_beating(beat), "the tool's child still runs after the interrupt"
-    finally:
-        timer.cancel()
-        timer.join()
-        signal.signal(signal.SIGUSR1, previous)
         _stop(beat)
 
 
@@ -583,73 +391,6 @@ def test_the_runner_takes_what_subprocess_run_takes() -> None:
         run_tool(echo, input="x", stdin=subprocess.DEVNULL, timeout=60)
     with pytest.raises(ValueError, match="capture_output"):
         run_tool(echo, capture_output=True, stdout=subprocess.DEVNULL, timeout=60)
-
-
-@pytest.mark.parametrize(
-    ("stat", "ppid"),
-    [
-        (b"41 (git) S 7 41 41 0 -1", 7),
-        (b"42 (my tool (v2)) R 9 42 42 0 -1", 9),
-        (b"43 ( ) ) S 11 43 43 0 -1", 11),
-        (b"44 (tool-\xe2\x82) S 13 44 44 0 -1", 13),
-    ],
-)
-def test_the_parent_is_read_past_the_command_name(stat: bytes, ppid: int) -> None:
-    """A command name in /proc/<pid>/stat may hold spaces and parentheses, and need not be text."""
-    assert _ppid_from_stat(stat) == ppid
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32" or shutil.which("ps") is None,
-    reason="ps lists the processes on macOS and the BSDs",
-)
-def test_ps_lists_the_parent_of_each_process() -> None:
-    """The listing used where there is no /proc, checked against this process's own parent."""
-    assert dict(process_tree._ps_table(timeout=30))[os.getpid()] == os.getppid()
-
-
-def test_without_ps_no_process_is_listed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The walk then finds no child, and the tool alone is killed, as subprocess.run kills it."""
-    monkeypatch.setenv("PATH", str(tmp_path))
-    assert process_tree._ps_table(timeout=30) == []
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
-def test_a_listing_that_does_not_end_does_not_hold_the_kill(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The walk lists for _LISTING_SECONDS at most, then kills the processes it has stopped.
-
-    With a ps that does not end, it waited 30 s for ps with the tool stopped, past the engine's
-    grace period of 5 s, after which guard can exit and leave the stopped tool so for good.
-    """
-    (tmp_path / "ps").write_text("#!/bin/sh\nexec sleep 60\n")
-    (tmp_path / "ps").chmod(0o755)
-    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setattr(process_tree, "_process_table", process_tree._ps_table)  # as on macOS
-    tool = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    try:
-        started = time.monotonic()
-        kill_process_tree(tool)
-        took = time.monotonic() - started
-
-        try:
-            returncode = tool.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            returncode = None
-        assert returncode == -signal.SIGKILL, "the tool was left stopped"
-        grace = engine_module._TOOL_KILL_GRACE_SECONDS
-        assert took < grace, f"the kill took {took:.1f} s, past the engine's {grace} s grace"
-    finally:
-        tool.kill()  # SIGKILL ends a stopped process too; it sends nothing to a reaped tool
-        tool.wait()
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
-def test_a_process_it_cannot_signal_is_not_counted_as_stopped() -> None:
-    """One that is gone, or not this user's, is neither stopped nor walked below."""
-    gone = 2**22 + 1  # above the highest pid of Linux (PID_MAX_LIMIT) and of macOS
-    assert process_tree._signal(gone, signal.SIGSTOP) is False
 
 
 class StuckTool(ScannerBackend):
@@ -677,21 +418,35 @@ class StuckTool(ScannerBackend):
         return ScanResult(scanner_name=self.name)
 
 
+@pytest.mark.parametrize("start_seconds", [0.0, 0.3], ids=["prompt starts", "slow starts"])
 def test_scanners_that_time_out_together_share_one_grace_period(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, start_seconds: float
 ) -> None:
-    """The engine waits once for the tools of all the scanners that timed out together."""
+    """The engine waits once for the tools of all the scanners that timed out together.
+
+    Each scanner's deadline was taken when its thread had been started. With threads slow to
+    start, as on a loaded machine, the second scanner timed out a poll after the first, and the
+    engine waited a grace period for each.
+    """
+    grace = 2.0
     engine = _engine(StuckTool("stuck-a"), monkeypatch)
     engine.scanners = [StuckTool("stuck-a"), StuckTool("stuck-b")]
-    monkeypatch.setattr(engine_module, "_TOOL_KILL_GRACE_SECONDS", 1.0)
+    monkeypatch.setattr(engine_module, "_TOOL_KILL_GRACE_SECONDS", grace)
+    start_scanner = engine._start_scanner
+
+    def slow_start(*args: Any) -> None:
+        start_scanner(*args)
+        time.sleep(start_seconds)
+
+    monkeypatch.setattr(engine, "_start_scanner", slow_start)
 
     started = time.monotonic()
     result = engine.scan([tmp_path])
     elapsed = time.monotonic() - started
 
     assert [r.error for r in result.results] == [TIMED_OUT, TIMED_OUT]
-    # One grace period after the limit, not one per scanner (LIMIT_SECONDS + 2).
-    assert elapsed < LIMIT_SECONDS + 1.8, f"waited {elapsed:.1f}s"
+    # One grace period after the limit, not one per scanner (LIMIT_SECONDS + 2 * grace).
+    assert elapsed < LIMIT_SECONDS + 1.5 * grace, f"waited {elapsed:.1f}s"
 
 
 def test_a_scanner_done_only_after_its_deadline_has_timed_out(

@@ -801,14 +801,20 @@ most four scanners run at once, and each one's 10 minutes count from when it
 starts. A scanner that timed out no longer counts toward the four. The tool it
 was running (gitleaks, trufflehog, ...) is killed when its time is up, and guard
 waits up to 5 seconds for that before it goes on, once for all the scanners that
-time out together. The scanner starts no tool and
+time out together, as the scanners that start together do. The scanner starts no tool and
 no download after that, so none of its tools keeps running after guard exits.
 A scanner that finishes only after its time is up has timed out too, since a tool
 it ran may have been cut short. A tool is killed together with the processes it
 started, such as the `git grep` that git-secrets runs. Earlier releases killed
 only the tool, and those processes ran on after guard had exited, until they next
 wrote their output or their work was done
-([#911](https://github.com/jainal09/envdrift/issues/911)).
+([#911](https://github.com/jainal09/envdrift/issues/911)). On Linux, so is a
+process that a tool left running in the background when it exited, if it still
+holds the tool's output open, as guard waits for that output
+([#922](https://github.com/jainal09/envdrift/issues/922)). When guard cannot read
+`/proc` on Linux, for example because it has run out of file descriptors, it still
+kills the tool and the processes it got to before then, and logs a warning that it
+could not kill every process the tool started.
 
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
 scanners` list written in your config. A scanner active only via the built-in
