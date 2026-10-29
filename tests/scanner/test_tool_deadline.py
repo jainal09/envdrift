@@ -505,9 +505,10 @@ def test_a_failed_listing_does_not_replace_the_timeout(
 
 
 @pytest.mark.xfail(
+    sys.platform != "linux",
     strict=False,
     raises=AssertionError,
-    reason="a child its tool left running is no longer below the tool (see #922)",
+    reason="only Linux lists the processes that hold the tool's output (see #925)",
 )
 @pytest.mark.skipif(
     sys.platform == "win32",
@@ -516,7 +517,8 @@ def test_a_failed_listing_does_not_replace_the_timeout(
 def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
     """A tool that exits at once, leaving its child running with the tool's output pipe open.
 
-    Only the child's running on is #922: a setup that goes wrong fails the test, not the xfail.
+    The child was re-parented when the tool exited, out of the walk's reach, and ran on (#922).
+    It is found by the pipe it holds. A setup that goes wrong fails the test, not the xfail.
     """
     beat = tmp_path / "beat"
     heartbeat = tmp_path / "heartbeat.py"
@@ -658,6 +660,78 @@ def test_a_listing_that_does_not_end_does_not_hold_the_kill(
     finally:
         tool.kill()  # SIGKILL ends a stopped process too; it sends nothing to a reaped tool
         tool.wait()
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/fd").is_dir(), reason="Linux lists a process's files in /proc"
+)
+def test_the_processes_that_hold_a_tools_output_are_found_by_its_pipe() -> None:
+    """Each process but this one that holds the pipe of the tool's output, and no other."""
+    sleep = [sys.executable, "-c", "import time; time.sleep(60)"]
+    holder = subprocess.Popen(sleep, stdout=subprocess.PIPE)
+    other = subprocess.Popen(sleep)
+    try:
+        pipes = process_tree._output_pipes(holder)
+        assert len(pipes) == 1, pipes
+        holders = process_tree._pipe_holders(pipes, time.monotonic() + 30)
+        assert holder.pid in holders
+        assert os.getpid() not in holders, "this process reads the pipe: it is not killed"
+        assert other.pid not in holders
+    finally:
+        for process in (holder, other):
+            process.kill()
+            process.wait()
+    assert holder.stdout is not None
+    holder.stdout.close()
+    assert process_tree._output_pipes(holder) == set(), "a closed pipe is no one's output"
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/fd").is_dir(), reason="Linux lists a process's files in /proc"
+)
+def test_the_search_for_a_tools_output_ends_with_the_time_for_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reading every process's files takes seconds on a host with many processes.
+
+    A pass over them did not stop when the time for listing ran out: the processes the walk had
+    stopped could wait past the engine's 5 seconds to be killed, and be left stopped.
+    """
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], stdout=subprocess.PIPE
+    )
+    try:
+        pipes = process_tree._output_pipes(holder)
+        fd_dir = Path(f"/proc/{holder.pid}/fd")
+        assert process_tree._holds(fd_dir, pipes, time.monotonic() + 30)
+        assert not process_tree._holds(fd_dir, pipes, time.monotonic()), "read past its time"
+        holds, read = process_tree._holds, []
+
+        def slow_holds(fd_dir: Path, pipes: set[str], listing_ends: float) -> bool:
+            read.append(fd_dir)
+            time.sleep(0.6)  # past the time for listing, as a process with many files can take
+            return holds(fd_dir, pipes, listing_ends)
+
+        monkeypatch.setattr(process_tree, "_holds", slow_holds)
+        assert process_tree._pipe_holders(pipes, time.monotonic() + 0.5) == []
+        assert len(read) == 1, "the search read on past the time for listing"
+    finally:
+        holder.kill()
+        holder.wait()
+        assert holder.stdout is not None
+        holder.stdout.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
+def test_a_holder_it_cannot_stop_is_looked_for_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One that is gone, or not this user's, ends the search instead of holding the kill up."""
+    gone = 2**22 + 1  # above the highest pid of Linux (PID_MAX_LIMIT) and of macOS
+    monkeypatch.setattr(process_tree, "_pipe_holders", lambda pipes, listing_ends: [gone])
+    stopped: list[int] = []
+    started = time.monotonic()
+    process_tree._stop_pipe_holders({"pipe:[1]"}, stopped, time.monotonic() + 30)
+    assert stopped == []
+    assert time.monotonic() - started < 5, "it looked for the holders until the time ran out"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")

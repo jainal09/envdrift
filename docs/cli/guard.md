@@ -808,7 +808,10 @@ it ran may have been cut short. A tool is killed together with the processes it
 started, such as the `git grep` that git-secrets runs. Earlier releases killed
 only the tool, and those processes ran on after guard had exited, until they next
 wrote their output or their work was done
-([#911](https://github.com/jainal09/envdrift/issues/911)).
+([#911](https://github.com/jainal09/envdrift/issues/911)). On Linux, so is a
+process that a tool left running in the background when it exited, if it still
+holds the tool's output open, as guard waits for that output
+([#922](https://github.com/jainal09/envdrift/issues/922)).
 
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
 scanners` list written in your config. A scanner active only via the built-in
