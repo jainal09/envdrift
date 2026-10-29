@@ -811,7 +811,10 @@ wrote their output or their work was done
 ([#911](https://github.com/jainal09/envdrift/issues/911)). On Linux, so is a
 process that a tool left running in the background when it exited, if it still
 holds the tool's output open, as guard waits for that output
-([#922](https://github.com/jainal09/envdrift/issues/922)).
+([#922](https://github.com/jainal09/envdrift/issues/922)). When guard cannot read
+`/proc` on Linux, for example because it has run out of file descriptors, it still
+kills the tool and the processes it got to before then, and logs a warning that it
+could not kill every process the tool started.
 
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
 scanners` list written in your config. A scanner active only via the built-in
