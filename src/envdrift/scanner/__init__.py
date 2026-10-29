@@ -5,7 +5,7 @@ This module provides secret detection capabilities through multiple scanner back
 - GitleaksScanner: Integration with gitleaks (auto-installable)
 - TrufflehogScanner: Integration with trufflehog (auto-installable)
 - DetectSecretsScanner: Yelp's detect-secrets - the "final boss" (auto-installable)
-- KingfisherScanner: MongoDB's Kingfisher - 700+ rules, password hashes, validation
+- KingfisherScanner: MongoDB's Kingfisher - Betterleaks and Veles rules, validation
 - GitSecretsScanner: AWS git-secrets for pre-commit hooks (auto-installable)
 
 The ScanEngine orchestrates multiple scanners and aggregates results.

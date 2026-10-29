@@ -60,7 +60,7 @@ scanners with CLI flags:
 envdrift guard --trufflehog --detect-secrets
 ```
 
-For maximum detection including password hashes:
+For the Betterleaks and Veles rules, with secret validation:
 
 ```bash
 envdrift guard --kingfisher
@@ -99,7 +99,7 @@ scanners = ["native", "gitleaks", "trufflehog", "detect-secrets", "kingfisher", 
 | gitleaks | Great pattern coverage, fast |
 | trufflehog | Service-specific tokens (GitHub, Slack, AWS) |
 | detect-secrets | 27+ plugin detectors, keyword scanning |
-| kingfisher | 700+ rules, password hashes, secret validation |
+| kingfisher | Betterleaks and Veles rules, secret validation |
 | talisman | Entropy detection, encoded content, file analysis |
 | trivy | Comprehensive multi-target scanning, severity filtering |
 | infisical | 140+ secret types, git history, staged changes |

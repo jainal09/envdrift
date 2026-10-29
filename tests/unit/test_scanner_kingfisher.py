@@ -134,10 +134,10 @@ class TestKingfisherScanner:
         assert scanner.name == "kingfisher"
 
     def test_scanner_description(self):
-        """Scanner should have informative description."""
+        """The description is true of Kingfisher 2.x, which finds no password hash (#928)."""
         scanner = KingfisherScanner(auto_install=False)
-        assert "700+" in scanner.description
-        assert "password" in scanner.description.lower()
+        assert "Betterleaks" in scanner.description
+        assert "password" not in scanner.description.lower()
 
     def test_default_options(self):
         """Default options should be set for maximum detection."""

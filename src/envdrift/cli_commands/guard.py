@@ -5,7 +5,7 @@ The guard command provides defense-in-depth by detecting:
 - Common secret patterns (API keys, tokens, passwords)
 - High-entropy strings (potential secrets)
 - Previously committed secrets (in git history, with --history)
-- Password hashes (bcrypt, sha512crypt, etc.) with Kingfisher
+- Password hashes (bcrypt, sha512crypt)
 - AWS credentials (with git-secrets)
 - Encoded content and file analysis (with Talisman)
 - Comprehensive multi-target scanning (with Trivy)
@@ -1033,7 +1033,7 @@ def guard(
         bool | None,
         typer.Option(
             "--kingfisher/--no-kingfisher",
-            help="Use Kingfisher scanner - 700+ rules, password hashes, secret validation",
+            help="Use Kingfisher scanner - Betterleaks and Veles rules, secret validation",
         ),
     ] = None,
     git_secrets: Annotated[

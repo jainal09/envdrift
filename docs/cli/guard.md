@@ -15,7 +15,7 @@ slip past other guardrails (hooks, CI, reviews). It detects:
 
 - Unencrypted env files missing dotenvx or SOPS markers
 - Common secret patterns (tokens, API keys, credentials)
-- Password hashes (bcrypt, sha512crypt) with Kingfisher
+- Password hashes (bcrypt, sha512crypt), with the native scanner
 - High-entropy strings (native scanner; env files by default, all files with
   `--entropy`, disable with `--no-entropy`)
 - Secrets in git history (optional)
@@ -184,10 +184,12 @@ Enable or disable Kingfisher scanner. Disabled by default.
 
 Kingfisher provides:
 
-- 700+ built-in detection rules
-- Password hash detection (bcrypt, sha512crypt)
+- Betterleaks' detection rules (Infisical's rule set) and Veles' rules
 - Active secret validation (checks if secrets are still valid)
 - Archive extraction and binary file scanning
+
+Kingfisher 2.x, unlike 1.x, has no rule for password hashes: the native scanner finds bcrypt
+and sha512crypt hashes.
 
 ```bash
 envdrift guard --kingfisher
@@ -607,16 +609,22 @@ envdrift guard --history --trufflehog
 ### Maximum detection with Kingfisher
 
 ```bash
-# Kingfisher excels at finding password hashes and validating secrets
+# Kingfisher adds the Betterleaks and Veles rules and validates the secrets its rules can check
 envdrift guard --kingfisher --gitleaks
 ```
 
 ### Find password hashes in database dumps
 
 ```bash
-# Kingfisher detects bcrypt, sha512crypt, and other password hashes
-envdrift guard ./db --kingfisher --native-only
+# The native scanner finds bcrypt hashes, and sha512crypt hashes with no rounds= field and a
+# salt of 8 to 16 characters (#934)
+envdrift guard ./db/users.sql --native-only
 ```
+
+Name each dump file. In a git checkout a directory scan skips the untracked files git ignores,
+apart from env files (`.env`, `.env.*` and `*.env`, but not `.env.keys`), and dumps often are such
+files. The native scanner also skips any file over 10 MiB without a warning
+([#933](https://github.com/jainal09/envdrift/issues/933)).
 
 ## Severity
 
