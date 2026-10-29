@@ -609,7 +609,7 @@ envdrift guard --history --trufflehog
 ### Maximum detection with Kingfisher
 
 ```bash
-# Kingfisher adds the Betterleaks rules and validates the secrets it finds
+# Kingfisher adds the Betterleaks and Veles rules and validates the secrets it finds
 envdrift guard --kingfisher --gitleaks
 ```
 

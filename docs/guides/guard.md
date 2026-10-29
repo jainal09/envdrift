@@ -60,7 +60,7 @@ scanners with CLI flags:
 envdrift guard --trufflehog --detect-secrets
 ```
 
-For the Betterleaks rules, with secret validation:
+For the Betterleaks and Veles rules, with secret validation:
 
 ```bash
 envdrift guard --kingfisher
