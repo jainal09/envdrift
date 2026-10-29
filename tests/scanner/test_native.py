@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
+from typing import NamedTuple
 
 import pytest
 
@@ -78,6 +79,19 @@ class TestNativeScanner:
 
         assert result.findings == []
         assert result.files_scanned == 0
+
+
+class _GitFailure(NamedTuple):
+    """How the stand-in for git fails a listing (#910).
+
+    ``listing`` is "untracked" (``git ls-files --others`` without ``--ignored``) or "ignored"
+    (with it). The stand-in writes ``prints`` (a printf format) for those calls, then fails, or
+    with ``hangs`` sleeps past any timeout.
+    """
+
+    listing: str
+    prints: str = ""
+    hangs: bool = False
 
 
 class TestNativeScannerInternals:
@@ -235,14 +249,10 @@ class TestNativeScannerInternals:
         assert oversized.resolve() not in finding_paths
 
     @staticmethod
-    def _repo_whose_git_fails(
-        tmp_path: Path, monkeypatch, *, failing: str, prints: str = "", hangs: bool = False
-    ) -> Path:
-        """A repository, and a stand-in for git first on PATH that fails some of its listings.
+    def _repo_whose_git_fails(tmp_path: Path, monkeypatch, failure: _GitFailure) -> Path:
+        """A repository, and a stand-in for git first on PATH that fails one of its listings.
 
-        ``failing`` is "untracked" (``git ls-files --others`` without ``--ignored``) or
-        "ignored" (with it). The stand-in writes ``prints`` (a printf format) for those calls and
-        then fails, or with ``hangs`` sleeps past any timeout. It hands every other call to the
+        The stand-in fails the listing as ``failure`` says and hands every other call to the
         real git.
         """
         import shutil
@@ -263,11 +273,11 @@ class TestNativeScannerInternals:
             '  [ "$a" = "--others" ] && others=1\n'
             '  [ "$a" = "--ignored" ] && ignored=1\n'
             "done\n"
-            f"if [ $others = 1 ] && [ $ignored = {int(failing == 'ignored')} ]; then\n"
-            f"  printf '{prints}'\n"
+            f"if [ $others = 1 ] && [ $ignored = {int(failure.listing == 'ignored')} ]; then\n"
+            f"  printf '{failure.prints}'\n"
             + (
                 "  exec sleep 10\n"
-                if hangs
+                if failure.hangs
                 else '  echo "fatal: simulated failure" >&2; exit 128\n'
             )
             + "fi\n"
@@ -289,7 +299,7 @@ class TestNativeScannerInternals:
 
         A secret in a file git did not list used to pass the scan without a word.
         """
-        repo = self._repo_whose_git_fails(tmp_path, monkeypatch, failing=failing)
+        repo = self._repo_whose_git_fails(tmp_path, monkeypatch, _GitFailure(failing))
         untracked = repo / "config.txt"
         untracked.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
 
@@ -317,7 +327,7 @@ class TestNativeScannerInternals:
         """
         monkeypatch.setattr(native_module, "_GIT_LIST_TIMEOUT_SECONDS", 1)
         repo = self._repo_whose_git_fails(
-            tmp_path, monkeypatch, failing="untracked", prints="listed.txt\\000cut.txt", hangs=hangs
+            tmp_path, monkeypatch, _GitFailure("untracked", "listed.txt\\000cut.txt", hangs)
         )
         for name in ("listed.txt", "cut.txt"):
             (repo / name).write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
@@ -334,7 +344,7 @@ class TestNativeScannerInternals:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         """A clean scan of what git listed is no pass when git could not list the rest (#910)."""
-        repo = self._repo_whose_git_fails(tmp_path, monkeypatch, failing="untracked")
+        repo = self._repo_whose_git_fails(tmp_path, monkeypatch, _GitFailure("untracked"))
         (repo / "config.txt").write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
 
         result = ScanEngine(GuardConfig(use_gitleaks=False)).scan([repo])
