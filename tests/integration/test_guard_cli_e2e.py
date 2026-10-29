@@ -904,6 +904,39 @@ def test_skip_gitignored_survives_non_utf8_locale(git_repo: Path) -> None:
     assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="--skip-gitignored asks git check-ignore under a git hook's GIT_INDEX_FILE (see #915)",
+)
+def test_skip_gitignored_keeps_a_tracked_file_whatever_index_a_hook_exported(
+    git_repo: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """#915: a tracked file that .gitignore matches is not skipped from another repository's hook.
+
+    git check-ignore never reports a tracked file as ignored, but it took "tracked" from the
+    GIT_INDEX_FILE that git exports to a hook (the hook repository's ``index.lock`` during
+    ``git commit -a``). The file's findings were dropped, and guard exited 0.
+    """
+    (git_repo / ".gitignore").write_text("leak.py\n")
+    (git_repo / "leak.py").write_text(f'aws_secret_access_key = "{_AWS_SECRET}"\n')
+    _run_git(["add", ".gitignore"], cwd=git_repo)
+    _run_git(["add", "--force", "leak.py"], cwd=git_repo)
+    hook_repo = tmp_path_factory.mktemp("hook-repo")
+    _run_git(["init", "-q"], cwd=hook_repo)
+    (hook_repo / "notes.txt").write_text("hello\n")
+    _run_git(["add", "notes.txt"], cwd=hook_repo)
+
+    result = _run_envdrift(
+        ["guard", "--native-only", "--skip-gitignored", "--json", "."],
+        cwd=git_repo,
+        env={"GIT_INDEX_FILE": str(hook_repo / ".git" / "index")},
+    )
+
+    files = [Path(f["file_path"]).name for f in _guard_json(result)["findings"]]
+    assert "leak.py" in files, files
+    assert result.returncode == 1, f"expected 1, got {result.returncode}\n{result.stdout}"
+
+
 def test_combined_file_gitignore_check_handles_non_ascii_name(git_repo: Path) -> None:
     """#453: ``check_combined_files_security`` must match non-ASCII combined files.
 

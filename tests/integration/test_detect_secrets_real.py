@@ -160,6 +160,31 @@ def test_scan_inside_a_git_repo_covers_the_tracked_files_only(git_repo: Path):
     assert [Path(f.file_path).name for f in result.findings] == ["tracked.cfg"]
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="detect-secrets lists the files of a git hook's GIT_INDEX_FILE (see #915)",
+)
+def test_scan_lists_the_repository_whatever_index_a_hook_exported(
+    git_repo: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """#915: GIT_INDEX_FILE, which git exports to a hook, does not change what is scanned.
+
+    In a hook of another repository it pointed detect-secrets' ``git ls-files`` at that
+    repository's index, so no file of the repository it was given was scanned, with no warning.
+    """
+    add_tracked(git_repo, "tracked.cfg")
+    hook_repo = tmp_path_factory.mktemp("hook-repo")
+    subprocess.run(["git", "init", "-q"], cwd=hook_repo, capture_output=True, check=True)
+    (hook_repo / "notes.txt").write_text("hello\n")
+    subprocess.run(["git", "add", "notes.txt"], cwd=hook_repo, capture_output=True, check=True)
+    monkeypatch.setenv("GIT_INDEX_FILE", str(hook_repo / ".git" / "index"))
+
+    result = DetectSecretsScanner(auto_install=False).scan([git_repo])
+
+    assert result.error is None, result.error
+    assert found(result.findings, git_repo) == ["tracked.cfg"]
+
+
 def test_scan_of_a_single_file_does_not_need_a_repository(tmp_path: Path):
     target = tmp_path / "npm.cfg"
     target.write_text(NPM_TOKEN_LINE)
