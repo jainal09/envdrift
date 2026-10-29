@@ -118,16 +118,14 @@ def _pipe_holders(pipes: set[str], listing_ends: float) -> list[int]:
     all takes about 10 microseconds a file descriptor, seconds on a host with many processes, so
     the search ends at ``listing_ends`` with the holders it has found.
     """
-    me = os.getpid()
+    me = str(os.getpid())
     holders = []
     for entry in Path("/proc").iterdir():
         if time.monotonic() >= listing_ends:
             break
-        if (
-            entry.name.isdigit()
-            and int(entry.name) != me
-            and _holds(entry / "fd", pipes, listing_ends)
-        ):
+        if not entry.name.isdigit() or entry.name == me:
+            continue
+        if _holds(entry / "fd", pipes, listing_ends):
             holders.append(int(entry.name))
     return holders
 
