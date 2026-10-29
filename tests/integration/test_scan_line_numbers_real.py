@@ -103,6 +103,20 @@ def test_gitleaks_finding_of_a_plaintext_secret_in_an_encrypted_file_is_kept(rep
     assert located == [("gitleaks", 3), ("native", 3)]
 
 
+@requires_gitleaks
+@pytest.mark.parametrize("separator", ["\f", " "], ids=["form-feed", "space"])
+def test_a_plaintext_key_after_an_encrypted_value_is_found(repo: Path, separator: str):
+    """Only the ciphertext is skipped, not its line: both scanners report the key after it."""
+    _write(
+        repo / ".env", f'API_TOKEN="{DOTENVX_CIPHERTEXT}"{separator}AWS_ACCESS_KEY_ID={AWS_KEY}\n'
+    )
+
+    exit_code, located = _guard(repo, ".env")
+
+    assert exit_code == 1
+    assert located == [("gitleaks", 1), ("native", 1)]
+
+
 @requires_trivy
 def test_the_value_trivy_redacts_is_read_back_after_a_form_feed(tmp_path: Path):
     path = _write(tmp_path / "app.py", f'import os\n\f\nAWS_ACCESS_KEY_ID = "{AWS_KEY}"\n')

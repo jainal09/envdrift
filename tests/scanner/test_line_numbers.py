@@ -19,11 +19,15 @@ from envdrift.scanner.base import FindingSeverity, ScanFinding
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.ignores import IgnoreFilter
 from envdrift.scanner.native import NativeScanner
+from envdrift.scanner.patterns import hash_secret
 from envdrift.scanner.trivy import TrivyScanner
 from envdrift.utils.text import line_and_column, split_lines
 
 AWS_KEY = "AKIA" + "IOSFODNN7" + "EXAMPLX"
 DOTENVX_CIPHERTEXT = "encrypted:BEj2" + "Zq9yKxw0Lr3VtP8sN1mD5cH7aG4fU6eB2oI9kJ3lQ0wR5tY8uA1sD4f=="
+SOPS_VALUE = "API_TOKEN=ENC[AES256_GCM,data:" + "Zm9vYmFy" * 4 + ",iv:YWJj,tag:ZGVm,type:str]"
+PUBLIC_KEY = 'DOTENV_PUBLIC_KEY="03' + "ab" * 32 + '"'
+ENTROPY_TOKEN = "Zx9Kq2Wm7" + "Lp4Rt8Nv6" + "Bs3Yd1Hf5Gj0Qc"
 
 # Where str.splitlines() breaks a line and git does not.
 NOT_LINE_BREAKS = {
@@ -54,7 +58,9 @@ def _key_after(tmp_path: Path, separator: str, trailer: str = "") -> Path:
     )
 
 
-def _external_finding(path: Path, line_number: int, scanner: str = "gitleaks") -> ScanFinding:
+def _external_finding(
+    path: Path, line_number: int, scanner: str = "gitleaks", column: int | None = None
+) -> ScanFinding:
     """A finding as an external scanner reports it, on the line git counts."""
     return ScanFinding(
         file_path=path,
@@ -64,6 +70,7 @@ def _external_finding(path: Path, line_number: int, scanner: str = "gitleaks") -
         severity=FindingSeverity.CRITICAL,
         scanner=scanner,
         line_number=line_number,
+        column_number=column,
     )
 
 
@@ -175,6 +182,67 @@ class TestEncryptedLineCheck:
         on_plaintext, on_ciphertext = _external_finding(path, 3), _external_finding(path, 2)
 
         assert engine._filter_encrypted_files([on_plaintext, on_ciphertext]) == [on_plaintext]
+
+
+class TestPlaintextAfterAnEncryptedValue:
+    """A plaintext secret on the line of an encrypted value is found (#937).
+
+    The native scanner skipped the whole line of an encrypted value or of dotenvx's public key,
+    and the engine dropped every finding on the line of an encrypted value. A form feed no longer
+    starts a line, so a key after one shares the line of the value before it, as a key after a
+    space always did. Only the value itself is skipped now (reported by CodeRabbit on #936).
+    """
+
+    @pytest.mark.parametrize("separator", ["\f", " "], ids=["form-feed", "space"])
+    @pytest.mark.parametrize(
+        "value", [f'API_TOKEN="{DOTENVX_CIPHERTEXT}"', PUBLIC_KEY], ids=["dotenvx", "public-key"]
+    )
+    def test_the_native_scanner_reports_the_key(self, tmp_path: Path, value: str, separator: str):
+        path = _write(tmp_path / ".env", f"# app\n{value}{separator}AWS_ACCESS_KEY_ID={AWS_KEY}\n")
+
+        located = [(f.rule_id, f.line_number) for f in NativeScanner().scan([path]).findings]
+
+        assert ("aws-access-key-id", 2) in located
+
+    @pytest.mark.parametrize("separator", ["\f", " "], ids=["form-feed", "space"])
+    def test_a_high_entropy_value_after_a_sops_value_is_reported(
+        self, tmp_path: Path, separator: str
+    ):
+        path = _write(tmp_path / ".env", f"{SOPS_VALUE}{separator}SESSION_TOKEN={ENTROPY_TOKEN}\n")
+
+        findings = NativeScanner(check_entropy=True).scan([path]).findings
+
+        assert [(f.rule_id, f.line_number, f.secret_hash) for f in findings] == [
+            ("high-entropy-string", 1, hash_secret(ENTROPY_TOKEN))
+        ]
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            f'{PUBLIC_KEY}  # public\nAPI_TOKEN="{DOTENVX_CIPHERTEXT}"  # rotated\n',
+            f"{SOPS_VALUE} # x\n",
+        ],
+        ids=["dotenvx", "sops"],
+    )
+    def test_the_values_themselves_are_still_skipped(self, tmp_path: Path, content: str):
+        path = _write(tmp_path / ".env", content)
+
+        assert NativeScanner(check_entropy=True).scan([path]).findings == []
+
+    @pytest.mark.parametrize(
+        "value", [f'API_TOKEN="{DOTENVX_CIPHERTEXT}"', SOPS_VALUE], ids=["dotenvx", "sops"]
+    )
+    def test_the_engine_keeps_an_external_finding_past_the_value(self, tmp_path: Path, value: str):
+        line = f"{value}\fAWS_ACCESS_KEY_ID={AWS_KEY}"
+        path = _write(tmp_path / ".env", f"{line}\n")
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        past_the_value = _external_finding(path, 1, column=line.index(AWS_KEY) + 1)
+        in_the_value = _external_finding(path, 1, column=line.index("=") + 2)
+        without_a_column = _external_finding(path, 1)
+
+        kept = engine._filter_encrypted_files([past_the_value, in_the_value, without_a_column])
+
+        assert kept == [past_the_value]
 
 
 class TestTrivyValueRecovery:

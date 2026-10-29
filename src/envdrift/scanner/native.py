@@ -17,8 +17,6 @@ import re
 import time
 from pathlib import Path, PurePosixPath
 
-from envdrift.core.encryption import is_dotenvx_public_key_var
-
 # Structure-aware line/content classification helpers live in a sibling module to
 # keep this file within the single-file LOC budget. They are re-exported from here
 # because ``engine.py`` and the scanner tests import them from
@@ -27,8 +25,9 @@ from envdrift.scanner._native_filters import (
     _EC_PUBKEY_RE,
     _content_has_sops_markers,
     _content_is_encrypted,
-    _is_encrypted_value_line,
     _looks_like_code_member_access,
+    _skipped_value_spans,
+    _within_spans,
 )
 from envdrift.scanner._native_io import (
     NATIVE_MAX_SCAN_BYTES,
@@ -1167,17 +1166,14 @@ class NativeScanner(ScannerBackend):
             if not stripped or stripped.startswith("#"):
                 continue
 
-            # Skip already-encrypted values (dotenvx or SOPS) — handles combined /
-            # mixed-content files.
-            if _is_encrypted_value_line(line):
-                continue
-
-            # Skip dotenvx's public-key artifact. The public key is public by
-            # definition (not a secret) but looks like a high-entropy assignment;
-            # this mirrors how the partial-encryption combine step excludes it from
-            # secret-var counts (see partial_encryption._is_secret_var_line).
-            if is_dotenvx_public_key_var(stripped.split("=", 1)[0].strip()):
-                continue
+            # Leave out already-encrypted values (dotenvx or SOPS) — handles combined /
+            # mixed-content files — and dotenvx's public-key artifact. The public key
+            # is public by definition (not a secret) but looks like a high-entropy
+            # assignment; this mirrors how the partial-encryption combine step excludes
+            # it from secret-var counts (see partial_encryption._is_secret_var_line).
+            # Only those values are left out: a plaintext secret after one on the same
+            # line, past a space or a form feed, is still reported (#937).
+            skipped = _skipped_value_spans(line)
 
             for pattern in ALL_PATTERNS:
                 # Multiline patterns (e.g. gcp-service-account JSON) are scanned
@@ -1202,6 +1198,9 @@ class NativeScanner(ScannerBackend):
                 # single delimiter between two adjacent keys is left available as
                 # the leading boundary of the next match — both keys are found.
                 for match in pattern.pattern.finditer(line):
+                    if _within_spans(skipped, *match.span()):
+                        continue
+
                     # Extract the secret (first group or full match)
                     secret = match.group(1) if match.groups() else match.group(0)
 
@@ -1293,15 +1292,15 @@ class NativeScanner(ScannerBackend):
             if stripped.startswith("#") or stripped.startswith("//"):
                 continue
 
-            # Skip already-encrypted values and the public-key artifact. Encrypted
-            # blobs are high-entropy by nature but not leaked secrets, so flagging
-            # them would flood combined partial-encryption files with noise.
-            if _is_encrypted_value_line(line):
-                continue
-            if is_dotenvx_public_key_var(stripped.split("=", 1)[0].strip()):
-                continue
+            # Leave out already-encrypted values and the public-key artifact, but not
+            # the rest of their line (#937). Encrypted blobs are high-entropy by nature
+            # but not leaked secrets, so flagging them would flood combined
+            # partial-encryption files with noise.
+            skipped = _skipped_value_spans(line)
 
             for match in assignment_pattern.finditer(line):
+                if _within_spans(skipped, *match.span()):
+                    continue
                 value = match.group(1)
 
                 # Skip if it looks like a URL or path

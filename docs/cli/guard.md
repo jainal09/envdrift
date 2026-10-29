@@ -386,9 +386,14 @@ the same secret reported by another scanner.
 
 ### `--skip-encrypted` / `--no-skip-encrypted`
 
-Skip findings from files that contain dotenvx or SOPS encryption markers. Enabled by
-default. Encrypted files contain ciphertext that can trigger false positives from
-scanners detecting high-entropy strings.
+Skip findings in the encrypted values of files that contain dotenvx or SOPS encryption
+markers. Enabled by default. Ciphertext can trigger false positives from scanners
+detecting high-entropy strings.
+
+Only the encrypted values are skipped. A finding elsewhere in such a file is reported,
+even one on the line of an encrypted value, after it. A finding from a scanner that
+reports no column, such as trufflehog, trivy or detect-secrets, is skipped when its line
+holds an encrypted value.
 
 ```bash
 # Skip findings from encrypted files (default behavior)

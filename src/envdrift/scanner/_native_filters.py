@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.encryption.sops import SOPSEncryptionBackend
 
 # A dotenvx public key is a secp256k1 *compressed* EC point: a 0x02/0x03 prefix
@@ -112,23 +113,58 @@ def _line_is_sops_metadata(line: str) -> bool:
     return any(pattern.match(line) for pattern in _SOPS_METADATA_RES)
 
 
-def _is_encrypted_value_line(line: str) -> bool:
-    """Return True if a line holds an already-encrypted value (dotenvx or SOPS).
+# The extent of an already-encrypted value on a line, its assignment included: a dotenvx value
+# runs to the end of its ``encrypted:`` token (and its closing quote), a SOPS value to the end of
+# its ``ENC[AES256_GCM,...]`` envelope. Neither holds whitespace, so whatever follows on the line
+# is plaintext.
+_DOTENVX_VALUE_SPAN_RE = re.compile(
+    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"']?encrypted:[^\s\"']*[\"']?",
+)
+_SOPS_VALUE_SPAN_RE = re.compile(
+    r"(?:[\"']?[A-Za-z_][\w.-]*[\"']?\s*[=:]\s*[\"']?)?ENC\[AES256_GCM,[^\]]*\]?",
+)
+# The value of an assignment, as far as its first whitespace (and closing quote).
+_VALUE_TOKEN_RE = re.compile(r"\s*[\"']?[^\s\"']*[\"']?")
 
-    Used to skip such lines during pattern and entropy scanning so encrypted
-    values are never re-flagged. Shared by both scans so they stay in sync.
+
+def _encrypted_value_spans(line: str) -> list[tuple[int, int]]:
+    """The ``(start, end)`` spans of ``line`` that hold an already-encrypted value.
 
     Structure-aware (mirrors the file-level ``_content_is_encrypted``): a bare
     ``"encrypted:" in line`` / ``"ENC[" in line`` substring check misfires on a
     plaintext line that merely *mentions* the marker — e.g.
-    ``DATA=ENC[something] AKIA…`` or ``URL=https://x/encrypted:y?key=AKIA…`` —
-    causing the whole line (and any real adjacent secret on it) to be skipped
-    and never reported (#413). We instead require the marker in its real
-    structural position: a dotenvx-encrypted value (anchored value-position
-    ``encrypted:``) or a canonical SOPS ``ENC[AES256_GCM,`` envelope — not a
-    bare ``ENC[``.
+    ``DATA=ENC[something] AKIA…`` or ``URL=https://x/encrypted:y?key=AKIA…`` (#413).
+    We instead require the marker in its real structural position: a
+    dotenvx-encrypted value (anchored value-position ``encrypted:``) or a
+    canonical SOPS ``ENC[AES256_GCM,`` envelope — not a bare ``ENC[``.
+
+    Only the value is skipped, not its whole line: a plaintext secret after it
+    on the same line, past a space or a form feed, is still found (#937).
     """
-    return _line_is_dotenvx_encrypted(line) or bool(_SOPS_ENC_RE.search(line))
+    spans = [match.span() for match in _SOPS_VALUE_SPAN_RE.finditer(line)]
+    dotenvx = _DOTENVX_VALUE_SPAN_RE.match(line)
+    if dotenvx:
+        spans.append(dotenvx.span())
+    return spans
+
+
+def _skipped_value_spans(line: str) -> list[tuple[int, int]]:
+    """The spans of ``line`` that pattern and entropy scanning leave out.
+
+    The encrypted values, which are never re-flagged, and dotenvx's public key. Shared by
+    both scans so they stay in sync.
+    """
+    spans = _encrypted_value_spans(line)
+    name, equals, _ = line.partition("=")
+    if equals and is_dotenvx_public_key_var(name.strip()):
+        value = _VALUE_TOKEN_RE.match(line, len(name) + 1)
+        spans.append((0, value.end() if value else len(line)))
+    return spans
+
+
+def _within_spans(spans: list[tuple[int, int]], start: int, end: int) -> bool:
+    """True if ``[start, end)`` overlaps one of ``spans``."""
+    return any(start < span_end and span_start < end for span_start, span_end in spans)
 
 
 def _content_has_sops_markers(content: str) -> bool:
