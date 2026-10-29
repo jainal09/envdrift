@@ -1,5 +1,13 @@
 # Changelog
 
+## [11.1.4](https://github.com/jainal09/envdrift/compare/v11.1.3...v11.1.4) (2026-10-28)
+
+
+### Bug Fixes
+
+* **scanner:** kill a timed-out scanner's tool instead of leaving it running ([#909](https://github.com/jainal09/envdrift/issues/909)) ([db292b9](https://github.com/jainal09/envdrift/commit/db292b9fe5c4563c8376a9259c53740dd1eff85f))
+* **scanner:** run the real git-secrets and trufflehog in CI and fix what they exposed ([#913](https://github.com/jainal09/envdrift/issues/913)) ([4984545](https://github.com/jainal09/envdrift/commit/498454588d8ffcc00efae76920d9ecea5276a16e))
+
 ## [11.1.3](https://github.com/jainal09/envdrift/compare/v11.1.2...v11.1.3) (2026-10-28)
 
 
