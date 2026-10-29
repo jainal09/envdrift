@@ -51,6 +51,7 @@ def kill_process_tree(process: subprocess.Popen) -> None:
 
 
 def _kill_posix_tree(pid: int, pipes: set[str]) -> None:
+    """Stop ``pid``, the processes below it and the holders of ``pipes``; then kill them all."""
     stopped: list[int] = []
     try:
         listing_ends = time.monotonic() + _LISTING_SECONDS

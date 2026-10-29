@@ -101,6 +101,7 @@ def test_a_failed_listing_still_kills_the_processes_it_stopped(
     listings = []
 
     def listing(timeout: float) -> dict[int, list[int]]:
+        """The real listing the first time, then the EMFILE of a process out of files."""
         listings.append(None)
         if len(listings) > 1:
             raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
@@ -144,6 +145,7 @@ def test_a_failed_listing_does_not_replace_the_timeout(
     listings = []
 
     def listing(timeout: float) -> dict[int, list[int]]:
+        """The real listing the first time, then the EMFILE of a process out of files."""
         listings.append(None)
         if len(listings) > 1:
             raise OSError(errno.EMFILE, os.strerror(errno.EMFILE))
@@ -217,8 +219,11 @@ def test_an_interrupted_tool_is_killed_with_the_processes_it_started(tmp_path: P
     done = threading.Event()
 
     def interrupt_once_the_child_beats() -> None:
-        # Not after a fixed time, which a slow start can outlast (#924). Sent to the thread that
-        # waits for the tool: a signal to the process could go to another.
+        """Interrupt the wait for the tool once its child beats.
+
+        Not after a fixed time, which a slow start can outlast (#924). Sent to the thread that
+        waits for the tool: a signal to the process could go to another.
+        """
         while not beat.exists() and not done.wait(0.05):
             pass
         if not done.is_set():
@@ -393,6 +398,7 @@ def test_a_process_with_many_files_is_read_only_until_the_time_for_listing(
             self._entries.close()
 
         def __iter__(self) -> Iterator[os.DirEntry[str]]:
+            """The entries, each 10 ms after the one before."""
             for entry in self._entries:
                 read.append(entry.name)
                 time.sleep(0.01)
@@ -463,6 +469,7 @@ def test_the_listing_passes_over_a_process_that_is_gone_but_not_its_own_error(
     errors: list[OSError] = [ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH))]
 
     def read_failing_for_this_process(path: Path) -> bytes:
+        """``Path.read_bytes``, but this process's ``stat`` fails with the last of ``errors``."""
         if path.name == "stat" and path.parent.name == str(os.getpid()):
             raise errors[-1]
         return read_bytes(path)
