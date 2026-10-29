@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -72,6 +72,18 @@ def _timed_out(scanner_name: str) -> ScanResult:
     return ScanResult(
         scanner_name=scanner_name, error=f"Scanner timed out after {_SCANNER_TIMEOUT_SECONDS}s"
     )
+
+
+def _wait_for_tools(deadlines: Iterable[ScannerDeadline]) -> None:
+    """Wait for the tools of the scanners that timed out together to have been killed.
+
+    Their running tools are killed at the deadline, by their own timeouts, on the scanners'
+    threads. Wait for that, one grace period for all of them: if guard exited first, the threads
+    would end with it and the tools would run on (#900).
+    """
+    grace_ends = time.monotonic() + _TOOL_KILL_GRACE_SECONDS
+    for deadline in deadlines:
+        deadline.wait_for_tools(max(0.0, grace_ends - time.monotonic()))
 
 
 def _place_of(display: FindingPathDisplay | None) -> Callable[[Path], Path]:
@@ -458,18 +470,12 @@ class ScanEngine:
                 if index in running:  # not a scanner that has timed out already
                     record(index, scan_result)
 
-            expired = [
-                (index, deadline) for index, deadline in running.items() if deadline.passed()
-            ]
-            for index, _ in expired:
-                record(index, _timed_out(self.scanners[index].name))
-            # Their running tools are killed at the deadline, by their own timeouts, on the
-            # scanners' threads. Wait for that, one grace period for all the scanners that timed
-            # out together: if guard exited first, the threads would end with it and the tools
-            # would run on (#900).
-            grace_ends = time.monotonic() + _TOOL_KILL_GRACE_SECONDS
-            for _, deadline in expired:
-                deadline.wait_for_tools(max(0.0, grace_ends - time.monotonic()))
+            expired: list[ScannerDeadline] = []
+            for index, deadline in list(running.items()):
+                if deadline.passed():
+                    record(index, _timed_out(self.scanners[index].name))
+                    expired.append(deadline)
+            _wait_for_tools(expired)
 
         return results
 
