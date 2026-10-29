@@ -56,7 +56,10 @@ repository, a submodule say, every step runs in that file's own repository and
 index, whatever the hook exported. An alternate index that you set with
 `GIT_INDEX_FILE`, outside the git directory, which git exports to the hook too,
 is taken for an index of the repository that `GIT_DIR` names or, without it, of
-the repository the hook runs in.
+the repository the hook runs in. A relative value, such as the `.git/index` that
+a plain `git commit` exports, is read the way git reads it in the hook: a
+relative `GIT_INDEX_FILE` against the top of the hook's work tree, even when the
+hook runs from a subdirectory.
 
 ### Implementation Details
 

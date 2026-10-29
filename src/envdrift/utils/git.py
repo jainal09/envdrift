@@ -54,25 +54,73 @@ def _hook_env(git_root: Path) -> dict[str, str] | None:
     are kept (None: this process's environment) when they name ``git_root``'s repository, and
     dropped for any other one, a submodule say, where git would read or write the hook's
     repository instead (#919).
+
+    A relative value, ``.git/index`` during a plain ``git commit``, means what it means to a git
+    run here, not to one run in ``git_root``, so a kept one is passed as absolute.
     """
     exported = {name: os.environ[name] for name in GIT_LOCATION_VARIABLES if name in os.environ}
     if not exported:
         return None
     env = without_git_location()
+    relative = not all(Path(value).is_absolute() for value in exported.values())
+    paths = (
+        _hook_paths(exported)
+        if relative
+        else {name: Path(value) for name, value in exported.items()}
+    )
+    if paths is None:
+        return env
     dirs = _git_dirs(git_root, env)
     if dirs is None:
         return env
     git_dir, common_dir = dirs
     own = {"GIT_DIR": git_dir, "GIT_COMMON_DIR": common_dir, "GIT_WORK_TREE": git_root.resolve()}
-    for name, value in exported.items():
-        # git reads a relative value against its working directory, git_root here.
-        path = (git_root / value).resolve()
+    for name, path in paths.items():
         if name == "GIT_INDEX_FILE":
-            if not _index_of(path, git_dir, named="GIT_DIR" in exported, env=env):
+            if not _index_of(path.resolve(), git_dir, named="GIT_DIR" in exported, env=env):
                 return env
-        elif path != own[name]:
+        elif path.resolve() != own[name]:
             return env
+    if relative:
+        return {**os.environ, **{name: str(path) for name, path in paths.items()}}
     return None
+
+
+# The rev-parse options that print the path each location variable names, as git reads it.
+_LOCATION_OPTIONS = {
+    "GIT_DIR": ("--absolute-git-dir",),
+    "GIT_WORK_TREE": ("--show-toplevel",),
+    "GIT_INDEX_FILE": ("--git-path", "index"),
+    "GIT_COMMON_DIR": ("--git-common-dir",),
+}
+
+
+def _hook_paths(names: Iterable[str]) -> dict[str, Path] | None:
+    """Where the location variables ``names`` point for a git run here, as absolute paths.
+
+    git reads a relative GIT_DIR or GIT_WORK_TREE against the directory it runs in, but a
+    relative GIT_INDEX_FILE against the top of the work tree, which it moves to first, from a
+    subdirectory say. So git, run in this process's working directory and environment, says
+    where they point, relative to that directory. None when it cannot.
+    """
+    names = list(names)
+    try:
+        cwd = Path.cwd()
+        result = run_tool(
+            ["git", "rev-parse", *(option for name in names for option in _LOCATION_OPTIONS[name])],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError):  # OSError: no git, or the directory is gone
+        return None
+    lines = result.stdout.splitlines()
+    if result.returncode != 0 or len(lines) != len(names):
+        return None
+    return {name: cwd / line for name, line in zip(names, lines, strict=True)}
 
 
 def _git_dirs(cwd: Path, env: Mapping[str, str]) -> tuple[Path, Path] | None:

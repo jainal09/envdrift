@@ -260,3 +260,87 @@ class TestHookGitVariables:
         assert env is not None
         assert "GIT_INDEX_FILE" not in env, "another repository's index was kept"
         assert _hook_env(hook_repo) is None, "the repository's own index was dropped"
+
+    def test_hook_env_reads_a_relative_index_as_the_hooks_git_does(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """A relative GIT_INDEX_FILE names an index of the hook's repository, not the file's.
+
+        It was read against the file's repository: in a repository nested in the hook's, the
+        hook's ``.git/index.lock`` passed for the nested repository's, which has none, so its
+        tracked file read as untracked.
+        """
+        hook_repo = tmp_path / "hook"
+        nested = hook_repo / "nested"
+        nested.mkdir(parents=True)
+        for repo in (hook_repo, nested):
+            _git(repo, "init", "-q")
+        (nested / ".env").write_text("A=1\n")
+        _git(nested, "add", ".env")
+        monkeypatch.setenv("GIT_INDEX_FILE", ".git/index.lock")
+        monkeypatch.chdir(hook_repo)
+
+        assert is_file_tracked(nested / ".env") is True
+
+    @pytest.mark.parametrize("git_dir_set", [False, True], ids=["discovered", "GIT_DIR"])
+    def test_hook_env_hands_git_a_relative_index_as_an_absolute_one(
+        self, tmp_path: Path, monkeypatch, git_dir_set: bool
+    ):
+        """From a subdirectory, git reads a relative GIT_INDEX_FILE against the top of the work
+        tree, and under GIT_DIR against the subdirectory, which it takes for the top then.
+
+        A kept index went as it was to git run in the repository, which read it against the
+        repository: under GIT_DIR, another index.
+        """
+        repo = tmp_path / "repo"
+        (repo / "sub").mkdir(parents=True)
+        _git(repo, "init", "-q")
+        (repo / "app.txt").write_text("hello\n")
+        index = repo / "sub" / "index" if git_dir_set else repo / "index"
+        subprocess.run(
+            ["git", "add", "app.txt"],
+            cwd=repo,
+            env={**without_git_location(), "GIT_INDEX_FILE": str(index)},
+            check=True,
+            capture_output=True,
+        )
+        if git_dir_set:
+            monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
+        monkeypatch.setenv("GIT_INDEX_FILE", "index")
+        monkeypatch.chdir(repo / "sub")
+
+        env = _hook_env(repo)
+
+        assert env is not None
+        assert Path(env["GIT_INDEX_FILE"]).resolve() == index.resolve()
+        assert is_file_tracked(repo / "app.txt") is True
+
+    @pytest.mark.parametrize(
+        "runs_in",
+        [
+            "a directory outside every repository",
+            pytest.param(
+                "a working directory that is gone",
+                marks=pytest.mark.skipif(
+                    sys.platform == "win32", reason="Windows cannot remove a working directory"
+                ),
+            ),
+        ],
+    )
+    def test_hook_env_drops_a_relative_value_git_cannot_place(
+        self, tmp_path: Path, monkeypatch, runs_in: str
+    ):
+        """Where git finds no repository, a relative value names no index git would read."""
+        repo, elsewhere = tmp_path / "repo", tmp_path / "elsewhere"
+        for directory in (repo, elsewhere):
+            directory.mkdir()
+        _git(repo, "init", "-q")
+        monkeypatch.setenv("GIT_INDEX_FILE", ".git/index")
+        monkeypatch.chdir(elsewhere)
+        if runs_in == "a working directory that is gone":
+            elsewhere.rmdir()
+
+        env = _hook_env(repo)
+
+        assert env is not None
+        assert "GIT_INDEX_FILE" not in env

@@ -422,11 +422,13 @@ class TestSmartEncryptionInAGitHook:
         assert _git(repo, "ls-files", "-s", index=index).split()[1] == committed
 
     @pytest.mark.skipif(sys.platform == "win32", reason="the hook is a shell script")
-    def test_a_commit_from_an_alternate_index_holds_the_encrypted_file(self, tmp_path: Path):
-        """End to end: ``git commit -a`` from an alternate index, with a smart encryption hook.
+    @pytest.mark.parametrize("alternate", [False, True], ids=["plain commit", "alternate index"])
+    def test_a_commit_holds_the_encrypted_file(self, tmp_path: Path, alternate: bool):
+        """End to end: a commit of the decrypted file, with a smart encryption hook.
 
-        The hook got ``GIT_INDEX_FILE=<alternate>.lock``. It was dropped, and the commit held the
-        decrypted file while the work tree held the encrypted one.
+        A plain ``git commit`` exports ``GIT_INDEX_FILE=.git/index``, relative. ``git commit -a``
+        from an alternate index exports ``<alternate>.lock``: it was dropped, and the commit held
+        the decrypted file while the work tree held the encrypted one.
         """
         env_file = self._decrypted_env_file(tmp_path / "repo")
         repo = env_file.parent
@@ -434,9 +436,13 @@ class TestSmartEncryptionInAGitHook:
         _git(repo, "add", "app.txt")
         _git(repo, "commit", "-qm", "app")
         (repo / "app.txt").write_text("two\n")  # so that the commit is not empty
-        (tmp_path / "alternate").mkdir()
-        alternate = tmp_path / "alternate" / "index"
-        shutil.copyfile(repo / ".git" / "index", alternate)
+        index: dict[str, str] = {}
+        if alternate:
+            (tmp_path / "alternate").mkdir()
+            index["GIT_INDEX_FILE"] = str(tmp_path / "alternate" / "index")
+            shutil.copyfile(repo / ".git" / "index", index["GIT_INDEX_FILE"])
+        else:
+            _git(repo, "add", "app.txt", ".env.production")
         script = tmp_path / "hook.py"
         script.write_text(SMART_ENCRYPTION_HOOK)
         hook = repo / ".git" / "hooks" / "pre-commit"
@@ -446,7 +452,7 @@ class TestSmartEncryptionInAGitHook:
         hook.chmod(0o755)
         env = {
             **without_git_location(),
-            "GIT_INDEX_FILE": str(alternate),
+            **index,
             "PYTHONPATH": str(Path(envdrift.__file__).resolve().parents[1]),
         }
         config = [
@@ -459,7 +465,7 @@ class TestSmartEncryptionInAGitHook:
         ]
 
         commit = subprocess.run(
-            ["git", *config, "commit", "-qam", "app two"],
+            ["git", *config, "commit", "-qam" if alternate else "-qm", "app two"],
             cwd=repo,
             env=env,
             capture_output=True,
