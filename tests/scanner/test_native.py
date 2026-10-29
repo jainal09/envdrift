@@ -88,9 +88,14 @@ class TestNativeScanner:
     def test_a_file_over_the_size_limit_is_reported_and_not_counted(
         self, scanner: NativeScanner, tmp_path: Path
     ):
-        """A file the scanner never read must not pass for a clean, scanned one (#933)."""
+        """A file the scanner never read must not pass for a clean, scanned one (#933).
+
+        Its start is text: past it the file is sparse, NULs that would make it look binary.
+        """
         dump = tmp_path / "dump.sql"
-        dump.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        dump.write_text(
+            "GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n" + "-- row\n" * 2048
+        )
         with dump.open("ab") as stream:
             stream.truncate(NATIVE_MAX_SCAN_BYTES + 1)
 
