@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess  # nosec B404
 from pathlib import Path
@@ -12,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from envdrift.cli_commands.encryption_helpers import should_skip_reencryption
+from envdrift.utils.git import without_git_location
 
 
 class TestShouldSkipReencryption:
@@ -314,7 +314,7 @@ class TestShouldSkipReencryption:
 
 def _git(cwd: Path, *args: str, index: Path | None = None) -> str:
     """Run git in ``cwd``, on the index file ``index`` when one is given."""
-    env = {key: value for key, value in os.environ.items() if key != "GIT_INDEX_FILE"}
+    env = without_git_location()
     if index is not None:
         env["GIT_INDEX_FILE"] = str(index)
     config = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
