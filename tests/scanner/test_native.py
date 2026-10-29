@@ -80,6 +80,26 @@ class TestNativeScanner:
         assert result.findings == []
         assert result.files_scanned == 0
 
+    @pytest.mark.xfail(
+        strict=False,
+        raises=AssertionError,
+        reason="a file over the size limit is skipped silently and counted as scanned (see #933)",
+    )
+    def test_a_file_over_the_size_limit_is_reported_and_not_counted(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A file the scanner never read must not pass for a clean, scanned one (#933)."""
+        dump = tmp_path / "dump.sql"
+        dump.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        with dump.open("ab") as stream:
+            stream.truncate(NATIVE_MAX_SCAN_BYTES + 1)
+
+        result = scanner.scan([dump])
+
+        assert result.findings == []
+        assert result.files_scanned == 0
+        assert any("dump.sql" in warning for warning in result.warnings), result.warnings
+
 
 class _GitFailure(NamedTuple):
     """How the stand-in for git fails a listing (#910).
