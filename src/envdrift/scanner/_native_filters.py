@@ -9,7 +9,6 @@ they take a line or file content and answer a yes/no structural question.
 from __future__ import annotations
 
 import re
-import string
 
 from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.encryption.sops import SOPSEncryptionBackend
@@ -127,7 +126,10 @@ _DOTENVX_VALUE_SPAN_RE = re.compile(
 # at every position of the line, so a 40,000-character line took guard 49 seconds.
 _SOPS_VALUE_MARKER = "ENC[AES256_GCM,"
 _QUOTES = "\"'"
-_NAME_START = frozenset(string.ascii_letters + "_")
+# Matched against the text before an envelope, reversed: the assignment read backwards, as far as
+# the run of name characters before its ``=`` or ``:``. Anchored, so linear in what it reads.
+_SOPS_ASSIGNMENT_REVERSED_RE = re.compile(r"[\"']?\s*[=:]\s*[\"']?([\w.-]*)")
+_NAME_START_RE = re.compile(r"[A-Za-z_]")
 # The value of an assignment, as far as its first whitespace (and closing quote).
 _VALUE_TOKEN_RE = re.compile(r"\s*[\"']?[^\s\"']*[\"']?")
 # Where str.splitlines() breaks a line and git does not. A line counts to its line break (#937),
@@ -150,32 +152,21 @@ def _sops_assignment_start(line: str, marker: int, floor: int) -> int:
     """Where the assignment of the SOPS value at ``marker`` starts, or ``marker`` if it has none.
 
     The assignment is the text ``["']?[A-Za-z_][\\w.-]*["']?\\s*[=:]\\s*["']?`` matches right
-    before the envelope, at its leftmost start, found in time linear in its length. ``floor`` is
-    where the previous value ended: an assignment does not reach back past it.
+    before the envelope, at its leftmost start, read backwards from the envelope in time linear in
+    its length. ``floor`` is where the previous value ended: an assignment does not reach back
+    past it.
     """
-    i = marker
-    if i > floor and line[i - 1] in _QUOTES:
-        i -= 1
-    while i > floor and line[i - 1].isspace():
-        i -= 1
-    if i == floor or line[i - 1] not in "=:":
+    assignment = _SOPS_ASSIGNMENT_REVERSED_RE.match(line[floor:marker][::-1])
+    if assignment is None:
         return marker
-    i -= 1
-    while i > floor and line[i - 1].isspace():
-        i -= 1
-    if i > floor and line[i - 1] in _QUOTES:
-        i -= 1
-    name_end = i
-    while i > floor and (line[i - 1].isalnum() or line[i - 1] in "_.-"):
-        i -= 1
-    # The name starts at the first ASCII letter or underscore of the run of name characters,
-    # after the quote before it when it starts the run.
-    name = next((p for p in range(i, name_end) if line[p] in _NAME_START), None)
+    run_start = marker - assignment.end()
+    # The name starts at the run's first ASCII letter or underscore, after the quote before it
+    # when it starts the run.
+    name = _NAME_START_RE.search(line, run_start, marker - assignment.start(1))
     if name is None:
         return marker
-    if name == i and name > floor and line[name - 1] in _QUOTES:
-        return name - 1
-    return name
+    quoted = run_start > floor and line[run_start - 1] in _QUOTES
+    return name.start() - 1 if quoted and name.start() == run_start else name.start()
 
 
 def _sops_value_spans(line: str) -> list[tuple[int, int]]:
