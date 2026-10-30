@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import json
 import os
 import stat
 import subprocess
@@ -12,10 +13,16 @@ from types import SimpleNamespace
 from typing import NamedTuple
 
 import pytest
+from typer.testing import CliRunner
 
+from envdrift.cli import app
 from envdrift.scanner import _native_io as native_io
 from envdrift.scanner import native as native_module
-from envdrift.scanner._native_io import NATIVE_MAX_SCAN_BYTES, read_raw_scannable_bytes
+from envdrift.scanner._native_io import (
+    NATIVE_MAX_SCAN_BYTES,
+    FileTooLargeError,
+    read_raw_scannable_bytes,
+)
 from envdrift.scanner.base import FindingSeverity
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.native import _ENV_FILE_PATHSPECS, NativeScanner, _complete_paths
@@ -80,11 +87,6 @@ class TestNativeScanner:
         assert result.findings == []
         assert result.files_scanned == 0
 
-    @pytest.mark.xfail(
-        strict=False,
-        raises=AssertionError,
-        reason="a file over the size limit is skipped silently and counted as scanned (see #933)",
-    )
     def test_a_file_over_the_size_limit_is_reported_and_not_counted(
         self, scanner: NativeScanner, tmp_path: Path
     ):
@@ -104,6 +106,57 @@ class TestNativeScanner:
         assert result.findings == []
         assert result.files_scanned == 0
         assert any("dump.sql" in warning for warning in result.warnings), result.warnings
+
+    def test_a_utf16_file_over_the_size_limit_is_reported_too(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """Its NULs would pass it for binary, but its BOM shows it is text (#477, #933)."""
+        dump = tmp_path / "dump.txt"
+        dump.write_bytes(("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx\n" * 256).encode("utf-16"))
+        with dump.open("ab") as stream:
+            stream.truncate(NATIVE_MAX_SCAN_BYTES + 1)
+
+        result = scanner.scan([dump])
+
+        assert result.files_scanned == 0
+        assert any("dump.txt" in warning for warning in result.warnings), result.warnings
+
+    def test_a_binary_file_over_the_size_limit_is_skipped_as_any_binary_file(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """No warning for it: the scanner skips a binary file whatever its size (#933)."""
+        blob = tmp_path / "model.bin"
+        blob.write_bytes(bytes(range(256)) * 32)
+        with blob.open("ab") as stream:
+            stream.truncate(NATIVE_MAX_SCAN_BYTES + 1)
+
+        result = scanner.scan([blob])
+
+        assert result.findings == []
+        assert result.warnings == []
+        assert result.files_scanned == 1
+
+    def test_guard_says_which_file_it_did_not_scan_for_its_size(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """In --json the warning names it, the file is not counted, and the exit stays 0 (#933)."""
+        dump = tmp_path / "dump.sql"
+        dump.write_text(
+            "GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n" + "-- row\n" * 2048
+        )
+        with dump.open("ab") as stream:
+            stream.truncate(NATIVE_MAX_SCAN_BYTES + 1)
+        monkeypatch.chdir(tmp_path)
+
+        result = CliRunner().invoke(app, ["guard", "dump.sql", "--native-only", "--json"])
+
+        assert result.exit_code == 0, result.output
+        (native,) = json.loads(result.stdout)["scanner_results"]
+        assert native["files_scanned"] == 0
+        assert native["warnings"] == [
+            "Not scanned: dump.sql is larger than the native scanner's 10 MiB limit. Scan it "
+            "with another scanner, or add it to [guard] ignore_paths to skip it on purpose."
+        ]
 
 
 class _GitFailure(NamedTuple):
@@ -665,9 +718,12 @@ class TestNativeScannerInternals:
     def test_read_scannable_content_bounds_a_file_that_grows_after_the_size_check(
         self, tmp_path: Path, monkeypatch
     ):
-        """The read cap still holds if a file grows between the size check and the read."""
+        """The read cap still holds if a file grows between the size check and the read.
+
+        The file is reported as too large, as one that was already would be (#933).
+        """
         file_path = tmp_path / "growing.txt"
-        file_path.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n")
+        file_path.write_text("GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n" * 256)
         with file_path.open("ab") as stream:
             stream.truncate(NATIVE_MAX_SCAN_BYTES + 1)
 
@@ -675,7 +731,8 @@ class TestNativeScannerInternals:
             return SimpleNamespace(st_size=1, st_mode=os.fstat(descriptor).st_mode)
 
         monkeypatch.setattr(native_io, "os", _native_io_os(fstat=report_small_size))
-        assert NativeScanner._read_scannable_content(file_path) is None
+        with pytest.raises(FileTooLargeError):
+            NativeScanner._read_scannable_content(file_path)
 
     def test_read_scannable_content_skips_a_file_that_is_no_regular_file_once_opened(
         self, tmp_path: Path, monkeypatch

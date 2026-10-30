@@ -27,6 +27,14 @@ Only the templates `.env.example`, `.env.sample`, and `.env.template` are skippe
 Files are decoded through UTF-8/UTF-16/UTF-32 BOMs (and BOM-less UTF-16), so a
 UTF-16 env file written by Windows tools is scanned like its UTF-8 equivalent.
 
+The native scanner reads files of up to 10 MiB. It does not scan a text file over that size: the
+Scanner Warnings name the file (`scanner_results[].warnings` in `--json`; under `--staged`, its
+path in the repository, not the temporary copy scanned), it is not counted as scanned, and the
+exit code does not change. Scan it with another scanner, or add it to
+`[guard] ignore_paths` to skip it on purpose. A binary file is skipped whatever its size. Earlier
+releases skipped a text file over 10 MiB without a word and counted it as scanned
+([#933](https://github.com/jainal09/envdrift/issues/933)).
+
 The native scanner always runs. By default, gitleaks runs too. You can enable
 trufflehog, detect-secrets, or kingfisher with flags or `envdrift.toml`. If no
 paths are provided, the current directory is scanned.
@@ -378,9 +386,14 @@ the same secret reported by another scanner.
 
 ### `--skip-encrypted` / `--no-skip-encrypted`
 
-Skip findings from files that contain dotenvx or SOPS encryption markers. Enabled by
-default. Encrypted files contain ciphertext that can trigger false positives from
-scanners detecting high-entropy strings.
+Skip findings in the encrypted values of files that contain dotenvx or SOPS encryption
+markers. Enabled by default. Ciphertext can trigger false positives from scanners
+detecting high-entropy strings.
+
+Only the encrypted values are skipped. A finding elsewhere in such a file is reported,
+even one on the line of an encrypted value, after it. A finding from a scanner that
+reports no column, such as trufflehog, trivy or detect-secrets, is skipped when its line
+holds an encrypted value.
 
 ```bash
 # Skip findings from encrypted files (default behavior)
@@ -616,15 +629,14 @@ envdrift guard --kingfisher --gitleaks
 ### Find password hashes in database dumps
 
 ```bash
-# The native scanner finds bcrypt hashes, and sha512crypt hashes with no rounds= field and a
-# salt of 8 to 16 characters (#934)
+# The native scanner finds bcrypt and sha512crypt password hashes
 envdrift guard ./db/users.sql --native-only
 ```
 
 Name each dump file. In a git checkout a directory scan skips the untracked files git ignores,
 apart from env files (`.env`, `.env.*` and `*.env`, but not `.env.keys`), and dumps often are such
-files. The native scanner also skips any file over 10 MiB without a warning
-([#933](https://github.com/jainal09/envdrift/issues/933)).
+files. The native scanner does not scan a dump over 10 MiB, and names it in the Scanner Warnings
+(see [Description](#description)).
 
 ## Severity
 
@@ -925,6 +937,15 @@ Supported comment formats:
 - `# envdrift:ignore` - Python, Shell, YAML
 - `// envdrift:ignore` - JavaScript, Go, C, TypeScript
 - `/* envdrift:ignore */` - CSS, C-style block comments
+
+The comment applies to the line a scanner reports the finding on. guard counts lines as git and
+the scanners do: a line ends at a line break only, not at a form feed, a vertical tab or a Unicode
+line separator. Earlier releases also ended a line there, so after one the native scanner reported
+a finding a line lower than gitleaks did, and a comment on the finding's line did not suppress
+other scanners' findings ([#937](https://github.com/jainal09/envdrift/issues/937)). One exception
+remains: guard also ends a line at a lone carriage return (`\r` with no `\n` after it), as its
+`.env` parser does, and git and the external scanners do not. In a file with such line endings,
+their line numbers differ from guard's.
 
 ### TOML Configuration
 

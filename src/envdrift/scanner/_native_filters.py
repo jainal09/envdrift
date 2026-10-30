@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.encryption.sops import SOPSEncryptionBackend
 
 # A dotenvx public key is a secp256k1 *compressed* EC point: a 0x02/0x03 prefix
@@ -112,23 +113,128 @@ def _line_is_sops_metadata(line: str) -> bool:
     return any(pattern.match(line) for pattern in _SOPS_METADATA_RES)
 
 
-def _is_encrypted_value_line(line: str) -> bool:
-    """Return True if a line holds an already-encrypted value (dotenvx or SOPS).
+# The extent of an already-encrypted value on a line, its assignment included: a dotenvx value
+# runs to the end of its ``encrypted:`` token (and its closing quote), a SOPS value to the end of
+# its ``ENC[AES256_GCM,...]`` envelope. Neither holds whitespace, so whatever follows on the line
+# is plaintext.
+_DOTENVX_VALUE_SPAN_RE = re.compile(
+    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"']?encrypted:[^\s\"']*[\"']?",
+)
+# A SOPS value runs from its envelope to the envelope's ``]``, or to the end of the line. Its
+# assignment, ``NAME=`` or ``"name": "``, is found by stepping back from the envelope, not by a
+# regex: an optional name before the envelope made a regex retry a long run of name characters
+# at every position of the line, so a 40,000-character line took guard 49 seconds.
+_SOPS_VALUE_MARKER = "ENC[AES256_GCM,"
+_QUOTES = "\"'"
+# Matched against the text before an envelope, reversed: the assignment read backwards, as far as
+# the run of name characters before its ``=`` or ``:``. Anchored, so linear in what it reads.
+_SOPS_ASSIGNMENT_REVERSED_RE = re.compile(r"[\"']?\s*[=:]\s*[\"']?([\w.-]*)")
+_NAME_START_RE = re.compile(r"[A-Za-z_]")
+# The value of an assignment, as far as its first whitespace (and closing quote).
+_VALUE_TOKEN_RE = re.compile(r"\s*[\"']?[^\s\"']*[\"']?")
+# Where str.splitlines() breaks a line and git does not. A line counts to its line break (#937),
+# but an assignment can start after one of these, as at the start of the line.
+_NON_GIT_LINE_BREAK_RE = re.compile("[\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
 
-    Used to skip such lines during pattern and entropy scanning so encrypted
-    values are never re-flagged. Shared by both scans so they stay in sync.
+
+def _segments(line: str) -> list[tuple[int, str]]:
+    """``line`` cut where ``str.splitlines()`` would cut it, each piece with its offset."""
+    segments: list[tuple[int, str]] = []
+    start = 0
+    for separator in _NON_GIT_LINE_BREAK_RE.finditer(line):
+        segments.append((start, line[start : separator.start()]))
+        start = separator.end()
+    segments.append((start, line[start:]))
+    return segments
+
+
+def _sops_assignment_start(line: str, marker: int, floor: int) -> int:
+    """Where the assignment of the SOPS value at ``marker`` starts, or ``marker`` if it has none.
+
+    The assignment is the text ``["']?[A-Za-z_][\\w.-]*["']?\\s*[=:]\\s*["']?`` matches right
+    before the envelope, at its leftmost start, read backwards from the envelope in time linear in
+    its length. ``floor`` is where the previous value ended: an assignment does not reach back
+    past it.
+    """
+    assignment = _SOPS_ASSIGNMENT_REVERSED_RE.match(line[floor:marker][::-1])
+    if assignment is None:
+        return marker
+    run_start = marker - assignment.end()
+    # The name starts at the run's first ASCII letter or underscore, after the quote before it
+    # when it starts the run.
+    name = _NAME_START_RE.search(line, run_start, marker - assignment.start(1))
+    if name is None:
+        return marker
+    quoted = run_start > floor and line[run_start - 1] in _QUOTES
+    return name.start() - 1 if quoted and name.start() == run_start else name.start()
+
+
+def _sops_value_spans(line: str) -> list[tuple[int, int]]:
+    """The spans of the SOPS values on ``line``, each with its assignment."""
+    spans: list[tuple[int, int]] = []
+    floor = 0
+    while (marker := line.find(_SOPS_VALUE_MARKER, floor)) != -1:
+        close = line.find("]", marker + len(_SOPS_VALUE_MARKER))
+        end = len(line) if close == -1 else close + 1
+        spans.append((_sops_assignment_start(line, marker, floor), end))
+        floor = end
+    return spans
+
+
+def _encrypted_value_spans(line: str) -> list[tuple[int, int]]:
+    """The ``(start, end)`` spans of ``line`` that hold an already-encrypted value.
 
     Structure-aware (mirrors the file-level ``_content_is_encrypted``): a bare
     ``"encrypted:" in line`` / ``"ENC[" in line`` substring check misfires on a
     plaintext line that merely *mentions* the marker — e.g.
-    ``DATA=ENC[something] AKIA…`` or ``URL=https://x/encrypted:y?key=AKIA…`` —
-    causing the whole line (and any real adjacent secret on it) to be skipped
-    and never reported (#413). We instead require the marker in its real
-    structural position: a dotenvx-encrypted value (anchored value-position
-    ``encrypted:``) or a canonical SOPS ``ENC[AES256_GCM,`` envelope — not a
-    bare ``ENC[``.
+    ``DATA=ENC[something] AKIA…`` or ``URL=https://x/encrypted:y?key=AKIA…`` (#413).
+    We instead require the marker in its real structural position: a
+    dotenvx-encrypted value (anchored value-position ``encrypted:``) or a
+    canonical SOPS ``ENC[AES256_GCM,`` envelope — not a bare ``ENC[``.
+
+    Only the value is skipped, not its whole line: a plaintext secret after it
+    on the same line, past a space or a form feed, is still found (#937). A
+    dotenvx value is looked for at the start of each piece of the line that
+    ``str.splitlines()`` would cut, as it was before lines ran to their break.
     """
-    return _line_is_dotenvx_encrypted(line) or bool(_SOPS_ENC_RE.search(line))
+    spans = _sops_value_spans(line)
+    for offset, segment in _segments(line):
+        dotenvx = _DOTENVX_VALUE_SPAN_RE.match(segment)
+        if dotenvx:
+            spans.append((offset + dotenvx.start(), offset + dotenvx.end()))
+    return spans
+
+
+def _skipped_value_spans(line: str) -> list[tuple[int, int]]:
+    """The spans of ``line`` that pattern and entropy scanning leave out.
+
+    The encrypted values, which are never re-flagged, and dotenvx's public key. Shared by
+    both scans so they stay in sync.
+    """
+    spans = _encrypted_value_spans(line)
+    for offset, segment in _segments(line):
+        name, equals, _ = segment.partition("=")
+        if equals and is_dotenvx_public_key_var(name.strip()):
+            value = _VALUE_TOKEN_RE.match(segment, len(name) + 1)
+            spans.append((offset, offset + (value.end() if value else len(segment))))
+    return spans
+
+
+def _within_spans(spans: list[tuple[int, int]], start: int, end: int) -> bool:
+    """True if ``[start, end)`` overlaps one of ``spans``."""
+    return any(start < span_end and span_start < end for span_start, span_end in spans)
+
+
+def _outside_encrypted_values(line: str, column_number: int | None) -> bool:
+    """True if a finding at 1-based ``column_number`` of ``line`` is in none of its encrypted values.
+
+    Without a column, only a line that holds no encrypted value qualifies. With one, a
+    plaintext secret after an encrypted value on the same line does (#937).
+    """
+    spans = _encrypted_value_spans(line)
+    if column_number is None:
+        return not spans
+    return not _within_spans(spans, column_number - 1, column_number)
 
 
 def _content_has_sops_markers(content: str) -> bool:
