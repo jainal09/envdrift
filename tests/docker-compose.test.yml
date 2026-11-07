@@ -20,7 +20,7 @@ services:
     # Hobby exposes kms, lambda, s3, secretsmanager and sts, so keep SERVICES
     # within that set (tests/unit/test_dev_stack_hygiene.py enforces it) or the
     # stack would need a paid plan.
-    image: localstack/localstack:2026.10.4  # Keep in sync with .github/workflows/integration-tests.yml
+    image: localstack/localstack:2026.10.6  # Keep in sync with .github/workflows/integration-tests.yml
     ports:
       - "4566:4566"
     environment:
@@ -85,7 +85,7 @@ services:
     # sent by the azure-keyvault-secrets SDK with HTTP 400. 7.3.127 and older
     # also reject 2026-04-01 (the SDK default from 4.12.0), so pyproject.toml
     # [tool.uv] holds the SDK below 4.12: drop that in the bump adding 2026-04-01 (#904).
-    image: nagyesta/lowkey-vault:7.3.145  # Keep in sync with .github/workflows/integration-tests.yml
+    image: nagyesta/lowkey-vault:7.4.0  # Keep in sync with .github/workflows/integration-tests.yml
     ports:
       - "8443:8443"
       # HTTP port serving the built-in managed-identity token stub
