@@ -59,7 +59,7 @@ literal.
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   localstack:
-    image: localstack/localstack:2026.10.4
+    image: localstack/localstack:2026.10.6
     ports:
       - "4566:4566"
     environment:
@@ -153,7 +153,7 @@ def vault_server():
 # kept identical to the integration-tests.yml CI service containers (#500)
 services:
   lowkey-vault:
-    image: nagyesta/lowkey-vault:7.3.145
+    image: nagyesta/lowkey-vault:7.4.0
     ports:
       - "8443:8443"  # Key Vault API (HTTPS, self-signed cert)
       - "8080:8080"  # managed-identity token stub (HTTP)
