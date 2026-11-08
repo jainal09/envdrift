@@ -1,5 +1,12 @@
 # Changelog
 
+## [11.1.7](https://github.com/jainal09/envdrift/compare/v11.1.6...v11.1.7) (2026-10-29)
+
+
+### Bug Fixes
+
+* **kingfisher:** bring the tests and docs up to Kingfisher 2.x ([#930](https://github.com/jainal09/envdrift/issues/930)) ([b6f6a3d](https://github.com/jainal09/envdrift/commit/b6f6a3d5d76d59993eaef59163a48b8b853cb4b1))
+
 ## [11.1.6](https://github.com/jainal09/envdrift/compare/v11.1.5...v11.1.6) (2026-10-29)
 
 
