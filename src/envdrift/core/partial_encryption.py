@@ -1028,12 +1028,18 @@ def dotenvx_key_files(env_config: PartialEncryptionEnvironmentConfig) -> list[Pa
     if not raw_dir:
         return []
     secrets_dir = Path(raw_dir)
+    if secrets_dir.exists() and not secrets_dir.is_dir():
+        # push and pull refuse it for this environment, so dotenvx writes no key
+        # under it; a path below a regular file made git crash the whole command.
+        return []
     folders = [secrets_dir]
     if secrets_dir.is_dir():
         try:
             matched = sorted(secrets_dir.glob(env_config.pattern))
-        except (ValueError, OSError):
-            matched = []  # A bad pattern is reported by the push/pull step itself.
+        except (ValueError, NotImplementedError, OSError):
+            # Path.glob raises ValueError for an empty pattern and NotImplementedError
+            # for an absolute one; the push/pull step reports either for this environment.
+            matched = []
         folders.extend(file.parent for file in matched if _is_pushable_secret_file(file))
     keys: list[Path] = []
     for folder in folders:

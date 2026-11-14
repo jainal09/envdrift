@@ -93,3 +93,21 @@ class TestSecretsOnlyMode:
         secrets.mkdir()
         # Path.glob rejects an empty pattern; push reports that error itself.
         assert _key_files(_secrets_only(str(secrets), "")) == [secrets / ".env.keys"]
+
+    def test_absolute_pattern_falls_back_to_the_secrets_dir(self, tmp_path: Path) -> None:
+        # Path.glob raises NotImplementedError for an absolute pattern, which used to
+        # escape and crash push and pull-partial before any environment ran.
+        secrets = tmp_path / "secrets"
+        secrets.mkdir()
+        (secrets / ".env.api").write_text("K=v\n", encoding="utf-8")
+        pattern = (tmp_path / ".env*").as_posix()
+
+        assert _key_files(_secrets_only(str(secrets), pattern)) == [secrets / ".env.keys"]
+
+    def test_secrets_dir_that_is_a_file_names_nothing(self, tmp_path: Path) -> None:
+        # push refuses it ("not a directory"), so dotenvx writes no key under it, and a
+        # key path below a regular file crashed git before any environment ran.
+        not_a_dir = tmp_path / ".env.secrets"
+        not_a_dir.write_text("A=1\n", encoding="utf-8")
+
+        assert _key_files(_secrets_only(str(not_a_dir))) == []

@@ -209,7 +209,9 @@ def is_git_repo(path: Path) -> bool:
             timeout=10,
         )
         return result.returncode == 0 and result.stdout.strip() == "true"
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    # OSError, not only FileNotFoundError (no git, or a missing directory): a path below a
+    # regular file has a parent git cannot run in, and NotADirectoryError escaped.
+    except (subprocess.TimeoutExpired, OSError):
         return False
 
 
@@ -237,7 +239,9 @@ def get_git_root(path: Path) -> Path | None:
         if result.returncode == 0:
             return Path(result.stdout.strip())
         return None
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    # OSError as in is_git_repo: for a path below a regular file, NotADirectoryError
+    # escaped and crashed push before any environment ran.
+    except (subprocess.TimeoutExpired, OSError):
         return None
 
 

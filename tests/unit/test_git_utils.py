@@ -39,6 +39,14 @@ class TestIsGitRepo:
         with patch("subprocess.run", side_effect=FileNotFoundError):
             assert is_git_repo(tmp_path) is False
 
+    def test_returns_false_for_a_path_below_a_regular_file(self, tmp_path: Path):
+        """git cannot run in a parent that is a file: not NotADirectoryError."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        regular_file = tmp_path / "notes.txt"
+        regular_file.write_text("x\n", encoding="utf-8")
+
+        assert is_git_repo(regular_file / "child") is False
+
 
 class TestGetGitRoot:
     """Tests for get_git_root function."""
@@ -53,6 +61,18 @@ class TestGetGitRoot:
     def test_returns_none_for_non_git_directory(self, tmp_path: Path):
         """Should return None when not in a git repo."""
         assert get_git_root(tmp_path) is None
+
+    def test_returns_none_for_a_path_below_a_regular_file(self, tmp_path: Path):
+        """git cannot run in a parent that is a file: no root, not NotADirectoryError.
+
+        push asked for the root of ``<secrets_dir>/.env.keys`` with a secrets_dir that
+        was a regular file, and the traceback ended the command.
+        """
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        regular_file = tmp_path / ".env.secrets"
+        regular_file.write_text("A=1\n", encoding="utf-8")
+
+        assert get_git_root(regular_file / ".env.keys") is None
 
 
 class TestHasGitHead:

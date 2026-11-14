@@ -191,3 +191,83 @@ def test_pull_partial_ignores_a_key_file_placed_next_to_the_secret_file(
 
     assert pull.returncode == 0, _flat(pull)
     _assert_ignored(git_repo, "app/config/.env.keys")
+
+
+def _write_bad_secrets_only_config(directory: Path, case: str) -> str:
+    """A secrets-only ``staging`` that push refuses, listed before a valid ``production``.
+
+    Returns the error the command gives for ``staging``. Naming its key files used to
+    crash before any environment ran: ``Path.glob`` raised NotImplementedError for an
+    absolute pattern, and git NotADirectoryError for a key path below a regular file.
+    ``production`` is secrets-only too: a combined file would come first in the list
+    of paths to gitignore and hide the second crash.
+    """
+    if case == "absolute-pattern":
+        (directory / "staging").mkdir()
+        (directory / "staging" / ".env.api").write_text("API=" + "v1\n", encoding="utf-8")
+        staging = f'secrets_dir = "staging"\npattern = "{(directory / ".env*").as_posix()}"\n'
+        error = "staging: Non-relative patterns are unsupported"
+    else:
+        (directory / ".env.secrets").write_text("API=" + "v1\n", encoding="utf-8")
+        staging = 'secrets_dir = ".env.secrets"\n'
+        error = "staging: secrets_dir not found or not a directory: .env.secrets"
+    (directory / "envdrift.toml").write_text(
+        "[partial_encryption]\n"
+        "enabled = true\n\n"
+        "[[partial_encryption.environments]]\n"
+        'name = "staging"\n'
+        "secrets_only = true\n"
+        f"{staging}\n"
+        "[[partial_encryption.environments]]\n"
+        'name = "production"\n'
+        "secrets_only = true\n"
+        'secrets_dir = "secrets"\n',
+        encoding="utf-8",
+    )
+    (directory / "secrets").mkdir()
+    (directory / "secrets" / ".env.prod").write_text(f"JWT_SECRET={_JWT_VALUE}\n", encoding="utf-8")
+    return error
+
+
+@pytest.mark.parametrize("case", ["absolute-pattern", "secrets-dir-is-a-file"])
+class TestBadSecretsOnlyConfigIsReportedPerEnvironment:
+    """A bad secrets-only environment is an error for it alone, as it was before #961."""
+
+    def test_push_reports_it_and_still_pushes_the_other_environment(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str], case: str
+    ) -> None:
+        error = _write_bad_secrets_only_config(git_repo, case)
+
+        result = _run_envdrift(
+            ["push"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        out = _flat(result)
+        assert result.returncode == 1, out
+        assert "Traceback" not in out, out
+        assert f"• {error}" in out, out
+        assert "Encrypted 1 file(s) in secrets" in out, out
+        secret = (git_repo / "secrets" / ".env.prod").read_text(encoding="utf-8")
+        assert "JWT_SECRET=encrypted:" in secret, secret
+        _assert_ignored(git_repo, "secrets/.env.keys")
+
+    def test_pull_partial_reports_it_and_still_pulls_the_other_environment(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str], case: str
+    ) -> None:
+        error = _write_bad_secrets_only_config(git_repo, case)
+
+        result = _run_envdrift(
+            ["pull-partial"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        out = _flat(result)
+        assert result.returncode == 1, out
+        assert "Traceback" not in out, out
+        assert f"• {error}" in out, out
+        assert "secrets (all 1 file(s) already decrypted)" in out, out
