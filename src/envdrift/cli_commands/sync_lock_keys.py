@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import typer
 
 from envdrift.output.rich import console, print_error
+from envdrift.utils.text import styled_text
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 from .sync_helpers import SyncCommandContext, _new_sync_engine
@@ -61,8 +62,11 @@ def _read_local_lock_key(
     key_name = f"DOTENV_PRIVATE_KEY_{environment.upper()}"
     if not keys_file.exists():
         console.print(
-            f"  [red]✗[/red] {mapping.folder_path} "
-            f"[red]- cannot verify: {keys_file.name} not found[/red]"
+            styled_text(
+                "  [red]✗[/red] {} [red]- cannot verify: {} not found[/red]",
+                mapping.folder_path,
+                keys_file.name,
+            )
         )
         state.errors.append(
             f"{mapping.folder_path}: cannot verify - {keys_file.name} missing "
@@ -74,8 +78,12 @@ def _read_local_lock_key(
     if local_key:
         return _LocalLockKey(mapping=mapping, value=local_key, environment=environment)
     console.print(
-        f"  [red]✗[/red] {mapping.folder_path} "
-        f"[red]- cannot verify: {key_name} not found in {keys_file.name}[/red]"
+        styled_text(
+            "  [red]✗[/red] {} [red]- cannot verify: {} not found in {}[/red]",
+            mapping.folder_path,
+            key_name,
+            keys_file.name,
+        )
     )
     state.errors.append(
         f"{mapping.folder_path}: cannot verify - {key_name} missing from "
@@ -101,7 +109,9 @@ def _compare_lock_vault_key(
         vault_key, vault_suffix = extract_key_material(secret, local.environment)
         if _vault_key_matches(local.value, vault_key, vault_suffix, local.environment):
             console.print(
-                f"  [green]✓[/green] {local.mapping.folder_path} [dim]- keys match vault[/dim]"
+                styled_text(
+                    "  [green]✓[/green] {} [dim]- keys match vault[/dim]", local.mapping.folder_path
+                )
             )
             return
         _record_lock_key_mismatch(local, state)
@@ -115,8 +125,12 @@ def _compare_lock_vault_key(
 
 def _record_unavailable_vault_secret(local: _LocalLockKey, reason: str, state: _LockState) -> None:
     console.print(
-        f"  [red]✗[/red] {local.mapping.folder_path} "
-        f"[red]- cannot verify: vault secret '{local.mapping.secret_name}' {reason}[/red]"
+        styled_text(
+            "  [red]✗[/red] {} [red]- cannot verify: vault secret '{}' {}[/red]",
+            local.mapping.folder_path,
+            local.mapping.secret_name,
+            reason,
+        )
     )
     state.errors.append(
         f"{local.mapping.folder_path}: cannot verify - vault secret "
@@ -127,8 +141,10 @@ def _record_unavailable_vault_secret(local: _LocalLockKey, reason: str, state: _
 
 def _record_lock_key_mismatch(local: _LocalLockKey, state: _LockState) -> None:
     console.print(
-        f"  [red]✗[/red] {local.mapping.folder_path} "
-        f"[red]- KEY MISMATCH: local key differs from vault![/red]"
+        styled_text(
+            "  [red]✗[/red] {} [red]- KEY MISMATCH: local key differs from vault![/red]",
+            local.mapping.folder_path,
+        )
     )
     state.errors.append(
         f"{local.mapping.folder_path}: local key does not match vault "
@@ -138,7 +154,11 @@ def _record_lock_key_mismatch(local: _LocalLockKey, state: _LockState) -> None:
 
 
 def _record_unusable_vault_key(local: _LocalLockKey, error: Exception, state: _LockState) -> None:
-    console.print(f"  [red]✗[/red] {local.mapping.folder_path} [red]- KEY UNUSABLE: {error}[/red]")
+    console.print(
+        styled_text(
+            "  [red]✗[/red] {} [red]- KEY UNUSABLE: {}[/red]", local.mapping.folder_path, error
+        )
+    )
     state.errors.append(f"{local.mapping.folder_path}: vault key material unusable - {error}")
     state.verification_issues += 1
     state.unusable_keys += 1
@@ -146,8 +166,11 @@ def _record_unusable_vault_key(local: _LocalLockKey, error: Exception, state: _L
 
 def _record_vault_access_error(local: _LocalLockKey, error: Exception, state: _LockState) -> None:
     console.print(
-        f"  [red]![/red] {local.mapping.folder_path} "
-        f"[red]- error: vault access failed: {error}[/red]"
+        styled_text(
+            "  [red]![/red] {} [red]- error: vault access failed: {}[/red]",
+            local.mapping.folder_path,
+            error,
+        )
     )
     state.errors.append(f"{local.mapping.folder_path}: vault error - {error}")
     state.verification_issues += 1

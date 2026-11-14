@@ -7,6 +7,7 @@ from typing import Annotated
 
 import typer
 from rich.panel import Panel
+from rich.text import Text
 
 from envdrift.config import (
     EnvdriftConfig,
@@ -50,7 +51,8 @@ def _ensure_combined_gitignore(envs_to_process) -> None:
     paths.append(Path(_DOTENVX_KEYS_FILE))
     added_entries = ensure_gitignore_entries(paths)
     if added_entries:
-        console.print(f"[dim]Updated .gitignore: {', '.join(added_entries)}[/dim]")
+        # The entries are configured paths: print them as they are.
+        console.print(Text(f"Updated .gitignore: {', '.join(added_entries)}", style="dim"))
 
 
 def push(

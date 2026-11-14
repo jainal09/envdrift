@@ -11,6 +11,7 @@ import typer
 from rich.text import Text
 
 from envdrift.output.rich import console, print_error
+from envdrift.utils.text import styled_text
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 from .sync_config_helpers import require_profile_mappings
@@ -108,7 +109,10 @@ def _new_sync_engine(request: SyncRequest, context: _SyncContext):
     def prompt_callback(message: str) -> bool:
         if _prompting_disabled(request):
             return request.force
-        response = console.input(f"{message} (y/N): ").strip().lower()
+        # Text, not a markup string: Console.input parses a str prompt as markup
+        # and emoji codes whatever the console's defaults, and the message names
+        # the secret (``kv/app[legacy]/key`` lost its bracketed segment).
+        response = console.input(Text(f"{message} (y/N): ")).strip().lower()
         return response in ("y", "yes")
 
     return SyncEngine(
@@ -128,7 +132,7 @@ def _print_sync_header(request: SyncRequest, context: _SyncContext) -> None:
     console.print()
     mode = "VERIFY" if request.verify else ("FORCE" if request.force else "Interactive")
     profile_info = f" | Profile: {request.profile}" if request.profile else ""
-    console.print(f"[bold]Vault Sync[/bold] - Mode: {mode}{profile_info}")
+    console.print(styled_text("[bold]Vault Sync[/bold] - Mode: {}{}", mode, profile_info))
     console.print(
         f"[dim]Provider: {context.provider} | Services: {len(context.config.mappings)}[/dim]"
     )

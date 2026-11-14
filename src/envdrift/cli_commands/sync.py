@@ -13,6 +13,7 @@ import typer
 from envdrift.output.rich import console, print_warning
 from envdrift.sync.operations import atomic_write
 from envdrift.utils import normalize_max_workers
+from envdrift.utils.text import styled_text
 
 if TYPE_CHECKING:
     from envdrift.encryption import EncryptionProvider
@@ -38,18 +39,24 @@ def _maybe_activate_profile(mapping: ServiceMapping, env_file: Path, profile: st
         activate_path.relative_to(mapping.folder_path.resolve())
     except ValueError:
         console.print(
-            f"  [red]![/red] {mapping.activate_to} [red]- invalid path (escapes folder)[/red]"
+            styled_text(
+                "  [red]![/red] {} [red]- invalid path (escapes folder)[/red]", mapping.activate_to
+            )
         )
         return "error"
 
     try:
         shutil.copy2(env_file, activate_path)
         console.print(
-            f"  [cyan]→[/cyan] {activate_path} [dim]- activated from {env_file.name}[/dim]"
+            styled_text(
+                "  [cyan]→[/cyan] {} [dim]- activated from {}[/dim]", activate_path, env_file.name
+            )
         )
         return "activated"
     except OSError as e:
-        console.print(f"  [red]![/red] {activate_path} [red]- activation failed: {e}[/red]")
+        console.print(
+            styled_text("  [red]![/red] {} [red]- activation failed: {}[/red]", activate_path, e)
+        )
         return "error"
 
 
