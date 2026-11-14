@@ -25,7 +25,9 @@ Pre-commit hooks ensure that:
 
 ### `--config`
 
-Show the pre-commit configuration snippet to copy into your `.pre-commit-config.yaml`.
+Show the pre-commit configuration snippet to copy into your `.pre-commit-config.yaml`. The
+snippet is printed exactly as it is and never wrapped at the terminal width, so a long line
+copies as one line.
 
 ```bash
 envdrift hook --config
