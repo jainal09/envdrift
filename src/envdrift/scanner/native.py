@@ -13,7 +13,6 @@ from __future__ import annotations
 import codecs
 import fnmatch
 import math
-import re
 import time
 from pathlib import Path, PurePosixPath
 
@@ -23,6 +22,7 @@ from pathlib import Path, PurePosixPath
 # ``envdrift.scanner.native``.
 from envdrift.scanner._native_filters import (
     _EC_PUBKEY_RE,
+    _assignments,
     _content_has_sops_markers,
     _content_is_encrypted,
     _looks_like_code_member_access,
@@ -1277,15 +1277,11 @@ class NativeScanner(ScannerBackend):
         findings: list[ScanFinding] = []
         lines = split_lines(content)
 
-        # Pattern for assignment-like statements. The LHS allows lower/upper/mixed
-        # case (#369) so lowercase or camelCase var names — api_key=, apiKey:,
+        # Assignment-like statements (``_assignments``). The name may be lower, upper or
+        # mixed case (#369) so lowercase or camelCase var names — api_key=, apiKey:,
         # secretToken = — are not missed. Downstream filters (URL/path skip,
         # alpha-only skip, template-string skip, entropy threshold) contain the
         # added surface to genuine high-entropy assignments.
-        assignment_pattern = re.compile(
-            r"[A-Za-z_][A-Za-z0-9_]*\s*[=:]\s*[\"']?([^\"'\s=]{16,})[\"']?"
-        )
-
         for line_num, line in enumerate(lines, start=1):
             # Skip comments
             stripped = line.strip()
@@ -1298,10 +1294,9 @@ class NativeScanner(ScannerBackend):
             # partial-encryption files with noise.
             skipped = _skipped_value_spans(line)
 
-            for match in assignment_pattern.finditer(line):
-                if _within_spans(skipped, *match.span()):
+            for start, end, value in _assignments(line):
+                if _within_spans(skipped, start, end):
                     continue
-                value = match.group(1)
 
                 # Skip if it looks like a URL or path
                 if value.startswith(("http://", "https://", "/", "./")):

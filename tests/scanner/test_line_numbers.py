@@ -18,7 +18,11 @@ from pathlib import Path
 
 import pytest
 
-from envdrift.scanner._native_filters import _skipped_value_spans, _sops_value_spans
+from envdrift.scanner._native_filters import (
+    _assignments,
+    _skipped_value_spans,
+    _sops_value_spans,
+)
 from envdrift.scanner.base import FindingSeverity, ScanFinding
 from envdrift.scanner.engine import GuardConfig, ScanEngine
 from envdrift.scanner.ignores import IgnoreFilter
@@ -337,13 +341,53 @@ class TestSopsValueSpans:
         assert time.perf_counter() - started < 1.0
 
     def test_the_native_scanner_reads_a_minified_line_quickly(self, tmp_path: Path):
-        path = _write(tmp_path / "bundle.min.js", "a" * 200_000 + "\n")
+        # Not *.min.js, which the default ignore patterns leave out before the file is read.
+        path = _write(tmp_path / "bundle.js", "a" * 200_000 + "\n")
         started = time.perf_counter()
 
-        findings = NativeScanner(check_entropy=True).scan([path]).findings
+        result = NativeScanner(check_entropy=True).scan([path])
 
         assert time.perf_counter() - started < 10.0
-        assert findings == []
+        assert result.files_scanned == 1
+        assert result.findings == []
+
+
+class TestEntropyAssignments:
+    """The entropy check finds its assignments in time linear in the line's length (#995).
+
+    Its regex had an unanchored name before ``=`` or ``:``: on a long run of name characters it
+    started at every position of the run, so 8,000 characters took half a second and each
+    doubling four times as long.
+    """
+
+    # The pattern the entropy check used. The new code must give exactly its matches.
+    PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\s*[=:]\s*[\"']?([^\"'\s=]{16,})[\"']?")
+    PIECES = ("a", "Z", "_", "9", "-", ".", "/", '"', "'", " ", "\t", "\f", "=", ":", "é")
+    PIECES += ("API_KEY", "Zx9Kq2Wm7Lp4Rt8N", "Zx9Kq2Wm")
+
+    def test_the_assignments_are_the_patterns_matches(self):
+        rng = random.Random(995)  # noqa: S311 - a fixed sample of lines, not a secret
+        for _ in range(20_000):
+            line = "".join(rng.choice(self.PIECES) for _ in range(rng.randint(0, 16)))
+            expected = [(m.start(), m.end(), m.group(1)) for m in self.PATTERN.finditer(line)]
+            assert list(_assignments(line)) == expected, repr(line)
+
+    @pytest.mark.parametrize(
+        "line",
+        ["a" * 30_000, "aZ9_" * 7_500, "a" * 30_000 + "=x", "a=" * 15_000],
+        ids=["name-characters", "mixed-name-characters", "a-short-value", "many-separators"],
+    )
+    def test_a_long_line_is_quick(self, line: str):
+        started = time.perf_counter()
+
+        list(_assignments(line))
+
+        assert time.perf_counter() - started < 1.0
+
+    def test_the_entropy_check_still_reports_a_value_after_a_long_name(self):
+        line = "a" * 30_000 + "_TOKEN=" + ENTROPY_TOKEN
+
+        assert [value for _, _, value in _assignments(line)] == [ENTROPY_TOKEN]
 
 
 class TestTrivyValueRecovery:

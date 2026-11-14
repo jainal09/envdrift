@@ -9,6 +9,7 @@ they take a line or file content and answer a yes/no structural question.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
 from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.encryption.sops import SOPSEncryptionBackend
@@ -130,6 +131,14 @@ _QUOTES = "\"'"
 # the run of name characters before its ``=`` or ``:``. Anchored, so linear in what it reads.
 _SOPS_ASSIGNMENT_REVERSED_RE = re.compile(r"[\"']?\s*[=:]\s*[\"']?([\w.-]*)")
 _NAME_START_RE = re.compile(r"[A-Za-z_]")
+# An assignment the entropy check reads: a name in any case (#369), ``=`` or ``:``, and a value of
+# 16 or more characters, as ``[A-Za-z_][A-Za-z0-9_]*\s*[=:]\s*["']?([^"'\s=]{16,})["']?`` matches
+# it. Found from each ``=`` and ``:``, not by that regex: unanchored, it retried a long run of name
+# characters at every position of the line, in time quadratic in the line's length (#995).
+_ASSIGNMENT_SEPARATOR_RE = re.compile(r"[=:]")
+# Matched against the text before a separator, reversed: the run of name characters before it.
+_ASSIGNMENT_NAME_REVERSED_RE = re.compile(r"\s*([A-Za-z0-9_]*)")
+_ASSIGNMENT_VALUE_RE = re.compile(r"\s*[\"']?([^\"'\s=]{16,})[\"']?")
 # The value of an assignment, as far as its first whitespace (and closing quote).
 _VALUE_TOKEN_RE = re.compile(r"\s*[\"']?[^\s\"']*[\"']?")
 # Where str.splitlines() breaks a line and git does not. A line counts to its line break (#937),
@@ -167,6 +176,27 @@ def _sops_assignment_start(line: str, marker: int, floor: int) -> int:
         return marker
     quoted = run_start > floor and line[run_start - 1] in _QUOTES
     return name.start() - 1 if quoted and name.start() == run_start else name.start()
+
+
+def _assignments(line: str) -> Iterator[tuple[int, int, str]]:
+    """The ``(start, end, value)`` of each assignment on ``line`` that the entropy check reads.
+
+    Exactly that regex's matches, left to right, in time linear in the line's length: the name
+    before a separator is looked for no further back than the separator before it.
+    """
+    floor = 0
+    previous = -1
+    for separator in _ASSIGNMENT_SEPARATOR_RE.finditer(line):
+        at = separator.start()
+        segment_start, previous = max(floor, previous + 1), at
+        if at < floor:
+            continue
+        run = _ASSIGNMENT_NAME_REVERSED_RE.match(line[segment_start:at][::-1])
+        name = run and _NAME_START_RE.search(line, at - run.end(1), at - run.start(1))
+        value = _ASSIGNMENT_VALUE_RE.match(line, at + 1) if name else None
+        if name and value:
+            yield name.start(), value.end(), value.group(1)
+            floor = value.end()
 
 
 def _sops_value_spans(line: str) -> list[tuple[int, int]]:
