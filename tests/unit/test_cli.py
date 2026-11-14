@@ -943,27 +943,60 @@ class TestEncryptCommand:
 class TestDecryptCommand:
     """Tests for the decrypt CLI command."""
 
-    @pytest.mark.parametrize("backend", [None, "dotenvx", "sops"])
-    @pytest.mark.parametrize("verify_vault", [False, True])
+    @pytest.mark.parametrize(
+        "options",
+        [
+            (None, False),
+            ("dotenvx", False),
+            ("sops", False),
+            (None, True),
+            ("dotenvx", True),
+            ("sops", True),
+        ],
+    )
     def test_decrypt_directory_refused_before_setup(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        backend: str | None,
-        verify_vault: bool,
+        options: tuple[str | None, bool],
     ) -> None:
         """#960: reject directories before backend or vault setup, without a traceback."""
+        from unittest.mock import Mock
+
         monkeypatch.chdir(tmp_path)
         env_dir = tmp_path / "somedir"
         env_dir.mkdir()
         contents = env_dir / "untouched.txt"
         contents.write_text("leave this alone\n", encoding="utf-8")
+        setup_spies = []
+        for target in (
+            "envdrift.cli_commands.encryption._load_encryption_config",
+            "envdrift.integrations.hook_check.ensure_git_hook_setup",
+            "envdrift.core.encryption.EncryptionDetector.detect_backend_for_file",
+            "envdrift.cli_commands.encryption.get_encryption_backend",
+            "envdrift.cli_commands.vault_helpers.resolve_vault_settings",
+            "envdrift.cli_commands.encryption._verify_decryption_with_vault",
+        ):
+            spy = Mock(side_effect=AssertionError(f"Directory must be refused before {target}"))
+            monkeypatch.setattr(target, spy)
+            setup_spies.append(spy)
+
+        backend, verify_vault = options
         args = ["decrypt", "somedir"]
         if backend is not None:
             args.extend(["--backend", backend])
         if verify_vault:
-            # Even required vault-option validation must follow target validation.
-            args.append("--verify-vault")
+            args.extend(
+                [
+                    "--verify-vault",
+                    "--provider",
+                    "hashicorp",
+                    "--vault-url",
+                    "http://127.0.0.1:1",
+                    "--secret",
+                    "test-key",
+                ]
+            )
 
         result = runner.invoke(app, args)
 
@@ -971,6 +1004,8 @@ class TestDecryptCommand:
         assert "[ERROR] Not a file: somedir" in " ".join(result.output.split())
         assert isinstance(result.exception, SystemExit)
         assert contents.read_text(encoding="utf-8") == "leave this alone\n"
+        for spy in setup_spies:
+            spy.assert_not_called()
 
     def test_decrypt_missing_file(self, tmp_path: Path):
         """Test decrypt with missing file."""
