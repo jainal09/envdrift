@@ -1,0 +1,19 @@
+tests/unit/test_sync_engine.py
+  s_97204b2b60cb3f::t_704cb6f06a60de 1250,1252,1255
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "119b17e932ee80d5672a06f0760014fa86197236",
+  "prompts": {},
+  "sessions": {
+    "s_97204b2b60cb3f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1da88-0142-7cc1-b15c-65d02cc9afac",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
