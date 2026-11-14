@@ -154,7 +154,9 @@ def test_a_native_key_after_a_nul_in_an_encrypted_value_is_found(repo: Path):
 
 @requires_gitleaks
 @pytest.mark.xfail(
-    strict=False, reason="a history finding is judged by the working-tree line (#1014)"
+    strict=False,
+    raises=AssertionError,
+    reason="a history finding is judged by the working-tree line (#1014)",
 )
 def test_a_secret_in_history_is_kept_when_its_line_is_encrypted_now(repo: Path):
     """A key committed in plaintext stays in history after its file is encrypted. The engine
