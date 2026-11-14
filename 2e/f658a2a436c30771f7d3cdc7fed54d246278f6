@@ -1,0 +1,25 @@
+src/envdrift/cli_commands/init_cmd.py
+  s_97204b2b60cb3f::t_9ad9568a736a61 140-141,146,158
+tests/unit/test_init_defaults.py
+  s_97204b2b60cb3f::t_ebd66f7f80dfe8 26,32,38,41,65,67,73,76
+  s_97204b2b60cb3f::t_547565100e389e 1-25,27-31,33-37,39-40,42-64,66,68-72,74-75,77-91
+docs/cli/init.md
+  s_97204b2b60cb3f::t_9ad9568a736a61 17-18,144,147-151
+  s_97204b2b60cb3f::t_6054d08d0b3291 152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2ef658a2a436c30771f7d3cdc7fed54d246278f6",
+  "prompts": {},
+  "sessions": {
+    "s_97204b2b60cb3f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1da88-0142-7cc1-b15c-65d02cc9afac",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
