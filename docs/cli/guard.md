@@ -552,7 +552,9 @@ Scan only files changed since the specified base branch. Useful for CI/CD PR che
 If the base ref cannot be resolved (typo, or a shallow CI clone that never fetched it), guard exits
 with an error instead of treating the failed diff as "no changed files" — a misconfigured base must
 never pass the secret gate green. A failed `git fetch` of the base is reported as a warning on
-stderr.
+stderr. This holds for a base holding `*`, `?` or `[` too, such as `release/*`: envdrift 11.1.6 and
+earlier let git read such a base as a path pattern, and reported "No changed files" with exit 0. A
+revision expression that git resolves, such as `HEAD^{/fix [abc]}`, is scanned, and shown as written.
 
 ```bash
 envdrift guard --pr-base origin/main

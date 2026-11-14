@@ -32,7 +32,7 @@ import tempfile
 import time as time_module
 import tomllib
 from pathlib import Path
-from typing import Annotated, NamedTuple
+from typing import TYPE_CHECKING, Annotated, NamedTuple
 
 import typer
 from rich.console import Console
@@ -65,6 +65,9 @@ from envdrift.scanner.output import (
 )
 from envdrift.utils.git import without_git_location
 from envdrift.utils.text import strip_ansi, styled_text
+
+if TYPE_CHECKING:
+    from rich.console import RenderableType
 
 # emoji=False so a `:fire:`-like path or finding is printed as it is.
 console = Console(emoji=False)
@@ -159,13 +162,14 @@ def _machine_mode(json_output: bool, sarif: bool) -> bool:
     return json_output or sarif
 
 
-def _emit_progress(json_output: bool, sarif: bool, message: str) -> None:
+def _emit_progress(json_output: bool, sarif: bool, message: RenderableType) -> None:
     """Print a human-mode progress/status line, suppressed in machine modes.
 
     A no-op under ``--json``/``--sarif`` so machine-readable stdout never gains
     a stray prose line (#413); otherwise the Rich-styled ``message`` is printed.
-    Keeps the discovery branches flat (no inline ``not json_output and not
-    sarif`` guard at each progress print).
+    A message that names user input (a ``--pr-base`` revision) is passed as
+    ``Text`` so it is printed as it is. Keeps the discovery branches flat (no
+    inline ``not json_output and not sarif`` guard at each progress print).
     """
     if not _machine_mode(json_output, sarif):
         console.print(message)
@@ -468,9 +472,13 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
             # verbose-gated and swallowed in machine modes, hiding the usual
             # root cause of an unresolvable base ref.
             _warn_stderr(f"could not fetch '{base_ref}' from origin; using local refs")
-        # Get all files changed between base and HEAD
+        # Get all files changed between base and HEAD. The ``--`` makes git
+        # read the range as revisions only: without it a base holding ``*``,
+        # ``?`` or ``[`` that is not a revision is taken as a path pattern, and
+        # the diff "succeeds" empty, so the gate passed on a base it never
+        # resolved.
         result = subprocess.run(  # nosec B603, B607
-            ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD"],
+            ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD", "--"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -484,10 +492,12 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
         if result.returncode != 0:
             stderr_lines = (result.stderr or "").strip().splitlines()
             reason = stderr_lines[0] if stderr_lines else "unknown git error"
+            # git ends some messages with a full stop and not others (``bad
+            # revision 'x...HEAD'``): end the reason with exactly one.
             _emit_error(
                 json_output,
                 sarif,
-                f"--pr-base '{pr_base}' could not be diffed against: {reason} "
+                f"--pr-base '{pr_base}' could not be diffed against: {reason.rstrip('.')}. "
                 f"Fetch or fix the base ref (e.g. 'git fetch origin {base_ref}').",
             )
             # An unresolvable base ref is an operational failure, not a
@@ -508,7 +518,9 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
             _emit_progress(
                 json_output,
                 sarif,
-                f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]",
+                styled_text(
+                    "[bold]Scanning {} file(s) changed since {}...[/bold]", len(paths), pr_base
+                ),
             )
             return paths
         else:
