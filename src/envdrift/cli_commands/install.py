@@ -34,7 +34,8 @@ from envdrift.install_integrity import (
     verification_disabled,
 )
 
-console = Console()
+# emoji=False so a `:fire:`-like path is printed as it is.
+console = Console(emoji=False)
 
 # Create the install CLI group
 install_app = typer.Typer(

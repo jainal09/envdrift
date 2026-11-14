@@ -34,7 +34,8 @@ from envdrift.agent.registry import (
 from envdrift.cli_commands.agent_utils import parse_agent_running_status, warn_registry_corruption
 from envdrift.config import EnvdriftConfig, find_config, load_config
 
-console = Console()
+# emoji=False so a `:fire:`-like project path is printed as it is.
+console = Console(emoji=False)
 
 # Create the agent CLI group
 agent_app = typer.Typer(

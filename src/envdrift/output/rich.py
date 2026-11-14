@@ -20,8 +20,10 @@ if TYPE_CHECKING:
     from envdrift.sync.result import ServiceSyncResult, SyncResult
 
 # Full command reports are stdout payloads; standalone diagnostics use stderr.
-console = Console()
-diagnostic_console = Console(stderr=True)
+# emoji=False: paths, names and values are printed as they are, so a file named
+# `:fire:.env` must not turn into an emoji. envdrift's own text uses no emoji codes.
+console = Console(emoji=False)
+diagnostic_console = Console(stderr=True, emoji=False)
 
 
 def print_success(message: str) -> None:

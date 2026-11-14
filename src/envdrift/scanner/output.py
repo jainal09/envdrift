@@ -251,10 +251,11 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
 
     Args:
         result: Aggregated scan results to display.
-        console: Rich console to use. If None, creates a new one.
+        console: Rich console to use. If None, creates one that leaves
+            ``:emoji:`` codes in paths and findings as they are.
     """
     if console is None:
-        console = Console()
+        console = Console(emoji=False)
 
     _print_scanner_notices(result, console)
 

@@ -67,8 +67,9 @@ from envdrift.scanner.output import (
 from envdrift.utils.git import without_git_location
 from envdrift.utils.text import strip_ansi
 
-console = Console()
-diagnostic_console = Console(stderr=True)
+# emoji=False so a `:fire:`-like path or finding is printed as it is.
+console = Console(emoji=False)
+diagnostic_console = Console(stderr=True, emoji=False)
 
 # Early-exit prose for the git-discovery branches; emitted only in human mode
 # (machine modes get an empty-findings doc via _emit_empty_or_prose).
@@ -794,7 +795,7 @@ def _make_output_console(ci: bool, json_output: bool, sarif: bool) -> Console:
     # Create output console (suppress colors in CI mode or JSON/SARIF output)
     output_console = console
     if ci or _machine_mode(json_output, sarif):
-        output_console = Console(force_terminal=False, no_color=True)
+        output_console = Console(force_terminal=False, no_color=True, emoji=False)
     return output_console
 
 
