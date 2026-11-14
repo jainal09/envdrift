@@ -26,6 +26,7 @@ from envdrift.scanner._native_filters import (
     _content_has_sops_markers,
     _content_is_encrypted,
     _looks_like_code_member_access,
+    _secret_group,
     _skipped_value_spans,
     _within_spans,
 )
@@ -1198,11 +1199,13 @@ class NativeScanner(ScannerBackend):
                 # single delimiter between two adjacent keys is left available as
                 # the leading boundary of the next match — both keys are found.
                 for match in pattern.pattern.finditer(line):
-                    if _within_spans(skipped, *match.span()):
+                    # The secret is the first group, or the full match: not the leading
+                    # boundary aws-access-key-id reads, which can be an encrypted value's
+                    # closing quote right before a plaintext key.
+                    group = _secret_group(match)
+                    if _within_spans(skipped, *match.span(group)):
                         continue
-
-                    # Extract the secret (first group or full match)
-                    secret = match.group(1) if match.groups() else match.group(0)
+                    secret = match.group(group)
 
                     # Drop dotenvx EC public keys by value shape (#370): public,
                     # not a secret. This IS reachable: the generic-api-key pattern
@@ -1241,8 +1244,8 @@ class NativeScanner(ScannerBackend):
                         if _looks_like_code_member_access(secret):
                             continue
 
-                    # Calculate column number
-                    col_num = match.start() + 1
+                    # The secret's column, which the engine checks against encrypted values
+                    col_num = match.start(group) + 1
 
                     findings.append(_build_finding(pattern, secret, line_num, col_num))
 
@@ -1294,7 +1297,7 @@ class NativeScanner(ScannerBackend):
             # partial-encryption files with noise.
             skipped = _skipped_value_spans(line)
 
-            for start, end, value in _assignments(line):
+            for start, end, value_start, value in _assignments(line):
                 if _within_spans(skipped, start, end):
                     continue
 
@@ -1318,6 +1321,9 @@ class NativeScanner(ScannerBackend):
                         ScanFinding(
                             file_path=file_path,
                             line_number=line_num,
+                            # The value's column: without one, the engine drops a finding on
+                            # a line that holds an encrypted value anywhere.
+                            column_number=value_start + 1,
                             rule_id="high-entropy-string",
                             rule_description="High Entropy String",
                             description=(

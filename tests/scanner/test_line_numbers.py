@@ -154,7 +154,7 @@ class TestNativeLineNumbers:
         located = {(f.rule_id, f.line_number, f.column_number) for f in result.findings}
         assert ("gcp-service-account", 2, 2) in located  # at "type", after the {
         assert ("private-key-generic", 3, 19) in located
-        assert ("high-entropy-string", 1, None) in located
+        assert ("high-entropy-string", 1, 15) in located  # at the value
 
 
 class TestInlineIgnore:
@@ -259,6 +259,37 @@ class TestPlaintextAfterAnEncryptedValue:
         kept = engine._filter_encrypted_files([past_the_value, in_the_value, without_a_column])
 
         assert kept == [past_the_value]
+
+    def test_the_engine_keeps_a_native_entropy_finding_past_a_sops_value(self, tmp_path: Path):
+        """A native entropy finding had no column, so the engine dropped it on an encrypted line.
+
+        Reported by CodeRabbit on #936.
+        """
+        line = f"{SOPS_VALUE} SESSION_TOKEN={ENTROPY_TOKEN}"
+        path = _write(tmp_path / ".env", f"{line}\n")
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False, check_entropy=True))
+
+        found = [(f.rule_id, f.column_number) for f in engine.scan([path]).unique_findings]
+
+        assert found == [("high-entropy-string", line.index(ENTROPY_TOKEN) + 1)]
+
+    @pytest.mark.parametrize("quote", ['"', "'"], ids=["double", "single"])
+    def test_a_key_right_after_a_closing_quote_is_reported(self, tmp_path: Path, quote: str):
+        """The aws pattern reads the character before a key, here the value's closing quote.
+
+        That made its match start in the encrypted value, so the native scanner skipped the key,
+        and its column put the engine in the value too. Reported by CodeRabbit on #936.
+        """
+        line = f"API_TOKEN={quote}{DOTENVX_CIPHERTEXT}{quote}{AWS_KEY}"
+        path = _write(tmp_path / ".env", f"{line}\n")
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        column = line.index(AWS_KEY) + 1
+
+        native = [(f.rule_id, f.column_number) for f in NativeScanner().scan([path]).findings]
+        found = [(f.rule_id, f.column_number) for f in engine.scan([path]).unique_findings]
+
+        assert ("aws-access-key-id", column) in native
+        assert ("aws-access-key-id", column) in found
 
 
 class TestAnEncryptedValueAfterASeparator:
@@ -369,7 +400,9 @@ class TestEntropyAssignments:
         rng = random.Random(995)  # noqa: S311 - a fixed sample of lines, not a secret
         for _ in range(20_000):
             line = "".join(rng.choice(self.PIECES) for _ in range(rng.randint(0, 16)))
-            expected = [(m.start(), m.end(), m.group(1)) for m in self.PATTERN.finditer(line)]
+            expected = [
+                (m.start(), m.end(), m.start(1), m.group(1)) for m in self.PATTERN.finditer(line)
+            ]
             assert list(_assignments(line)) == expected, repr(line)
 
     @pytest.mark.parametrize(
@@ -387,7 +420,7 @@ class TestEntropyAssignments:
     def test_the_entropy_check_still_reports_a_value_after_a_long_name(self):
         line = "a" * 30_000 + "_TOKEN=" + ENTROPY_TOKEN
 
-        assert [value for _, _, value in _assignments(line)] == [ENTROPY_TOKEN]
+        assert [value for *_, value in _assignments(line)] == [ENTROPY_TOKEN]
 
 
 class TestTrivyValueRecovery:

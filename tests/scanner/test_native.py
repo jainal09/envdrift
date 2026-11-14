@@ -1575,15 +1575,14 @@ AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
             f"both AWS keys on the line must be flagged, got: "
             f"{[(f.rule_id, f.column_number) for f in result.findings]}"
         )
-        # Both on line 1, with distinct (ascending) column numbers. The aws
-        # pattern's match starts at the leading boundary char (the space before
-        # the first key / the comma before the second), so column_number
-        # (match.start() + 1) points one char ahead of each key.
+        # Both on line 1, with distinct (ascending) column numbers: each key's own
+        # column, not that of the leading boundary char the aws pattern reads
+        # before it (the space before the first key, the space after the comma).
         assert {f.line_number for f in aws_findings} == {1}
         assert all(f.column_number is not None for f in aws_findings)
         columns = sorted(f.column_number for f in aws_findings if f.column_number is not None)
         assert len(set(columns)) == 2, f"columns must be distinct, got {columns}"
-        assert columns == [7, 29], f"unexpected columns {columns}"
+        assert columns == [8, 30], f"unexpected columns {columns}"
 
     def test_two_adjacent_aws_keys_single_delimiter_yield_two_findings(
         self, scanner: NativeScanner, tmp_path: Path

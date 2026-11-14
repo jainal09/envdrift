@@ -178,8 +178,18 @@ def _sops_assignment_start(line: str, marker: int, floor: int) -> int:
     return name.start() - 1 if quoted and name.start() == run_start else name.start()
 
 
-def _assignments(line: str) -> Iterator[tuple[int, int, str]]:
-    """The ``(start, end, value)`` of each assignment on ``line`` that the entropy check reads.
+def _secret_group(match: re.Match[str]) -> int:
+    """The group of a pattern's ``match`` that holds the secret: the first, if it matched, else 0.
+
+    A pattern's leading boundary, such as the character before a key that aws-access-key-id
+    reads, is not part of the secret. The secret's own span decides whether it lies in an
+    encrypted value, and where its finding's column is.
+    """
+    return 1 if match.re.groups and match.group(1) is not None else 0
+
+
+def _assignments(line: str) -> Iterator[tuple[int, int, int, str]]:
+    """The ``(start, end, value_start, value)`` of each assignment the entropy check reads.
 
     Exactly that regex's matches, left to right, in time linear in the line's length: the name
     before a separator is looked for no further back than the separator before it.
@@ -195,7 +205,7 @@ def _assignments(line: str) -> Iterator[tuple[int, int, str]]:
         name = run and _NAME_START_RE.search(line, at - run.end(1), at - run.start(1))
         value = _ASSIGNMENT_VALUE_RE.match(line, at + 1) if name else None
         if name and value:
-            yield name.start(), value.end(), value.group(1)
+            yield name.start(), value.end(), value.start(1), value.group(1)
             floor = value.end()
 
 
