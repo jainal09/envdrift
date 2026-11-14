@@ -28,6 +28,11 @@ environments where some other files were decrypted). In secrets-only mode a pull
 stops at the first file it cannot decrypt; the files decrypted before it are
 still counted in `Decrypted: N`.
 
+Like `push`, `pull-partial` first makes sure `.gitignore` lists each combined file
+and the dotenvx private-key file next to each secret file (`<secret dir>/.env.keys`,
+or one per folder in secrets-only mode), so a key you place there for the pull is
+never committed. See [push](push.md#description).
+
 This command requires partial encryption to be configured in `envdrift.toml`.
 
 ## Options

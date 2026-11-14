@@ -964,6 +964,37 @@ def _is_pushable_secret_file(file: Path) -> bool:
     return file.is_file() and not _is_excluded_env_file(file.name)
 
 
+def dotenvx_key_files(env_config: PartialEncryptionEnvironmentConfig) -> list[Path]:
+    """Return the ``.env.keys`` files dotenvx writes for one environment (#961).
+
+    ``DotenvxWrapper`` passes ``-fk`` with the ``.env.keys`` next to the file it
+    encrypts, so the private key lands beside the secret file, not in the
+    working directory. Combine mode has one key file, next to ``secret_file``.
+    Secrets-only mode has one in ``secrets_dir`` and one in every folder its
+    ``pattern`` reaches (a recursive pattern reaches nested folders).
+    """
+    if not env_config.secrets_only:
+        secret_file = env_config.secret_file.strip()
+        return [Path(secret_file).parent / ".env.keys"] if secret_file else []
+    raw_dir = env_config.secrets_dir.strip()
+    if not raw_dir:
+        return []
+    secrets_dir = Path(raw_dir)
+    folders = [secrets_dir]
+    if secrets_dir.is_dir():
+        try:
+            matched = sorted(secrets_dir.glob(env_config.pattern))
+        except (ValueError, OSError):
+            matched = []  # A bad pattern is reported by the push/pull step itself.
+        folders.extend(file.parent for file in matched if _is_pushable_secret_file(file))
+    keys: list[Path] = []
+    for folder in folders:
+        key_file = folder / ".env.keys"
+        if key_file not in keys:
+            keys.append(key_file)
+    return keys
+
+
 def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bool) -> bool:
     """Encrypt a single secrets-only file in place; return True if it was (re)encrypted.
 

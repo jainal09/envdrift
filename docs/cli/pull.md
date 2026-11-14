@@ -106,7 +106,8 @@ When this flag is used with partial encryption enabled, the command will:
 
 1. Decrypt `.env.{env}.secret` files
 2. Merge `.env.{env}.clear` + decrypted `.env.{env}.secret` → `.env.{env}`
-3. Add the combined file to `.gitignore` (it contains decrypted secrets)
+3. Add the combined file to `.gitignore` (it contains decrypted secrets), along
+   with the dotenvx `.env.keys` next to each `.secret` file, as `push` does
 
 This creates a single usable `.env` file for local development.
 

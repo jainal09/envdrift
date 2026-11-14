@@ -166,7 +166,10 @@ envdrift pull-partial --env production
 ## Git Setup
 
 `envdrift push` automatically adds the combined file **and** the dotenvx
-private-key file (`.env.keys`) to `.gitignore`. You only need:
+private-key file to `.gitignore`. dotenvx writes that key to the `.env.keys` next
+to the `.secret` file (for `config/.env.production.secret`, `config/.env.keys`), and
+the entry is relative to the repository root, so it holds when you run `push` from
+a subdirectory. You only need:
 
 ```gitignore
 *.bak
@@ -180,7 +183,7 @@ private-key file (`.env.keys`) to `.gitignore`. You only need:
 | `.env.production.clear` | ✅ Yes | Plain text, safe in history |
 | `.env.production.secret` | ✅ Yes | Always encrypted when committed |
 | `.env.production` | ❌ No | Runtime artifact, auto-gitignored |
-| `.env.keys` | ❌ No | dotenvx **private** decryption key, auto-gitignored |
+| `.env.keys` (next to the `.secret` file) | ❌ No | dotenvx **private** decryption key, auto-gitignored |
 
 ### Verify in CI
 
@@ -367,6 +370,11 @@ git commit -m "Update production secrets"
 
 Only the secrets directory needs gitignore consideration.
 The configs directory is committed as-is since it is never modified by envdrift.
+
+dotenvx writes a private key file (`.env.keys`) into each folder whose files it
+encrypts. `envdrift push` adds `secrets/production/.env.keys` to `.gitignore`, and
+with a recursive `pattern` like `**/.env*` it adds the `.env.keys` of every nested
+folder it encrypts too. The entries are relative to the repository root.
 
 ```gitignore
 # Optionally ignore decrypted backups if your editor creates them

@@ -33,9 +33,15 @@ The summary panel labels secrets-only counts as **"Encrypted files (secrets-only
 combine-mode counts as **"Encrypted vars"** (and shows both when an
 envdrift run mixes the two modes).
 
-In both modes, `push` ensures the dotenvx private-key file (`.env.keys`) is listed
-in `.gitignore` so the decryption key is never committed. In combine mode it also
-adds each `combined_file` to `.gitignore`.
+In both modes, `push` ensures the dotenvx private-key files are listed in
+`.gitignore` so the decryption key is never committed. dotenvx writes the key to
+the `.env.keys` next to the file it encrypts, so that is the file `push` ignores:
+next to each `secret_file` in combine mode, and in secrets-only mode the
+`.env.keys` in `secrets_dir` and in every folder the `pattern` reaches (a
+recursive pattern like `**/.env*` gets one key file per folder). The entries are
+relative to the repository root, so they still match when `push` runs from a
+subdirectory. In combine mode it also adds each `combined_file` to `.gitignore`.
+`pull-partial` adds the same entries.
 
 This command requires partial encryption to be configured in `envdrift.toml`.
 

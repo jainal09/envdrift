@@ -46,8 +46,9 @@ def test_push_adds_combined_file_to_gitignore(monkeypatch, tmp_path: Path):
     result = runner.invoke(app, ["push"])
 
     assert result.exit_code == 0
-    # The combined file plus the dotenvx private-key file are both protected.
-    assert captured_paths == [combined_path, Path(".env.keys")]
+    # The combined file plus the private-key file dotenvx writes next to the
+    # secret file are both protected (#961: not the cwd's ./.env.keys).
+    assert captured_paths == [combined_path, tmp_path / ".env.keys"]
     assert "updated .gitignore" in result.output.lower()
 
 
@@ -373,14 +374,15 @@ def test_push_secrets_only_does_not_add_combined_to_gitignore(monkeypatch, tmp_p
     result = runner.invoke(app, ["push"])
 
     assert result.exit_code == 0
-    # No combined_file (secrets_only has none) — only the dotenvx private key file.
-    assert captured_paths == [Path(".env.keys")], (
-        "secrets_only mode must protect .env.keys but register no combined_file"
+    # No combined_file (secrets_only has none) — only the private-key file
+    # dotenvx writes in secrets_dir (#961: not the cwd's ./.env.keys).
+    assert captured_paths == [tmp_path / "secrets" / ".env.keys"], (
+        "secrets_only mode must protect secrets_dir/.env.keys but register no combined_file"
     )
 
 
 def test_push_protects_env_keys_in_gitignore(monkeypatch, tmp_path: Path):
-    """push must always add the dotenvx private-key file (.env.keys) to .gitignore."""
+    """push must add the .env.keys dotenvx writes next to the secret file (#961)."""
     env_config = SimpleNamespace(
         name="production",
         clear_file=str(tmp_path / ".env.production.clear"),
@@ -409,7 +411,8 @@ def test_push_protects_env_keys_in_gitignore(monkeypatch, tmp_path: Path):
     result = runner.invoke(app, ["push"])
 
     assert result.exit_code == 0
-    assert Path(".env.keys") in captured_paths
+    assert tmp_path / ".env.keys" in captured_paths
+    assert Path(".env.keys") not in captured_paths
 
 
 def test_push_check_passes_when_combined_in_sync(monkeypatch, tmp_path: Path):

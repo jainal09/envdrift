@@ -16,6 +16,7 @@ from envdrift.config import (
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
     SecretsOnlyPullError,
+    dotenvx_key_files,
     pull_partial_encryption,
     pull_secrets_only,
     push_partial_encryption,
@@ -23,10 +24,6 @@ from envdrift.core.partial_encryption import (
 )
 from envdrift.output.rich import console, print_error, print_success, print_warning
 from envdrift.utils import ensure_gitignore_entries
-
-# dotenvx writes the PRIVATE decryption key here during encryption. It must never
-# be committed, in either combine or secrets-only mode.
-_DOTENVX_KEYS_FILE = ".env.keys"
 
 
 def _validate_partial_config_or_exit(config: EnvdriftConfig) -> None:
@@ -47,8 +44,13 @@ def _ensure_combined_gitignore(envs_to_process) -> None:
     paths = [
         Path(e.combined_file) for e in envs_to_process if not e.secrets_only and e.combined_file
     ]
-    # Always protect the dotenvx private-key file regardless of mode.
-    paths.append(Path(_DOTENVX_KEYS_FILE))
+    # Protect the PRIVATE key files dotenvx actually writes, in either mode: next
+    # to each secret file, not ./.env.keys. Run from a repository subdirectory,
+    # a cwd entry did not cover them and `git add .` staged the key (#961).
+    # ensure_gitignore_entries writes repository-root-relative entries, so they
+    # stay anchored wherever push runs.
+    for env_config in envs_to_process:
+        paths.extend(dotenvx_key_files(env_config))
     added_entries = ensure_gitignore_entries(paths)
     if added_entries:
         console.print(f"[dim]Updated .gitignore: {', '.join(added_entries)}[/dim]")
