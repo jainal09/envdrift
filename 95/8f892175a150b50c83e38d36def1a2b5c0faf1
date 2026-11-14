@@ -1,0 +1,25 @@
+docs/cli/sync.md
+  s_97204b2b60cb3f::t_dc31f11c7e0781 124-126
+tests/unit/test_sync_engine.py
+  s_97204b2b60cb3f::t_1f8d03de8fefcb 1280-1288
+  s_97204b2b60cb3f::t_e0aeb7e81f010f 12,14,1249-1279,1289-1295
+  s_97204b2b60cb3f::t_c81704034c0d41 1296
+src/envdrift/sync/engine.py
+  s_97204b2b60cb3f::t_dc31f11c7e0781 602
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "958f892175a150b50c83e38d36def1a2b5c0faf1",
+  "prompts": {},
+  "sessions": {
+    "s_97204b2b60cb3f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1da88-0142-7cc1-b15c-65d02cc9afac",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
