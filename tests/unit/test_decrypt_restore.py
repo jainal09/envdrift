@@ -357,3 +357,57 @@ class TestDotenvxBackendPrefixOnce:
         assert str(excinfo.value) == (
             "dotenvx encryption failed: dotenvx command failed (exit 2): boom"
         )
+
+
+class TestFailureMessageLeavesOutTheStatusLine:
+    """dotenvx prints "◇ decrypted <file>" even when the decrypt failed on a value.
+
+    In the error it read as a success, right before "<file> was left as it was".
+    Only the dotenvx subprocess is replaced, by the output dotenvx 2.38.2 gives.
+    """
+
+    def test_partly_failed_decrypt(self) -> None:
+        from envdrift.integrations.dotenvx import DotenvxWrapper
+
+        failed = subprocess.CompletedProcess(
+            [],
+            1,
+            "",
+            "☠ [DECRYPTION_FAILED] could not decrypt STRIPE_API_KEY. fix: [https://x.test/757]\n"
+            "◇ decrypted .env.production (029 823) via .env.keys ⛉\n",
+        )
+
+        with pytest.raises(DotenvxError) as excinfo:
+            DotenvxWrapper()._raise_on_error_output(failed, "decryption")
+
+        assert str(excinfo.value) == (
+            "dotenvx decryption failed: ☠ [DECRYPTION_FAILED] could not decrypt "
+            "STRIPE_API_KEY. fix: [https://x.test/757]"
+        )
+
+    @pytest.mark.parametrize(
+        "status", ["◈ encrypted .env (031 DB4) via .env.keys ⛉", "✔ encrypted (.env)"]
+    )
+    def test_failed_encrypt_and_dotenvx_1_lines(self, status: str) -> None:
+        from envdrift.integrations.dotenvx import DotenvxWrapper
+
+        failed = subprocess.CompletedProcess([], 1, "", f"{status}\nWRONG_PRIVATE_KEY\n")
+
+        with pytest.raises(DotenvxError) as excinfo:
+            DotenvxWrapper()._raise_on_error_output(failed, "encryption")
+
+        assert str(excinfo.value) == "dotenvx encryption failed: WRONG_PRIVATE_KEY"
+
+    def test_other_lines_are_kept(self) -> None:
+        from envdrift.integrations.dotenvx import DotenvxWrapper
+
+        failed = subprocess.CompletedProcess(
+            [], 2, "", "○ no change to .env (031 DB4)\nunexpected failure\n"
+        )
+
+        with pytest.raises(DotenvxError) as excinfo:
+            DotenvxWrapper()._raise_on_error_output(failed, "decryption")
+
+        assert str(excinfo.value) == (
+            "dotenvx command failed (exit 2): ○ no change to .env (031 DB4)\nunexpected failure"
+        )

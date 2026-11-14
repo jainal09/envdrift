@@ -182,6 +182,7 @@ class TestPartlyFailedPullPartial:
         assert "Decrypted: 0" in out and "Errors: 1" in out, out
         assert "STRIPE_API_KEY" in out, out
         assert ".env.production.secret was left as it was" in out, out
+        assert "decrypted .env.production.secret" not in out, out  # dotenvx's status line
         # A routine `git add .` stages nothing from the secret file.
         _git(git_repo, "add", ".")
         staged = _git(git_repo, "diff", "--cached", "--name-only").split()

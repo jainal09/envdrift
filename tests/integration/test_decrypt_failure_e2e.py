@@ -143,6 +143,9 @@ class TestPartlyFailedDecryptLeavesTheFileAsItWas:
         assert ".env.production was left as it was" in out, out
         # The prefix is printed once, not "dotenvx decryption failed: dotenvx ...".
         assert out.count("dotenvx decryption failed:") == 1, out
+        # Nor dotenvx's "◇ decrypted .env.production" status line, which read as
+        # a success right before "was left as it was".
+        assert "decrypted .env.production" not in out, out
         assert _JWT_VALUE not in out and _DB_VALUE not in out
 
     def test_pull_skip_sync_restores_the_file(
