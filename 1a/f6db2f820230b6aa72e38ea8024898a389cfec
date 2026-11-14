@@ -1,0 +1,23 @@
+tests/unit/test_cli.py
+  s_97204b2b60cb3f::t_e3a21ba33404a4 946-974
+docs/cli/decrypt.md
+  s_97204b2b60cb3f::t_5cee485734f005 23-25
+src/envdrift/cli_commands/encryption.py
+  s_97204b2b60cb3f::t_5cee485734f005 1001-1003
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1af6db2f820230b6aa72e38ea8024898a389cfec",
+  "prompts": {},
+  "sessions": {
+    "s_97204b2b60cb3f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1da88-0142-7cc1-b15c-65d02cc9afac",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
