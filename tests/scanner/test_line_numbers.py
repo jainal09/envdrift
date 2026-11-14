@@ -583,8 +583,8 @@ class TestColumnsPastAPlainStart:
 
     @pytest.mark.parametrize(
         ("line", "plain"),
-        [("A=1", 3), ("A=\x00", 2), ("é", 0), ("A\tB\fC", 5), ("", 0)],
-        ids=["ascii", "nul", "non-ascii", "tab-and-form-feed", "empty"],
+        [("A=1", 3), ("A=\x00", 2), ("é", 0), ("A\udcffB", 1), ("A\tB\fC", 5), ("", 0)],
+        ids=["ascii", "nul", "non-ascii", "byte-that-is-not-utf8", "tab-and-form-feed", "empty"],
     )
     def test_the_plain_start_ends_at_a_nul_or_a_non_ascii_character(self, line: str, plain: int):
         assert _line_values(line).plain == plain

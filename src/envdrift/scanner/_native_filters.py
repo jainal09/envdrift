@@ -147,9 +147,6 @@ _VALUE_TOKEN_RE = re.compile(r"\s*[\"']?[^\s\"']*[\"']?")
 # Where str.splitlines() breaks a line and git does not. A line counts to its line break (#937),
 # but an assignment can start after one of these, as at the start of the line.
 _NON_GIT_LINE_BREAK_RE = re.compile("[\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
-# Where a line stops meaning the same columns to every scanner: at a NUL, which the native scanner
-# drops before it counts columns, or at a character outside ASCII, which gitleaks counts in bytes.
-_NOT_PLAIN_RE = re.compile("[^\x01-\x7f]")
 
 
 def _segments(line: str) -> list[tuple[int, str]]:
@@ -298,17 +295,32 @@ class _LineValues(NamedTuple):
     byte_starts: list[int] | None
 
 
+def _plain_length(line: str) -> int:
+    """How long the start of ``line`` is that every scanner counts columns in alike.
+
+    It ends at a NUL, which the native scanner drops before it counts, or at a character outside
+    ASCII, which gitleaks counts in bytes.
+    """
+    nul = line.find("\x00")
+    start = line if nul < 0 else line[:nul]
+    try:
+        start.encode("ascii")
+    except UnicodeEncodeError as outside_ascii:
+        return outside_ascii.start
+    return len(start)
+
+
 def _line_values(line: str) -> _LineValues:
     """The encrypted values of ``line``, as :func:`_outside_encrypted_values` checks a column.
 
     ``line`` is decoded with ``surrogateescape``, so its UTF-8 encoding is the file's bytes.
     """
     spans = _Spans(_encrypted_value_spans(line))
-    not_plain = _NOT_PLAIN_RE.search(line)
-    if not_plain is None:
-        return _LineValues(spans, len(line), None)
+    plain = _plain_length(line)
+    if plain == len(line):
+        return _LineValues(spans, plain, None)
     sizes = (len(char.encode("utf-8", "surrogateescape")) for char in line)
-    return _LineValues(spans, not_plain.start(), [0, *accumulate(sizes)][:-1])
+    return _LineValues(spans, plain, [0, *accumulate(sizes)][:-1])
 
 
 def _outside_encrypted_values(
