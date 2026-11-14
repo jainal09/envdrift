@@ -52,10 +52,12 @@ def _run_envdrift(
     cwd: Path,
     integration_pythonpath: str,
     envdrift_cmd: list[str],
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the real envdrift CLI as a subprocess and capture its output."""
     env = os.environ.copy()
     env["PYTHONPATH"] = integration_pythonpath
+    env.update(extra_env or {})
     return subprocess.run(
         [*envdrift_cmd, *args],
         cwd=cwd,
@@ -117,6 +119,21 @@ def _push(repo: Path, *, integration_pythonpath: str, envdrift_cmd: list[str]) -
 def _skip_worktree_flag(repo: Path, path: str) -> str:
     """``S`` when git marks ``path`` skip-worktree, ``H`` for a normal tracked file."""
     return _git(repo, "ls-files", "-v", "--", path).split(" ", 1)[0]
+
+
+# envdrift pull needs a [vault.sync] section; --skip-sync never contacts this dummy vault.
+_VAULT_SYNC = (
+    "[vault]\n"
+    'provider = "azure"\n\n'
+    "[vault.azure]\n"
+    'vault_url = "https://dummy.vault.azure.net/"\n\n'
+    "[vault.sync]\n"
+    'default_vault_name = "dummy"\n\n'
+    "[[vault.sync.mappings]]\n"
+    'secret_name = "unused"\n'
+    'folder_path = "."\n'
+    'environment = "production"\n\n'
+)
 
 
 class TestPartlyFailedPullPartial:
@@ -278,9 +295,10 @@ class TestPartlyFailedPullPartial:
         assert db.read_bytes() == db_committed
 
 
-# Age recipient shared with the SOPS e2e suites: encrypting needs only the
-# public key, and nothing here decrypts the SOPS file.
+# Age keypair shared with the SOPS e2e suites. Encrypting needs only the public
+# key; the private one is for following the SOPS remedy envdrift prints.
 _AGE_PUBLIC_KEY = "age1c89jtrvyl72y0muvdp5lm3jpemvc2gr303up4g37tuq4uftcku3q4svqau"
+_AGE_PRIVATE_KEY = "AGE-SECRET-KEY-1" + "HGE3ZE9NPEN5R76LVKKJ2Z3G9TYZJLW84P2CHAF6UGL43R7TWPUSZ89MK6"
 
 
 def _sops_encrypt_in_place(path: Path) -> None:
@@ -398,6 +416,72 @@ class TestSopsSecretFileIsNotReportedAsDecrypted:
         assert _skip_worktree_flag(git_repo, "secrets/.env.sops") == "H"
         assert _skip_worktree_flag(git_repo, "secrets/.env.api") == "S"
 
+    def test_pull_gives_a_remedy_that_keeps_the_plaintext_protected(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """Right under ``envdrift pull`` too, and following it never exposes the plaintext.
+
+        It said "pull-partial decrypts with dotenvx" under ``envdrift pull``, and its
+        ``envdrift decrypt --backend sops`` left the plaintext in a tracked file that
+        ``git add .`` staged.
+        """
+
+        def run(*args: str) -> subprocess.CompletedProcess[str]:
+            return _run_envdrift(
+                list(args),
+                cwd=git_repo,
+                integration_pythonpath=integration_pythonpath,
+                envdrift_cmd=envdrift_cmd,
+                extra_env={"SOPS_AGE_KEY": _AGE_PRIVATE_KEY},
+            )
+
+        # The mapping's plaintext .env.production is skipped; --skip-sync never
+        # contacts the dummy vault.
+        (git_repo / ".env.production").write_text("DEBUG=false\n", encoding="utf-8")
+        (git_repo / "envdrift.toml").write_text(
+            _VAULT_SYNC + "[partial_encryption]\n"
+            "enabled = true\n\n"
+            "[[partial_encryption.environments]]\n"
+            'name = "staging"\n'
+            'clear_file = ".env.staging.clear"\n'
+            'secret_file = ".env.staging.secret"\n'
+            'combined_file = ".env.staging"\n',
+            encoding="utf-8",
+        )
+        (git_repo / ".env.staging.clear").write_text("DEBUG=false\n", encoding="utf-8")
+        secret = git_repo / ".env.staging.secret"
+        secret.write_text(f"JWT_SECRET={_JWT_VALUE}\n", encoding="utf-8")
+        _sops_encrypt_in_place(secret)
+        _git(git_repo, "add", "-A")
+        _git(git_repo, "commit", "-q", "-m", "SOPS-encrypted secret file")
+
+        result = run("pull", "--skip-sync")
+
+        out = _flat(result)
+        assert result.returncode == 1, out
+        assert ".env.staging.secret: it still holds SOPS ciphertext" in out, out
+        assert "pull-partial" not in out, out
+        steps = [
+            "`git update-index --skip-worktree .env.staging.secret`",
+            "`envdrift decrypt .env.staging.secret --backend sops`",
+            "`envdrift push`",
+        ]
+        assert all(step in out for step in steps), out
+        assert [out.index(step) for step in steps] == sorted(out.index(step) for step in steps)
+
+        # Follow it: the plaintext is never stageable, and push moves it to dotenvx.
+        _git(git_repo, "update-index", "--skip-worktree", ".env.staging.secret")
+        decrypt = run("decrypt", ".env.staging.secret", "--backend", "sops")
+        assert decrypt.returncode == 0, _flat(decrypt)
+        assert f"JWT_SECRET={_JWT_VALUE}" in secret.read_text(encoding="utf-8")
+        _git(git_repo, "add", ".")
+        staged = _git(git_repo, "diff", "--cached", "--name-only").split()
+        assert ".env.staging.secret" not in staged, staged
+        push = run("push")
+        assert push.returncode == 0, _flat(push)
+        assert "JWT_SECRET=encrypted:" in secret.read_text(encoding="utf-8")
+        assert _skip_worktree_flag(git_repo, ".env.staging.secret") == "H"
+
 
 class _Unprivileged:
     """A repository, and a CLI run there that really cannot read a file made unreadable.
@@ -484,20 +568,6 @@ def unprivileged(tmp_path: Path) -> Iterator[_Unprivileged]:
         yield _Unprivileged(base, nobody)
     finally:
         shutil.rmtree(base, ignore_errors=True)
-
-
-_VAULT_SYNC = (
-    "[vault]\n"
-    'provider = "azure"\n\n'
-    "[vault.azure]\n"
-    'vault_url = "https://dummy.vault.azure.net/"\n\n'
-    "[vault.sync]\n"
-    'default_vault_name = "dummy"\n\n'
-    "[[vault.sync.mappings]]\n"
-    'secret_name = "unused"\n'
-    'folder_path = "."\n'
-    'environment = "production"\n\n'
-)
 
 
 class TestUnreadableLaterSecretFile:

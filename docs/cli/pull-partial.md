@@ -179,9 +179,16 @@ ciphertext is reported as a failure that names the file and the format. It is no
 counted as decrypted and not marked `skip-worktree`, and it is left as it was:
 
 ```text
-✗ Failed to decrypt .env.production.secret: it still holds SOPS ciphertext. pull-partial decrypts with dotenvx,
-which does not read SOPS files; run `envdrift decrypt .env.production.secret --backend sops` instead.
+✗ Failed to decrypt .env.production.secret: it still holds SOPS ciphertext. Partial encryption decrypts
+with dotenvx, which does not read SOPS files. To move it to dotenvx, run
+`git update-index --skip-worktree .env.production.secret` so `git add .` cannot stage its plaintext
+(git can mark only a tracked file), then `envdrift decrypt .env.production.secret --backend sops`,
+then `envdrift push` before you stage anything: push encrypts it with dotenvx and lifts the mark.
 ```
+
+The mark comes first because `envdrift decrypt` does not set it: decrypted on its
+own, the file is plaintext that a plain `git add .` stages. `envdrift pull` gives
+the same message for its partial-encryption step.
 
 Leftover dotenvx ciphertext is reported the same way (`it still holds dotenvx
 ciphertext`), which usually means the decryption key is missing or invalid.

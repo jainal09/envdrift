@@ -284,6 +284,11 @@ class TestStillEncryptedAfterDecrypt:
         assert f"Failed to decrypt {secret}: it still holds SOPS ciphertext" in message
         assert f"`envdrift decrypt {secret} --backend sops`" in message
         assert f"{secret} was left as it was" in message
+        # envdrift pull gives this message too, and `envdrift decrypt` alone left
+        # the plaintext stageable: the remedy marks the file first.
+        assert "pull-partial" not in message
+        mark = message.index(f"`git update-index --skip-worktree {secret}`")
+        assert mark < message.index("`envdrift decrypt") < message.index("`envdrift push`")
         # Not marked skip-worktree, and byte for byte as it was (CRLF too).
         assert skip_worktree_calls == []
         assert secret.read_bytes() == original

@@ -188,10 +188,15 @@ class PartialEncryptionError(Exception):
         ``ciphertext`` names the format still in the file (``_leftover_ciphertext``).
         """
         if ciphertext == "SOPS":
+            # Shared by pull-partial and pull. `envdrift decrypt` alone left the
+            # plaintext in a tracked file that `git add .` staged: mark it first.
             reason = (
-                "it still holds SOPS ciphertext. pull-partial decrypts with dotenvx, "
-                "which does not read SOPS files; run "
-                f"`envdrift decrypt {path} --backend sops` instead."
+                "it still holds SOPS ciphertext. Partial encryption decrypts with "
+                "dotenvx, which does not read SOPS files. To move it to dotenvx, run "
+                f"`git update-index --skip-worktree {path}` so `git add .` cannot stage "
+                "its plaintext (git can mark only a tracked file), then "
+                f"`envdrift decrypt {path} --backend sops`, then `envdrift push` before "
+                "you stage anything: push encrypts it with dotenvx and lifts the mark."
             )
         else:
             reason = (

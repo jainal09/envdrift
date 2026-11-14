@@ -156,9 +156,10 @@ envdrift pull-partial --env production
   names the value dotenvx could not decrypt.
 - A secret file that still holds ciphertext after dotenvx exits 0 is a failure, not
   a decrypt. For a SOPS-encrypted `.secret`, which dotenvx cannot read, the error
-  says `it still holds SOPS ciphertext` and suggests
-  `envdrift decrypt <file> --backend sops`. The file is left as it was, is not
-  counted, and is not marked `skip-worktree`.
+  says `it still holds SOPS ciphertext` and how to move the file to dotenvx: mark it
+  with `git update-index --skip-worktree <file>`, then run
+  `envdrift decrypt <file> --backend sops` and `envdrift push`. The file is left as
+  it was, is not counted, and is not marked `skip-worktree`.
 - In secrets-only mode the pull stops at that file. The files decrypted before it
   are counted under `Decrypted:`, marked `skip-worktree`, and announced by the
   plaintext notice, which is shown even when the command exits 1.
