@@ -1164,3 +1164,50 @@ class TestVaultPullNotFoundNamesRegion:
         out = " ".join(result.output.split())
         assert "not found in aws vault" in out, out
         assert "(region eu-west-1)" in out, out
+
+
+@patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+@patch("envdrift.vault.get_vault_client")
+def test_vault_pull_key_conflict_for_a_custom_env_file_is_a_clean_error(
+    mock_get_client, mock_resolve_backend, tmp_path
+):
+    """B3: a key conflict is a clean error saying the file is not decrypted (#938).
+
+    The canonical key the vault provides and the key dotenvx wrote for the
+    custom filename differ, so normalizing would overwrite one with the other.
+    """
+    vault_key = "a" * 32 + "b" * 32
+    local_key = "c" * 32 + "d" * 32
+    mock_get_client.return_value = _make_client(f"DOTENV_PRIVATE_KEY_PRODUCTION={vault_key}")
+    backend = DummyEncryptionBackend()
+    mock_resolve_backend.return_value = (backend, EncryptionProvider.DOTENVX, None)
+    (tmp_path / "postgresql.env").write_text("A=encrypted:abc\n", encoding="utf-8")
+    keys = tmp_path / ".env.keys"
+    keys.write_text(
+        f"# postgresql.env\nDOTENV_PRIVATE_KEY_POSTGRESQLDEVELOPMENT={local_key}\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "vault-pull",
+            str(tmp_path),
+            "my-secret",
+            "--env",
+            "production",
+            "--env-file",
+            "postgresql.env",
+            "-p",
+            "azure",
+            "--vault-url",
+            "https://myvault.vault.azure.net/",
+        ],
+    )
+
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1, out
+    assert "Not decrypting" in out
+    assert "holds two different keys for postgresql.env" in out
+    assert backend.decrypt_calls == []
+    assert local_key in keys.read_text(encoding="utf-8")

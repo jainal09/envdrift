@@ -9,21 +9,28 @@ against the real binary at test time.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from envdrift.integrations.dotenvx_keys import (
+    KeyReuseError,
     assignment_line_pattern,
     assignment_values,
     distinct_keys,
     dotenvx_environment,
     dotenvx_key_names,
     has_encrypted_values,
+    held_key_problem,
+    key_outcome_problem,
     normalize_public_key,
     parse_assignments,
+    plan_key_reuse,
     private_key_candidates,
     private_key_scalar,
     public_key_for,
     public_key_values,
+    seed_public_key,
 )
 from tests.helpers import DOTENVX_KEY_PAIRS
 
@@ -178,3 +185,180 @@ def test_dotenvx_key_names_match_the_binary(filename: str, suffix: str | None):
 
 def test_dotenvx_environment_is_lowercase():
     assert dotenvx_environment(".env.PROD.eu.West") == "prod_eu"
+
+
+# --- seeding the header dotenvx itself would write -----------------------------
+
+
+def test_seed_public_key_writes_the_dotenvx_header(tmp_path: Path):
+    env_file = tmp_path / ".env.prod"
+    seeded = seed_public_key("A=1\n", env_file, tmp_path / ".env.keys", PUB1)
+    assert seeded == (
+        "#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\n"
+        "#/            public-key encryption for .env files          /\n"
+        "#/       [how it works](https://dotenvx.com/encryption)     /\n"
+        "#/----------------------------------------------------------/\n"
+        f'DOTENV_PUBLIC_KEY_PROD="{PUB1}"\n'
+        "\n"
+        "# .env.prod\n"
+        "A=1\n"
+    )
+
+
+def test_seed_public_key_keeps_a_shebang_first_and_names_a_custom_keys_file(tmp_path: Path):
+    env_file = tmp_path / ".env.production"
+    seeded = seed_public_key("#!/bin/sh\nA=1", env_file, tmp_path / ".secrets.keys", PUB1)
+    lines = seeded.split("\n")
+    assert lines[0] == "#!/bin/sh"
+    assert lines[5] == f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB1}" # -fk .secrets.keys'
+    assert lines[-1] == "A=1"
+
+
+# --- planning: reuse the held key or refuse (#938, B4) -------------------------
+
+
+def _plan(env_text: str, keys_text: str | None, tmp_path: Path, name: str = NAME):
+    return plan_key_reuse(
+        env_text,
+        keys_text,
+        env_file=tmp_path / ".env.production",
+        keys_file=tmp_path / ".env.keys",
+        key_name=name,
+    )
+
+
+def test_plan_without_a_held_key_changes_nothing(tmp_path: Path):
+    plan = _plan("A=1\n", "DOTENV_PRIVATE_KEY_STAGING=" + K2 + "\n", tmp_path)
+    assert plan.held_key is None
+    assert plan.env_text == "A=1\n"
+
+
+def test_plan_seeds_the_held_keys_public_key(tmp_path: Path):
+    plan = _plan("A=1\n", f"{NAME}={K1}\n", tmp_path)
+    assert plan.public_key == PUB1
+    assert public_key_values(plan.env_text) == [PUB1]
+    assert plan.env_text.endswith("# .env.production\nA=1\n")
+
+
+def test_plan_keeps_a_matching_header(tmp_path: Path):
+    text = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB1}"\nA=encrypted:x\nB=new\n'
+    assert _plan(text, f"export {NAME} = {K1} # vault\n", tmp_path).env_text == text
+
+
+def test_plan_rewrites_another_keys_header_while_nothing_is_encrypted(tmp_path: Path):
+    text = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB2}" # -fk x\nA=plain\n'
+    plan = _plan(text, f"{NAME}={K1}\n", tmp_path)
+    assert plan.env_text == f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB1}" # -fk x\nA=plain\n'
+
+
+def test_plan_refuses_a_file_encrypted_under_another_key(tmp_path: Path):
+    text = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB2}"\nA=encrypted:abc\nB=new\n'
+    with pytest.raises(KeyReuseError, match="encrypted with another public key"):
+        _plan(text, f"{NAME}={K1}\n", tmp_path)
+
+
+def test_plan_refuses_two_different_held_keys(tmp_path: Path):
+    with pytest.raises(KeyReuseError, match="holds 2 different keys"):
+        _plan("A=1\n", f"{NAME}={K1}\n{NAME}={K2}\n", tmp_path)
+
+
+def test_plan_refuses_a_comma_list_of_two_keys(tmp_path: Path):
+    with pytest.raises(KeyReuseError, match="holds 2 different keys"):
+        _plan("A=1\n", f"{NAME}={K1},{K2}\n", tmp_path)
+
+
+def test_plan_accepts_the_same_key_twice(tmp_path: Path):
+    assert _plan("A=1\n", f"{NAME}={K1}\n{NAME}={K1.upper()}\n", tmp_path).held_key == K1
+
+
+@pytest.mark.parametrize("value", ["zzz_not_hex", ""])
+def test_plan_refuses_a_value_dotenvx_cannot_use(tmp_path: Path, value: str):
+    """A garbage key fails with what is wrong, not with a "second value" (B2)."""
+    with pytest.raises(KeyReuseError, match="is not a valid dotenvx key"):
+        _plan("A=1\n", f"{NAME}={value}\n", tmp_path)
+
+
+def test_plan_refuses_a_header_it_cannot_rewrite(tmp_path: Path):
+    """dotenvx reads ``NAME:`` + newline + value; the line rewrite cannot, so refuse."""
+    text = f"DOTENV_PUBLIC_KEY_PRODUCTION:\n{PUB2}\nA=plain\n"
+    assert public_key_values(text) == [PUB2]
+    with pytest.raises(KeyReuseError, match="could not rewrite it safely"):
+        _plan(text, f"{NAME}={K1}\n", tmp_path)
+
+
+# --- after dotenvx: the outcome check (#938) -----------------------------------
+
+
+def _held_plan(tmp_path: Path):
+    return _plan("A=1\n", f"{NAME}={K1}\n", tmp_path)
+
+
+def test_outcome_holds_when_dotenvx_used_the_held_key(tmp_path: Path):
+    plan = _held_plan(tmp_path)
+    keys = f"{NAME}={K1}\n"
+    assert key_outcome_problem(plan, keys, keys, plan.env_text + "A=encrypted:x\n") is None
+
+
+def test_outcome_flags_a_second_value_for_the_held_name(tmp_path: Path):
+    plan = _held_plan(tmp_path)
+    problem = key_outcome_problem(plan, f"{NAME}={K1}\n", f"{NAME}={K1}\n{NAME}={K2}\n", "")
+    assert problem == f"dotenvx changed {NAME} in the keys file"
+
+
+def test_outcome_flags_a_replaced_value(tmp_path: Path):
+    plan = _held_plan(tmp_path)
+    assert key_outcome_problem(plan, f"{NAME}={K1}\n", f"{NAME}={K2}\n", "") is not None
+
+
+def test_outcome_flags_any_new_key_name_when_one_was_held(tmp_path: Path):
+    plan = _held_plan(tmp_path)
+    after = f"{NAME}={K1}\nDOTENV_PRIVATE_KEY_PROD={K2}\n"
+    problem = key_outcome_problem(plan, f"{NAME}={K1}\n", after, plan.env_text)
+    assert problem == f"dotenvx created DOTENV_PRIVATE_KEY_PROD instead of using {NAME}"
+
+
+def test_outcome_flags_another_public_key_when_one_was_held(tmp_path: Path):
+    plan = _held_plan(tmp_path)
+    keys = f"{NAME}={K1}\n"
+    env_after = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB2}"\nA=encrypted:x\n'
+    assert "another key than" in (key_outcome_problem(plan, keys, keys, env_after) or "")
+
+
+def test_outcome_accepts_a_minted_key_that_was_saved(tmp_path: Path):
+    plan = _plan("A=1\n", None, tmp_path)
+    env_after = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB2}"\nA=encrypted:x\n'
+    assert key_outcome_problem(plan, None, f"{NAME}={K2}\n", env_after) is None
+
+
+def test_outcome_flags_a_minted_key_that_was_not_saved(tmp_path: Path):
+    plan = _plan("A=1\n", None, tmp_path)
+    env_after = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB2}"\nA=encrypted:x\n'
+    problem = key_outcome_problem(plan, None, None, env_after)
+    assert problem == "dotenvx encrypted the file with a key it did not save in the keys file"
+
+
+def test_outcome_accepts_the_teams_public_key_without_a_local_key(tmp_path: Path):
+    """Encrypting with a header's public key needs no private key (no false refusal)."""
+    text = f'DOTENV_PUBLIC_KEY="{PUB2}"\nA=1\n'
+    plan = _plan(text, None, tmp_path, name="DOTENV_PRIVATE_KEY")
+    assert key_outcome_problem(plan, None, None, text + "B=encrypted:x\n") is None
+
+
+def test_outcome_flags_a_second_public_key_prepended_to_the_file(tmp_path: Path):
+    text = f'DOTENV_PUBLIC_KEY_LOCAL="{PUB2}"\nA=1\n'
+    plan = _plan(text, None, tmp_path)
+    env_after = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB1}"\n' + text
+    problem = key_outcome_problem(plan, None, f"{NAME}={K1}\n", env_after)
+    assert problem == "the file now carries two different public keys"
+
+
+# --- read-only check for encrypted files (lock, B4) ----------------------------
+
+
+def test_held_key_problem_cases():
+    header = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB1}"\nA=encrypted:x\n'
+    assert held_key_problem(header, f"{NAME}={K1}\n", NAME) is None
+    assert held_key_problem(header, None, NAME) is None
+    assert held_key_problem(header, f"{NAME}=dummy\n", NAME) is None
+    assert "2 different keys" in (held_key_problem(header, f"{NAME}={K1},{K2}\n", NAME) or "")
+    assert "another public key" in (held_key_problem(header, f"{NAME}={K2}\n", NAME) or "")

@@ -99,9 +99,13 @@ class DotenvxEncryptionBackend(EncryptionBackend):
             **kwargs: Additional options:
                 - env (dict): Environment variables to pass to subprocess.
                 - cwd (Path | str): Working directory for subprocess.
+                - environment (str): The mapping environment of a mapped file;
+                  its key is ``DOTENV_PRIVATE_KEY_<ENVIRONMENT>`` in the keys file.
 
         Returns:
-            EncryptionResult: Result of the encryption operation.
+            EncryptionResult: Result of the encryption operation. A refusal to
+            encrypt with anything but the key the folder holds (#938) is a
+            failed result with both files left as they were.
         """
         env_file = Path(env_file)
 
@@ -185,7 +189,11 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 f"dotenvx is not installed.\n{self.install_instructions()}"
             )
 
-        from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError
+        from envdrift.integrations.dotenvx import (
+            DotenvxError,
+            DotenvxFilenameError,
+            DotenvxKeyError,
+        )
 
         try:
             wrapper = self._get_wrapper()
@@ -194,7 +202,12 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 env_keys_file=keys_file,
                 env=kwargs.get("env"),
                 cwd=kwargs.get("cwd"),
+                environment=kwargs.get("environment"),
             )
+        except DotenvxKeyError as e:
+            # A refusal, not a crash: the folder's key could not be reused (or
+            # dotenvx did not reuse it) and both files were left as they were.
+            return EncryptionResult(success=False, message=str(e), file_path=env_file)
         except (DotenvxError, DotenvxFilenameError) as e:
             # DotenvxFilenameError: the wrapper refused pre-flight (e.g. a
             # renamed private-key store caught by its content sniff, which

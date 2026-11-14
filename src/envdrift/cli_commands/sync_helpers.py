@@ -370,12 +370,20 @@ def _read_pull_encrypted_file(
     environment: str,
     context: _PullDecryptContext,
 ) -> str | None:
+    from envdrift.integrations.dotenvx import DotenvxError
+
     keys_file = _pull_keys_file(mapping, context.command)
     try:
         context.runtime.normalize_metadata(
             env_file, keys_file, environment, context.encryption.provider
         )
         return env_file.read_text(encoding="utf-8")
+    except DotenvxError as exc:
+        # The keys file holds two different keys for this file; nothing was
+        # written and nothing is decrypted until one of them is removed.
+        console.print(f"  [red]![/red] {env_file} [red]- not decrypted: {escape(str(exc))}[/red]")
+        context.state.errors += 1
+        return None
     except (OSError, ValueError) as exc:
         console.print(f"  [red]![/red] {env_file} [red]- error reading file: {exc}[/red]")
         context.state.errors += 1

@@ -85,6 +85,9 @@ Exits with code 1 when any mapping errors (a mismatch, a missing local key, or a
 without needing `--ci`. A mapping whose folder has no env file yet is only skipped after confirming its configured secret exists in the vault — a
 deleted vault secret is an error, not a skip.
 
+Every value `.env.keys` holds under the key name is compared with the vault, because dotenvx loads them all: a second line holding another key is a
+mismatch even when the first line matches the vault.
+
 ### `--force`, `-f`
 
 Force update all mismatches without prompting.
@@ -106,13 +109,16 @@ success.
 After syncing, verify that the keys can decrypt `.env` files.
 
 This tests actual decryption using dotenvx to ensure keys are valid. The check
-is **non-destructive**: the encrypted file and the synced keys file are copied
-into a throwaway temp directory and dotenvx decrypts the copy there, so the
-working-tree file is never decrypted or rewritten (its bytes are identical
-before and after, whether the check passes or fails). Stray
-`DOTENV_PRIVATE_KEY*` variables in your shell are ignored so the verdict
-reflects the synced `.env.keys`, and mappings with relative `folder_path`
-values (the usual monorepo layout) verify correctly from the project root.
+is **non-destructive**: the encrypted file is copied into a throwaway temp
+directory and dotenvx decrypts the copy there, so the working-tree file is never
+decrypted or rewritten (its bytes are identical before and after, whether the
+check passes or fails). dotenvx decrypts with any key it is given, whatever its
+name, so the copy gets a keys file holding only the key sync compared with the
+vault: the first `DOTENV_PRIVATE_KEY_<ENV>` value of the mapping's keys file. A
+second, locally created key in `.env.keys` cannot make the check pass. Stray
+`DOTENV_PRIVATE_KEY*` variables in your shell are ignored too, and mappings with
+relative `folder_path` values (the usual monorepo layout) verify correctly from
+the project root.
 
 If any decryption test fails, `sync` exits 1 — with or without `--ci`. The
 check also refuses to run when dotenvx is not installed: skipping every test

@@ -106,7 +106,7 @@ def _normalize_mapped_dotenvx_metadata(
     # `lock --check` is a documented read-only dry run (see #303): the file's
     # non-canonical key name is still surfaced downstream (re-key detection
     # reports "would re-key"), but we must NOT rewrite .env.keys / the header
-    # here. normalize_dotenvx_metadata() write_text()s both files.
+    # here. normalize_dotenvx_metadata() rewrites both files.
     if check_only:
         return
 
@@ -492,55 +492,6 @@ def pull(
     )
 
 
-def _find_stale_private_key_name(env_keys_file: Path, expected_key_name: str) -> str | None:
-    """Return the old ``DOTENV_PRIVATE_KEY_*`` name when it mismatches the env.
-
-    Handles the renamed-file case (e.g. ``.env.local`` -> ``.env.localenv``)
-    where ``.env.keys`` still carries the key under the old name: the expected
-    key is absent but another private key is present. Returns ``None`` when the
-    expected key exists (or the keys file is missing/empty).
-    """
-    if not env_keys_file.exists():
-        return None
-    from envdrift.sync.operations import EnvKeysFile
-
-    if EnvKeysFile(env_keys_file).read_key(expected_key_name):
-        return None
-    # UTF-8 like dotenvx itself: the .env.keys header contains a non-ASCII
-    # character, so the locale codec (cp1252, LC_ALL=C) cannot decode it (#474).
-    for line in env_keys_file.read_text(encoding="utf-8").splitlines():
-        if line.startswith("DOTENV_PRIVATE_KEY_") and "=" in line:
-            old_key_name = line.split("=")[0].strip()
-            if old_key_name != expected_key_name:
-                return old_key_name
-    return None
-
-
-def _rekey_dotenvx_file(
-    env_file: Path,
-    encryption_backend: Any,
-    backend_kwargs: dict[str, Any],
-) -> tuple[bool, str]:
-    """Decrypt + re-encrypt ``env_file`` so dotenvx generates the expected key.
-
-    ``backend_kwargs`` carries the mapping's keys file for dotenvx (#943), so
-    both runs use the file lock verifies. Returns ``(ok, error_message)``;
-    ``error_message`` is empty on success.
-    """
-    from envdrift.encryption import EncryptionBackendError, EncryptionNotFoundError
-
-    try:
-        decrypt_result = encryption_backend.decrypt(env_file.resolve(), **backend_kwargs)
-        if not decrypt_result.success:
-            return False, f"decrypt failed: {decrypt_result.message}"
-        result = encryption_backend.encrypt(env_file.resolve(), **backend_kwargs)
-        if not result.success:
-            return False, f"re-encrypt failed: {result.message}"
-    except (EncryptionNotFoundError, EncryptionBackendError) as e:
-        return False, f"rekey error: {e}"
-    return True, ""
-
-
 def _verify_issue_summary(failed: int, unusable: int) -> str:
     """Summary line for the ``lock --verify-vault`` fail-fast gate.
 
@@ -617,6 +568,7 @@ def lock(
 ) -> None:
     """Verify keys and encrypt the configured environment files."""
     from envdrift.cli_commands.sync_lock_helpers import LockRequest, LockRuntime, execute_lock
+    from envdrift.cli_commands.sync_lock_relabel import relabel_dotenvx_key
 
     execute_lock(
         LockRequest(
@@ -638,8 +590,7 @@ def lock(
             normalize_metadata=_normalize_mapped_dotenvx_metadata,
             load_partial_paths=_load_partial_encryption_paths,
             find_config_path=_find_config_path,
-            find_stale_key=_find_stale_private_key_name,
-            rekey_file=_rekey_dotenvx_file,
+            relabel_key=relabel_dotenvx_key,
             verify_summary=_verify_issue_summary,
             sops_missing_recipients=_sops_missing_recipients,
             lock_factory=Lock,

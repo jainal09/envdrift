@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 from envdrift.env_files import detect_env_file, resolve_mapping_env_file
 from envdrift.sync.config import ServiceMapping, SyncConfig
-from envdrift.sync.operations import EnvKeysFile, ensure_directory, redact_value
+from envdrift.sync.operations import EnvKeysFile, atomic_write, ensure_directory, redact_value
 from envdrift.sync.result import (
     DecryptionTestResult,
     ServiceSyncResult,
@@ -278,18 +278,25 @@ class SyncEngine:
         return None
 
     def _sync_local_key(self, ctx: _ServiceSyncContext) -> ServiceSyncResult:
-        """Compare the local key against the vault value and apply the outcome."""
+        """Compare the local key against the vault value and apply the outcome.
+
+        Every value the keys file holds under the key name is compared, as
+        dotenvx loads them all: a second line holding another key is a
+        mismatch even when the first line matches the vault (#938).
+        """
         # Read local file
         env_keys_path = ctx.mapping.folder_path / self.config.env_keys_filename
         env_keys_file = EnvKeysFile(env_keys_path)
-        local_value = env_keys_file.read_key(ctx.effective_key_name)
+        local_values = env_keys_file.read_values(ctx.effective_key_name)
+        differing = [value for value in local_values if value != ctx.vault_value]
+        local_value = differing[0] if differing else (local_values[0] if local_values else None)
         local_preview = redact_value(local_value) if local_value is not None else None
 
         # Compare values
         if local_value is None:
             # Key doesn't exist - create
             return self._create_missing_key(ctx, env_keys_file, env_keys_path)
-        elif local_value == ctx.vault_value:
+        elif not differing:
             # Values match - skip
             return ServiceSyncResult(
                 secret_name=ctx.mapping.secret_name,
@@ -302,7 +309,9 @@ class SyncEngine:
             )
         else:
             # Mismatch - update
-            return self._update_mismatched_key(ctx, env_keys_file, local_preview)
+            return self._update_mismatched_key(
+                ctx, env_keys_file, local_preview, value_count=len(local_values)
+            )
 
     def _create_missing_key(
         self, ctx: _ServiceSyncContext, env_keys_file: EnvKeysFile, env_keys_path: Path
@@ -337,10 +346,21 @@ class SyncEngine:
         )
 
     def _update_mismatched_key(
-        self, ctx: _ServiceSyncContext, env_keys_file: EnvKeysFile, local_preview: str | None
+        self,
+        ctx: _ServiceSyncContext,
+        env_keys_file: EnvKeysFile,
+        local_preview: str | None,
+        *,
+        value_count: int = 1,
     ) -> ServiceSyncResult:
         """Update a mismatched local key (verify errors; prompt unless forced)."""
         if self.mode.verify_only:
+            error = "Local value differs from vault"
+            if value_count > 1:
+                error += (
+                    f" ({env_keys_file.path.name} holds {value_count} values for "
+                    f"{ctx.effective_key_name})"
+                )
             return ServiceSyncResult(
                 secret_name=ctx.mapping.secret_name,
                 folder_path=ctx.mapping.folder_path,
@@ -349,7 +369,7 @@ class SyncEngine:
                 message="Value mismatch detected",
                 vault_value_preview=ctx.vault_preview,
                 local_value_preview=local_preview,
-                error="Local value differs from vault",
+                error=error,
             )
 
         # Check if we should update
@@ -503,21 +523,25 @@ class SyncEngine:
         if not dotenvx_path:
             return DecryptionTestResult.SKIPPED
 
-        return self._verify_decryption_on_copy(dotenvx_path, target_file, mapping)
+        environment = detection.environment or mapping.effective_environment
+        return self._verify_decryption_on_copy(dotenvx_path, target_file, mapping, environment)
 
     def _verify_decryption_on_copy(
         self,
         dotenvx_path: str,
         target_file: Path,
         mapping: ServiceMapping,
+        environment: str,
     ) -> DecryptionTestResult:
         """
         Run ``dotenvx decrypt`` against a temp-dir copy of ``target_file``.
 
-        The env file and the mapping's local keys file are copied into an
-        isolated ``TemporaryDirectory`` (the keys copy is always named
-        ``.env.keys`` so dotenvx finds it regardless of a custom
-        ``env_keys_filename``), and dotenvx runs with ``cwd`` set to that
+        The env file is copied into an isolated ``TemporaryDirectory`` next to
+        a ``.env.keys`` that holds only the first ``DOTENV_PRIVATE_KEY_<ENV>``
+        value of the mapping's keys file (always named ``.env.keys`` so dotenvx
+        finds it regardless of a custom ``env_keys_filename``): the one key
+        sync compared with the vault, not every key the file happens to hold
+        (#938). dotenvx runs with ``cwd`` set to that
         directory and only the file *name* on the command line. This fixes the
         relative-``folder_path`` false FAILURE of the old in-place roundtrip,
         which ran ``dotenvx decrypt -f <folder>/<file>`` with ``cwd=<folder>``
@@ -533,16 +557,22 @@ class SyncEngine:
         env_keys_path = mapping.folder_path / (self.config.env_keys_filename or ".env.keys")
         child_env = {k: v for k, v in os.environ.items() if not k.startswith("DOTENV_PRIVATE_KEY")}
         child_env.pop("DOTENV_KEY", None)
+        key_name = f"DOTENV_PRIVATE_KEY_{environment.upper()}"
 
         try:
+            # dotenvx 2.x decrypts with ANY key in the keys file, whatever its
+            # name, so copying the whole file let a second, locally minted key
+            # pass a check meant for the vault key (#938). Test exactly the
+            # value sync verified: the first value of the mapping's key name.
+            key_value = EnvKeysFile(env_keys_path).read_key(key_name)
             with tempfile.TemporaryDirectory(prefix=".envdrift-check-decryption-") as temp_dir:
                 temp_dir_path = Path(temp_dir)
                 # Preserve the file name: dotenvx derives the expected
                 # DOTENV_PRIVATE_KEY_<ENV> name from it.
                 temp_copy = temp_dir_path / target_file.name
                 shutil.copy2(target_file, temp_copy)
-                if env_keys_path.exists():
-                    shutil.copy2(env_keys_path, temp_dir_path / ".env.keys")
+                if key_value is not None:
+                    atomic_write(temp_dir_path / ".env.keys", f"{key_name}={key_value}\n")
 
                 try:
                     result = subprocess.run(  # nosec B603
