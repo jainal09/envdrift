@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
+from rich.text import Text
 
 from envdrift.core.encryption import EncryptionDetector, EncryptionReport
 from envdrift.core.parser import EnvParser
@@ -177,7 +178,8 @@ def _report_not_installed(encryption_backend) -> None:
     if isinstance(install_error, str) and install_error:
         print_error(f"{encryption_backend.name} auto-install failed: {install_error}")
     print_error(f"{encryption_backend.name} is not installed")
-    console.print(encryption_backend.install_instructions())
+    # Literal: the instructions quote TOML such as `[encryption.sops]`.
+    console.print(Text(encryption_backend.install_instructions()))
 
 
 @dataclass(frozen=True)
@@ -741,7 +743,8 @@ def _verify_decryption_with_vault(
     if not ci:
         console.print()
         console.print("[bold]Vault Key Verification[/bold]")
-        console.print(f"[dim]Provider: {provider} | Secret: {secret_name}[/dim]")
+        # The secret name and the paths below are printed as they are.
+        console.print(Text(f"Provider: {provider} | Secret: {secret_name}", style="dim"))
 
     vault_client = None
     try:
@@ -848,7 +851,7 @@ def _verify_decryption_with_vault(
                 return True
             except DotenvxError as e:
                 print_error("✗ Vault key CANNOT decrypt this file!")
-                console.print(f"[red]Error: {e}[/red]")
+                console.print(Text(f"Error: {e}", style="red"))
                 console.print()
                 console.print(
                     "[yellow]This means the file was encrypted with a DIFFERENT key.[/yellow]"
@@ -856,7 +859,7 @@ def _verify_decryption_with_vault(
                 console.print("[yellow]The team's shared vault key won't work![/yellow]")
                 console.print()
                 console.print("[bold]To fix:[/bold]")
-                console.print(f"  1. Restore the encrypted file: git restore {env_file}")
+                console.print(Text(f"  1. Restore the encrypted file: git restore {env_file}"))
 
                 # Construct sync command with the same provider options
                 sync_cmd = "envdrift sync --force"
@@ -869,9 +872,11 @@ def _verify_decryption_with_vault(
                     sync_cmd += f" --region {shlex.quote(region)}"
                 if project_id:
                     sync_cmd += f" --project-id {shlex.quote(project_id)}"
-                console.print(f"  2. Restore vault key locally: {sync_cmd}")
+                console.print(Text(f"  2. Restore vault key locally: {sync_cmd}"))
 
-                console.print(f"  3. Re-encrypt with the vault key: envdrift encrypt {env_file}")
+                console.print(
+                    Text(f"  3. Re-encrypt with the vault key: envdrift encrypt {env_file}")
+                )
                 return False
 
     except SecretNotFoundError:
