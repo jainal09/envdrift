@@ -37,7 +37,6 @@ from typing import Annotated, NamedTuple
 import typer
 from rich.console import Console
 from rich.live import Live
-from rich.markup import escape
 from rich.spinner import Spinner
 from rich.text import Text
 
@@ -142,11 +141,11 @@ def _emit_error(json_output: bool, sarif: bool, message: str) -> None:
     elif json_output:
         print(json.dumps({"error": message}, indent=2))
     else:
-        # Escape the dynamic message so bracketed literals (e.g. TOML section
-        # names like ``[vault.sync]``) survive Rich markup instead of being
-        # interpreted as console tags and silently dropped (mirrors
+        # The message is literal text, so bracketed literals (e.g. TOML section
+        # names like ``[vault.sync]``, a path like ``cfg[/x]``) and backslashes
+        # print as they are instead of being read as console markup (mirrors
         # output/rich.py print_error). The static label stays markup.
-        diagnostic_console.print(f"[red]Error:[/red] {escape(message)}")
+        diagnostic_console.print(styled_text("[red]Error:[/red] {}", message))
 
 
 def _machine_mode(json_output: bool, sarif: bool) -> bool:

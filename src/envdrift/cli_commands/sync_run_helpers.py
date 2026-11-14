@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import typer
-from rich.markup import escape
+from rich.text import Text
 
 from envdrift.output.rich import console, print_error
 from envdrift.vault.base import SecretNotFoundError, VaultError
@@ -100,10 +100,10 @@ def _new_sync_engine(request: SyncRequest, context: _SyncContext):
 
     def progress_callback(message: str) -> None:
         if not request.ci:
-            # Progress text embeds user-controlled names (folders, secrets);
-            # escape so brackets render literally instead of being parsed as
-            # Rich markup — or raising MarkupError on a stray closing tag.
-            console.print(f"[dim]{escape(message)}[/dim]")
+            # Progress text embeds user-controlled names (folders, secrets):
+            # print it as Text so brackets render as they are instead of being
+            # parsed as Rich markup, or raising MarkupError on a closing tag.
+            console.print(Text(message, style="dim"))
 
     def prompt_callback(message: str) -> bool:
         if _prompting_disabled(request):
