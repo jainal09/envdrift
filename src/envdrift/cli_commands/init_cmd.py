@@ -143,7 +143,9 @@ def _infer_type(value: str) -> tuple[str, object | None]:
     """
     if value.lower() in ("true", "false"):
         return "bool", value.lower() == "true"
-    if value.isascii() and value.isdigit() and (value == "0" or not value.startswith("0")):
+    if value.startswith("0") and value != "0":
+        return "str", None
+    if value.isascii() and value.isdigit():
         return "int", int(value)
     return "str", None
 
