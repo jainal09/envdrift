@@ -328,7 +328,12 @@ def _insert_hook_block(yaml_mod: Any, content: str, hook_ids: list[str], config_
     # Block-style sequence: append after its last item, before the next key.
     indent = _block_sequence_indent(repos_value)
     block = _render_repo_block(hook_ids, indent)
-    return _insert_lines(content, repos_value.end_mark.line, block)
+    end_mark = repos_value.end_mark
+    insert_line = end_mark.line
+    # Without a final newline, PyYAML's EOF mark is still on the last content line.
+    if end_mark.index == len(content) and end_mark.column:
+        insert_line += 1
+    return _insert_lines(content, insert_line, block)
 
 
 def install_hooks(
@@ -382,8 +387,18 @@ def install_hooks(
     new_content = _insert_hook_block(yaml_mod, content, missing, config_path)
 
     # Verify the post-condition before touching the file: the result must
-    # still parse and actually contain the hooks we set out to add.
+    # preserve existing values and contain the hooks we set out to add.
     new_config = _parse_precommit_config(yaml_mod, new_content, config_path)
+    existing_repos = config.get("repos") or []
+    preserved_config = {
+        **new_config,
+        "repos": (new_config.get("repos") or [])[: len(existing_repos)],
+    }
+    if preserved_config != {**config, "repos": existing_repos}:
+        raise PrecommitConfigError(
+            f"Failed to add envdrift hooks to {config_path}; existing configuration would change; "
+            "add them manually (see `envdrift hook --config`)"
+        )
     if not set(missing) <= _existing_envdrift_hook_ids(new_config):  # pragma: no cover - guard
         raise PrecommitConfigError(
             f"Failed to add envdrift hooks to {config_path}; "
