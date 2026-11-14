@@ -154,6 +154,11 @@ envdrift pull-partial --env production
   key, for example after a merge), the `.secret` file is put back byte for byte, so
   it stays encrypted and nothing is left half decrypted in a tracked file. The error
   names the value dotenvx could not decrypt.
+- A secret file that still holds ciphertext after dotenvx exits 0 is a failure, not
+  a decrypt. For a SOPS-encrypted `.secret`, which dotenvx cannot read, the error
+  says `it still holds SOPS ciphertext` and suggests
+  `envdrift decrypt <file> --backend sops`. The file is left as it was, is not
+  counted, and is not marked `skip-worktree`.
 - In secrets-only mode the pull stops at that file. The files decrypted before it
   are counted under `Decrypted:`, marked `skip-worktree`, and announced by the
   plaintext notice, which is shown even when the command exits 1.

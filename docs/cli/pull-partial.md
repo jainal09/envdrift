@@ -41,7 +41,8 @@ envdrift pull-partial --env production
 ```
 
 Partial encryption always uses dotenvx for decryption; there is no backend option
-to select.
+to select. A SOPS-encrypted secret file is reported as an error, not decrypted (see
+[When a decrypt fails](#when-a-decrypt-fails)).
 
 ## Configuration
 
@@ -134,6 +135,20 @@ and unprotected. The error names the value dotenvx could not decrypt:
 If envdrift cannot write the file back, the message says the file may now hold
 decrypted plaintext, marks it `skip-worktree`, and says whether that protection
 worked.
+
+`pull-partial` also reads each secret file back after dotenvx exits 0, because the
+exit code alone can lie. A SOPS-encrypted secret file is one example: dotenvx finds
+nothing it can decrypt, prints "no change" and exits 0. A file that still holds
+ciphertext is reported as a failure that names the file and the format. It is not
+counted as decrypted and not marked `skip-worktree`, and it is left as it was:
+
+```text
+✗ Failed to decrypt .env.production.secret: it still holds SOPS ciphertext. pull-partial decrypts with dotenvx,
+which does not read SOPS files; run `envdrift decrypt .env.production.secret --backend sops` instead.
+```
+
+Leftover dotenvx ciphertext is reported the same way (`it still holds dotenvx
+ciphertext`), which usually means the decryption key is missing or invalid.
 
 ## Exit Codes
 

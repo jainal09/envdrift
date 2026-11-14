@@ -9,6 +9,10 @@ outcome: the exit code, the summary, the bytes on disk, and git's view.
   tracked file that ``git add .`` staged, under ``Decrypted: 0``. The failed
   file must be left as it was; in secrets-only mode the files decrypted before
   it must be counted, protected, and announced by the plaintext notice.
+- #963: on a SOPS-encrypted secret file dotenvx finds nothing to decrypt,
+  prints "no change" and exits 0. ``pull-partial`` reported ``Decrypted: 1``,
+  exit 0, and marked the still-encrypted file skip-worktree. It must instead
+  fail, name the file and the format, and leave the file as it was.
 """
 
 from __future__ import annotations
@@ -265,3 +269,124 @@ class TestPartlyFailedPullPartial:
         summary = out.split("Partial Encryption Summary", 1)[1]
         assert "Decrypted: 1" in summary and "Errors: 1" in summary, out
         assert db.read_bytes() == db_committed
+
+
+# Age recipient shared with the SOPS e2e suites: encrypting needs only the
+# public key, and nothing here decrypts the SOPS file.
+_AGE_PUBLIC_KEY = "age1c89jtrvyl72y0muvdp5lm3jpemvc2gr303up4g37tuq4uftcku3q4svqau"
+
+
+def _sops_encrypt_in_place(path: Path) -> None:
+    """Encrypt a dotenv file in place with the real sops binary."""
+    sops = shutil.which("sops")
+    if sops is None:
+        pytest.skip("sops binary not installed (required for a real SOPS .secret)")
+    completed = subprocess.run(
+        [
+            sops,
+            "--encrypt",
+            "--age",
+            _AGE_PUBLIC_KEY,
+            "--input-type",
+            "dotenv",
+            "--output-type",
+            "dotenv",
+            "--in-place",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=path.parent,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "ENC[AES256_GCM," in path.read_text(encoding="utf-8")
+
+
+class TestSopsSecretFileIsNotReportedAsDecrypted:
+    """#963: a SOPS-encrypted secret file is a failure, never "Decrypted"."""
+
+    @pytest.mark.parametrize("crlf", [False, True], ids=["lf", "crlf"])
+    def test_combine_mode_reports_the_sops_file(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+        crlf: bool,
+    ) -> None:
+        (git_repo / "envdrift.toml").write_text(
+            "[partial_encryption]\n"
+            "enabled = true\n\n"
+            "[[partial_encryption.environments]]\n"
+            'name = "production"\n'
+            'clear_file = ".env.production.clear"\n'
+            'secret_file = ".env.production.secret"\n'
+            'combined_file = ".env.production"\n',
+            encoding="utf-8",
+        )
+        (git_repo / ".env.production.clear").write_text("DEBUG=false\n", encoding="utf-8")
+        secret = git_repo / ".env.production.secret"
+        secret.write_text(f"JWT_SECRET={_JWT_VALUE}\n", encoding="utf-8")
+        _sops_encrypt_in_place(secret)
+        if crlf:
+            secret.write_bytes(secret.read_bytes().replace(b"\n", b"\r\n"))
+        _git(git_repo, "add", ".env.production.secret", ".env.production.clear")
+        _git(git_repo, "commit", "-q", "-m", "SOPS-encrypted secret file")
+        committed = secret.read_bytes()
+
+        result = _run_envdrift(
+            ["pull-partial"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        out = _flat(result)
+        assert result.returncode == 1, out
+        assert "Decrypted: 0" in out and "Errors: 1" in out, out
+        assert ".env.production.secret: it still holds SOPS ciphertext" in out, out
+        assert "envdrift decrypt .env.production.secret --backend sops" in out, out
+        assert "SECRET FILES ARE NOW PLAINTEXT" not in out, out
+        # Left as it was (the wrapper's LF normalization undone) and not hidden
+        # from git as if it were a decrypted file.
+        assert secret.read_bytes() == committed
+        assert _skip_worktree_flag(git_repo, ".env.production.secret") == "H"
+
+    def test_secrets_only_reports_the_sops_file_and_counts_the_rest(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        (git_repo / "envdrift.toml").write_text(
+            "[partial_encryption]\n"
+            "enabled = true\n\n"
+            "[[partial_encryption.environments]]\n"
+            'name = "production"\n'
+            "secrets_only = true\n"
+            'secrets_dir = "secrets"\n',
+            encoding="utf-8",
+        )
+        secrets = git_repo / "secrets"
+        secrets.mkdir()
+        api = secrets / ".env.api"  # sorted first: dotenvx, decrypts
+        api.write_text(f"API_KEY={_API_VALUE}\n", encoding="utf-8")
+        _push(git_repo, integration_pythonpath=integration_pythonpath, envdrift_cmd=envdrift_cmd)
+        sops_file = secrets / ".env.sops"  # sorted second: SOPS
+        sops_file.write_text(f"DB_PASS={_DB_VALUE}\n", encoding="utf-8")
+        _sops_encrypt_in_place(sops_file)
+        _git(git_repo, "add", "secrets/.env.api", "secrets/.env.sops")
+        _git(git_repo, "commit", "-q", "-m", "dotenvx and SOPS secrets")
+        committed = sops_file.read_bytes()
+
+        result = _run_envdrift(
+            ["pull-partial"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        out = _flat(result)
+        assert result.returncode == 1, out
+        assert "Decrypted: 1" in out and "Errors: 1" in out, out
+        assert "secrets/.env.sops: it still holds SOPS ciphertext" in out, out
+        assert sops_file.read_bytes() == committed
+        assert _skip_worktree_flag(git_repo, "secrets/.env.sops") == "H"
+        assert _skip_worktree_flag(git_repo, "secrets/.env.api") == "S"

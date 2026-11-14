@@ -776,6 +776,8 @@ def test_pull_secrets_only_decrypts_encrypted_files(secrets_only_config, secrets
 
     with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
         instance = mock_dotenvx_cls.return_value
+        # Honest mock (#963): the simulated decrypt must leave no ciphertext.
+        instance.decrypt.side_effect = _honest_decrypt_in_place
         result = pull_secrets_only(secrets_only_config)
 
     assert result["decrypted"] == 2
@@ -1026,7 +1028,9 @@ def test_pull_partial_encryption_returns_true_when_was_encrypted(tmp_path: Path)
     config = PartialEncryptionEnvironmentConfig(
         name="test", clear_file="", secret_file=str(secret_file), combined_file=""
     )
-    with patch("envdrift.core.partial_encryption.DotenvxWrapper"):
+    with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls:
+        # Honest mock (#963): the simulated decrypt must leave no ciphertext.
+        mock_cls.return_value.decrypt.side_effect = _honest_decrypt_in_place
         assert pull_partial_encryption(config).was_decrypted is True
 
 
@@ -1072,9 +1076,12 @@ def test_decrypt_secret_file_calls_skip_worktree(tmp_path: Path):
         name="test", clear_file="", secret_file=str(secret_file), combined_file=""
     )
     with (
-        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls,
         patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
     ):
+        # Honest mock (#963): the simulated decrypt must leave no ciphertext,
+        # or the post-decrypt read-back (rightly) refuses to protect the file.
+        mock_cls.return_value.decrypt.side_effect = _honest_decrypt_in_place
         decrypt_secret_file(config)
 
     args = mock_run.call_args[0][0]
@@ -1182,9 +1189,12 @@ def test_pull_secrets_only_skip_worktrees_decrypted_files(secrets_only_config, s
         f.write_text(f.read_text() + 'KEY="encrypted:abc123"\n')
 
     with (
-        patch("envdrift.core.partial_encryption.DotenvxWrapper"),
+        patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_cls,
         patch("envdrift.core.partial_encryption.subprocess.run") as mock_run,
     ):
+        # Honest mock (#963): the simulated decrypt must leave no ciphertext,
+        # or the post-decrypt read-back (rightly) refuses to protect the file.
+        mock_cls.return_value.decrypt.side_effect = _honest_decrypt_in_place
         pull_secrets_only(secrets_only_config)
 
     calls = [call.args[0] for call in mock_run.call_args_list]
@@ -1253,6 +1263,8 @@ def test_pull_secrets_only_never_decrypts_keys_file(secrets_only_config, secrets
 
     with patch("envdrift.core.partial_encryption.DotenvxWrapper") as mock_dotenvx_cls:
         instance = mock_dotenvx_cls.return_value
+        # Honest mock (#963): the simulated decrypt must leave no ciphertext.
+        instance.decrypt.side_effect = _honest_decrypt_in_place
         result = pull_secrets_only(secrets_only_config)
 
     decrypted_paths = [call.args[0].name for call in instance.decrypt.call_args_list]
@@ -1474,6 +1486,26 @@ _DOTENVX_ENCRYPTED_SECRET = (
     "# .env.test\n"
     'DATABASE_URL="encrypted:BDaLMxznvYWcHP..."\n'
 )
+
+
+def _honest_decrypt_in_place(path: Path) -> None:
+    """Stand-in for a SUCCESSFUL dotenvx decrypt: ciphertext values -> plaintext.
+
+    #963 added a post-decrypt read-back (``is_file_encrypted``) to the pull
+    seam: a decrypt that exits 0 but leaves ciphertext (a SOPS file dotenvx
+    cannot read, a missing key) is now a failure. A bare ``MagicMock`` no-op
+    "decrypt" leaves the ciphertext in place and so correctly trips it. Mocks
+    that simulate a successful decrypt must therefore actually decrypt the file
+    ("make the mock honest"); only the dotenvx subprocess seam is faked.
+    """
+    lines = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        key, sep, value = raw.partition("=")
+        if sep and value.strip().strip('"').strip("'").startswith("encrypted:"):
+            lines.append(f"{key}=decrypted-stub")
+        else:
+            lines.append(raw)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _honest_encrypt_in_place(path: Path) -> None:

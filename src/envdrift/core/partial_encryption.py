@@ -182,6 +182,25 @@ class PartialEncryptionError(Exception):
         return cls(f"{message}\n{note}" if note else message)
 
     @classmethod
+    def still_encrypted(cls, path: Path, ciphertext: str, note: str) -> PartialEncryptionError:
+        """Create error for a decrypt that exited 0 but left ciphertext (#963).
+
+        ``ciphertext`` names the format still in the file (``_leftover_ciphertext``).
+        """
+        if ciphertext == "SOPS":
+            reason = (
+                "it still holds SOPS ciphertext. pull-partial decrypts with dotenvx, "
+                "which does not read SOPS files; run "
+                f"`envdrift decrypt {path} --backend sops` instead."
+            )
+        else:
+            reason = (
+                "it still holds dotenvx ciphertext after the decrypt. The decryption "
+                "key may be missing or invalid."
+            )
+        return cls(f"Failed to decrypt {path}: {reason}\n{note}")
+
+    @classmethod
     def file_not_found(cls, path: Path) -> PartialEncryptionError:
         """Create error for missing file."""
         return cls(f"Secret file not found: {path}")
@@ -690,6 +709,19 @@ class DecryptSnapshot:
         )
 
 
+def _leftover_ciphertext(file_path: Path) -> str | None:
+    """Name the ciphertext format still in ``file_path``, or None when it has none.
+
+    SOPS ciphertext carries the ``ENC[AES256_GCM,`` marker, which never occurs in
+    dotenvx ciphertext (base64 after ``encrypted:``), so its presence tells the
+    two formats apart.
+    """
+    if not is_file_encrypted(file_path):
+        return None
+    content = file_path.read_text(encoding="utf-8", errors="replace")
+    return "SOPS" if _SOPS_CIPHERTEXT_PREFIX in content else "dotenvx"
+
+
 def _decrypt_in_place(dotenvx: DotenvxWrapper, file: Path) -> None:
     """Decrypt ``file`` in place, leaving it as it was if the decrypt fails.
 
@@ -697,6 +729,13 @@ def _decrypt_in_place(dotenvx: DotenvxWrapper, file: Path) -> None:
     and exit 1; without the snapshot that plaintext stayed in the tracked file,
     unprotected, because the caller raised before marking it skip-worktree
     (#948). The error keeps dotenvx's reason, which names the value.
+
+    The exit code alone is not trusted either: on a SOPS-encrypted file dotenvx
+    finds nothing to decrypt, prints "no change" and exits 0, and it can exit 0
+    leaving its own ciphertext when the key is missing or invalid. The file is
+    read back, and if it still holds ciphertext it is put back as it was and
+    reported, so the caller neither counts it as decrypted nor marks it
+    skip-worktree (#963).
     """
     try:
         snapshot = DecryptSnapshot(file)
@@ -707,6 +746,9 @@ def _decrypt_in_place(dotenvx: DotenvxWrapper, file: Path) -> None:
             dotenvx.decrypt(file)
     except DotenvxError as e:
         raise PartialEncryptionError.decrypt_failed(file, e, snapshot.note) from e
+    ciphertext = _leftover_ciphertext(file)
+    if ciphertext:
+        raise PartialEncryptionError.still_encrypted(file, ciphertext, snapshot.restore())
 
 
 def _encrypt_and_verify(dotenvx: DotenvxWrapper, file: Path) -> None:
