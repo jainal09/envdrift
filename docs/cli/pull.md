@@ -20,6 +20,10 @@ The `pull` command is the recommended way to onboard new developers. It combines
 1. **Sync keys from vault** - Fetches `DOTENV_PRIVATE_KEY_*` secrets from cloud vaults and writes them to local `.env.keys` files
 2. **Decrypt env files** - Decrypts all `.env.<environment>` files for each configured service
 
+dotenvx decrypts with the keys file named by `[vault.sync] env_keys_filename` (default `.env.keys`) in each mapping's folder, the same file the sync
+step writes. When the keys file holds two different keys for a custom filename (the canonical `DOTENV_PRIVATE_KEY_<ENV>` and the one dotenvx wrote for
+the file), that file is reported as not decrypted and neither file is changed: keep the key your vault holds and delete the other line.
+
 Just run `envdrift pull` and all encrypted environment files are ready to use.
 
 Configuration is auto-discovered from:
@@ -264,6 +268,7 @@ The effective environment is resolved in this priority order:
 | 1    | Error (sync failure or decryption failure)                                      |
 | 1    | A mapping's `folder_path` does not exist (broken sync config, reported per row) |
 | 1    | A mapped env file cannot be read (e.g. not valid UTF-8) — clean per-file error  |
+| 1    | The keys file holds two different keys for a custom filename (not decrypted)    |
 
 ## Prerequisites
 

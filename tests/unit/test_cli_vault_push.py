@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -1269,3 +1273,226 @@ class TestVaultPushKeysFileReadErrors:
         assert "Cannot read" in out, out
         assert ".env.keys" in out, out
         assert not isinstance(result.exception, ValueError), result.exception
+
+
+class TestVaultPushAllKeyChecks:
+    """#938/#943: vault-push --all encrypts with the mapping's keys file and key,
+    never publishes an ambiguous or mismatched key, and reports each mapping.
+
+    The vault client and backend are mocked as value sources; keys and env files
+    are real files in ``tmp_path``.
+    """
+
+    @staticmethod
+    def _run(tmp_path, mappings, *, keys_filename=".env.keys", backend=None):
+        client = MagicMock()
+        client.get_secret.side_effect = SecretNotFoundError("missing")
+        backend = backend or DummyEncryptionBackend()
+        with (
+            patch(
+                "envdrift.cli_commands.sync.load_sync_config_and_client",
+                return_value=(
+                    SyncConfig(mappings=mappings, env_keys_filename=keys_filename),
+                    client,
+                    "azure",
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+            patch(
+                "envdrift.cli_commands.encryption_helpers.resolve_encryption_backend",
+                return_value=(backend, EncryptionProvider.DOTENVX, None),
+            ),
+        ):
+            result = runner.invoke(app, ["vault-push", "--all"])
+        return result, client, backend
+
+    def test_two_values_for_the_key_are_not_published(self, tmp_path):
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_text("A=encrypted:x\n", encoding="utf-8")
+        (folder / ".env.keys").write_text(
+            "DOTENV_PRIVATE_KEY_PRODUCTION=k1\nDOTENV_PRIVATE_KEY_PRODUCTION=k2\n",
+            encoding="utf-8",
+        )
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+
+        result, client, _ = self._run(tmp_path, [mapping])
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "Not pushed s" in out
+        assert "2 different values" in out
+        client.set_secret.assert_not_called()
+
+    def test_a_key_that_cannot_decrypt_the_file_is_not_published(self, tmp_path):
+        from tests.helpers import DOTENVX_KEY_PAIRS
+
+        (held, _), (_, other_public) = DOTENVX_KEY_PAIRS[0], DOTENVX_KEY_PAIRS[1]
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_text(
+            f'DOTENV_PUBLIC_KEY_PRODUCTION="{other_public}"\nA=encrypted:x\n', encoding="utf-8"
+        )
+        (folder / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={held}\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+
+        result, client, _ = self._run(tmp_path, [mapping])
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "is not encrypted with this key" in out
+        client.set_secret.assert_not_called()
+
+    def test_a_refused_key_change_is_reported_and_the_rest_still_runs(self, tmp_path):
+        """B3: a normalize conflict in one mapping does not abort the next one."""
+        bad = tmp_path / "bad"
+        bad.mkdir()
+        (bad / ".env.prod").write_text("A=encrypted:x\n", encoding="utf-8")
+        (bad / ".env.keys").write_text(
+            "DOTENV_PRIVATE_KEY_PRODUCTION=k1\n# .env.prod\nDOTENV_PRIVATE_KEY_PROD=k2\n",
+            encoding="utf-8",
+        )
+        bad_before = (bad / ".env.keys").read_bytes()
+        good = tmp_path / "good"
+        good.mkdir()
+        (good / ".env.production").write_text("B=encrypted:y\n", encoding="utf-8")
+        (good / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k3\n", encoding="utf-8")
+        mappings = [
+            ServiceMapping(
+                secret_name="bad",
+                folder_path=bad,
+                environment="production",
+                env_file=Path(".env.prod"),
+            ),
+            ServiceMapping(secret_name="good", folder_path=good, environment="production"),
+        ]
+
+        result, client, _ = self._run(tmp_path, mappings)
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "Error processing" in out
+        assert "holds two different keys for .env.prod" in out
+        assert "Pushed: 1" in out
+        assert "Errors: 1" in out
+        client.set_secret.assert_called_once_with("good", "DOTENV_PRIVATE_KEY_PRODUCTION=k3")
+        assert (bad / ".env.keys").read_bytes() == bad_before
+
+
+def test_single_push_refuses_two_values_for_the_key(tmp_path):
+    """#938: publishing the first of two values could hand the team the wrong key."""
+    (tmp_path / ".env.keys").write_text(
+        "DOTENV_PRIVATE_KEY_PRODUCTION=k1\nDOTENV_PRIVATE_KEY_PRODUCTION=k2\n", encoding="utf-8"
+    )
+
+    with patch("envdrift.vault.get_vault_client") as mock_get_client:
+        result = runner.invoke(
+            app,
+            [
+                "vault-push",
+                str(tmp_path),
+                "my-secret",
+                "--env",
+                "production",
+                "-p",
+                "azure",
+                "--vault-url",
+                "https://myvault.vault.azure.net/",
+            ],
+        )
+
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1, out
+    assert "2 different values" in out
+    assert "Nothing was pushed" in out
+    mock_get_client.return_value.set_secret.assert_not_called()
+
+
+@patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+@patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+def test_push_all_encrypts_with_the_configured_keys_file(
+    mock_loader, mock_resolve_backend, tmp_path
+):
+    """#943 + #938: dotenvx writes into the keys file whose key is then pushed,
+    and is told the mapping environment whose held key it must reuse."""
+    folder = tmp_path / "svc"
+    folder.mkdir()
+    (folder / ".env.production").write_text("A=1\n", encoding="utf-8")
+    (folder / ".secrets.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n", encoding="utf-8")
+    client = MagicMock()
+    client.get_secret.side_effect = SecretNotFoundError("missing")
+    mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+    mock_loader.return_value = (
+        SyncConfig(mappings=[mapping], env_keys_filename=".secrets.keys"),
+        client,
+        "azure",
+        None,
+        None,
+        None,
+    )
+    backend = DummyEncryptionBackend()
+    mock_resolve_backend.return_value = (backend, EncryptionProvider.DOTENVX, None)
+
+    result = runner.invoke(app, ["vault-push", "--all"])
+
+    assert result.exit_code == 0, result.output
+    assert backend.encrypt_kwargs == [
+        {"keys_file": folder / ".secrets.keys", "environment": "production"}
+    ]
+    client.set_secret.assert_called_once_with("s", "DOTENV_PRIVATE_KEY_PRODUCTION=k")
+
+
+_ASCII_LOCALE_ENV = {
+    "LC_ALL": "C",
+    "LANG": "C",
+    "LC_CTYPE": "C",
+    "PYTHONUTF8": "0",
+    "PYTHONIOENCODING": "ascii",
+}
+
+
+def test_push_all_reads_a_utf8_env_file_under_any_locale(tmp_path):
+    """vault-push --all reads the env file as UTF-8, whatever the locale (#474 family).
+
+    It decoded the file with the locale codec, so an encrypted file with a
+    non-ASCII comment raised UnicodeDecodeError under LC_ALL=C (and under
+    Windows cp1252: the UTF-8 form of the letter below holds byte 0x81, which
+    cp1252 does not define), and the mapping was never pushed.
+    """
+    env_file = tmp_path / ".env.production"
+    env_file.write_bytes(("# " + chr(0xC1) + "rea\nAPI_KEY=encrypted:abc\n").encode("utf-8"))
+    body = (
+        "from pathlib import Path\n"
+        "from envdrift.cli_commands.vault_helpers import (\n"
+        "    _BulkPushContext, _ensure_encrypted, _PushStats, _PushTarget,\n"
+        ")\n"
+        "from envdrift.encryption import EncryptionProvider\n"
+        "from envdrift.sync.config import ServiceMapping\n"
+        f"env_file = Path(r{str(env_file)!r})\n"
+        "mapping = ServiceMapping(\n"
+        "    secret_name='s', folder_path=env_file.parent, environment='production'\n"
+        ")\n"
+        "context = _BulkPushContext(\n"
+        "    sync_config=None, mappings=[mapping], client=None, vault_provider='azure',\n"
+        "    backend=None, backend_provider=EncryptionProvider.DOTENVX, sops_kwargs={},\n"
+        "    force=True, skip_encrypt=False,\n"
+        ")\n"
+        "target = _PushTarget(\n"
+        "    mapping=mapping, detection=None, env_file=env_file, environment='production'\n"
+        ")\n"
+        "stats = _PushStats()\n"
+        "assert _ensure_encrypted(context, target, stats) is True, stats\n"
+        "assert stats.errors == 0, stats\n"
+    )
+
+    result = subprocess.run(  # nosec B603
+        [sys.executable, "-c", body],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**os.environ, **_ASCII_LOCALE_ENV},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr

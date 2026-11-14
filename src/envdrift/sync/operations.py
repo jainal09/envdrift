@@ -5,13 +5,14 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
-import re
 import secrets
 import shutil
 import stat
 import tempfile
 from datetime import datetime
 from pathlib import Path
+
+from envdrift.integrations.dotenvx_keys import assignment_line_pattern, assignment_values
 
 # Per-process salt so the redaction digest is a within-run discriminator only
 # (local vs vault in the same output), never an offline brute-force / rainbow
@@ -44,56 +45,61 @@ class EnvKeysFile:
         """Check if the file exists."""
         return self.path.exists()
 
-    def read_key(self, key_name: str) -> str | None:
+    def read_values(self, key_name: str) -> list[str]:
         """
-        Read a specific key value from the file.
+        Return every value of ``key_name`` in the file, in file order.
 
-        Returns None if file doesn't exist or key not found.
+        The file is parsed exactly as dotenvx parses it (a BOM, ``export``,
+        spaces around ``=``, quotes and inline comments included), so the
+        values are the ones dotenvx would load (#938). dotenvx keeps every
+        value of a repeated name, so a second line is a second key, not a
+        replacement. Returns ``[]`` when the file or the key is absent.
+
+        Raises:
+            OSError: The path exists but cannot be read (e.g. a directory).
+            UnicodeDecodeError: The file is not valid UTF-8.
         """
         if not self.path.exists():
-            return None
-
+            return []
         # dotenvx (Node.js) reads/writes .env.keys as UTF-8, and the header now
         # contains a non-ASCII character — pin the codec so a non-UTF-8 locale
         # (Windows cp1252, LC_ALL=C) cannot raise UnicodeDecodeError (#474).
-        content = self.path.read_text(encoding="utf-8")
-        # ``(.*)`` (not ``(.+)``) so a present-but-empty value (``KEY=``) returns
-        # "" rather than None. None means "key absent"; conflating the two made
-        # an empty vault secret re-sync forever as CREATED and report a false
-        # "Key file does not exist" in verify-only mode (#413).
-        pattern = rf"^{re.escape(key_name)}=(.*)$"
+        return assignment_values(self.path.read_bytes().decode("utf-8"), key_name)
 
-        for line in content.splitlines():
-            match = re.match(pattern, line)
-            if match:
-                value = match.group(1).strip()
-                # Remove quotes if present
-                if (value.startswith('"') and value.endswith('"')) or (
-                    value.startswith("'") and value.endswith("'")
-                ):
-                    value = value[1:-1]
-                return value
+    def read_key(self, key_name: str) -> str | None:
+        """
+        Read a specific key value from the file: the first one, as dotenvx parses it.
 
-        return None
+        Returns None if file doesn't exist or key not found, and "" for a
+        present-but-empty value (``KEY=``): None means "key absent";
+        conflating the two made an empty vault secret re-sync forever as
+        CREATED and report a false "Key file does not exist" in verify-only
+        mode (#413). Use :meth:`read_values` to see every value.
+        """
+        values = self.read_values(key_name)
+        return values[0] if values else None
 
     def write_key(self, key_name: str, value: str, environment: str = "production") -> None:
         """
         Write/update a key, preserving existing content and header.
 
-        Creates the file with proper header if it doesn't exist.
+        Every line dotenvx would read as ``key_name`` (``export`` and spaces
+        around ``=`` included) is rewritten, so no older value is left behind
+        for dotenvx to load. Creates the file with proper header if it doesn't
+        exist.
         """
         if self.path.exists():
             # UTF-8 like dotenvx itself, regardless of the platform locale (#474).
-            content = self.path.read_text(encoding="utf-8")
+            content = self.path.read_bytes().decode("utf-8")
             lines = content.splitlines()
 
             # Check if key already exists
-            key_pattern = rf"^{re.escape(key_name)}="
+            key_pattern = assignment_line_pattern(key_name)
             key_found = False
             new_lines = []
 
             for line in lines:
-                if re.match(key_pattern, line):
+                if key_pattern.match(line):
                     new_lines.append(f"{key_name}={value}")
                     key_found = True
                 else:
@@ -135,12 +141,21 @@ class EnvKeysFile:
         overwritten (#413). The target path is claimed atomically with
         ``O_CREAT | O_EXCL`` so a concurrent ``envdrift`` run sharing the
         workspace can't slip a file in between the name choice and the copy.
+
+        A backup holds the same private keys as the file, and a ``.gitignore``
+        entry for ``.env.keys`` does not cover ``.env.keys.backup.<ts>``. So
+        before anything is copied, ``<name>.backup.*`` in this folder is added
+        to ``.gitignore`` when git would not already ignore it; if that fails,
+        no backup is made.
         """
         if not self.path.exists():
             raise FileNotFoundError(f"Cannot backup non-existent file: {self.path}")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}"
+        from envdrift.utils.git import ensure_gitignore_glob
+
+        ensure_gitignore_glob(backup_path, f"{self.path.name}.backup.*")
         counter = 1
         while True:
             try:

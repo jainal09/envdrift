@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess  # nosec B404
 import sys
 import tempfile
@@ -17,6 +18,7 @@ from envdrift.sync.operations import (
     atomic_write,
     redact_value,
 )
+from tests.helpers import DOTENVX_KEY_PAIRS
 
 
 def _fake_private_key(seed: str) -> str:
@@ -746,27 +748,111 @@ def test_read_key_reads_dotenvx_utf8_file_under_ascii_locale(tmp_path: Path) -> 
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_find_stale_private_key_name_reads_utf8_under_ascii_locale(tmp_path: Path) -> None:
-    """_find_stale_private_key_name must decode dotenvx UTF-8 keys files (#474).
+def test_relabel_reads_utf8_keys_file_under_ascii_locale(tmp_path: Path) -> None:
+    """lock's key re-label must decode dotenvx UTF-8 keys files (#474, #938).
 
-    Same family as the EnvKeysFile fixes: the helper scans raw .env.keys lines
-    for a stale ``DOTENV_PRIVATE_KEY_*`` name, and its bare ``read_text()``
-    raised UnicodeDecodeError on the non-ASCII header under LC_ALL=C.
+    Same family as the EnvKeysFile fixes: the helper reads the whole keys file
+    (with the non-ASCII header) to find which key the renamed file uses, and a
+    locale-codec ``read_text()`` raised UnicodeDecodeError under LC_ALL=C.
     """
+    private_key, public_key = DOTENVX_KEY_PAIRS[0]
     keys_path = tmp_path / ".env.keys"
     keys_path.write_bytes(
-        (DOTENVX_HEADER + "\n\n# .env.local\nDOTENV_PRIVATE_KEY_LOCAL=" + "a" * 64 + "\n").encode(
-            "utf-8"
-        )
+        (
+            DOTENVX_HEADER + "\n\n# .env.local\nDOTENV_PRIVATE_KEY_LOCAL=" + private_key + "\n"
+        ).encode("utf-8")
+    )
+    env_path = tmp_path / ".env.localenv"
+    env_path.write_text(
+        f'DOTENV_PUBLIC_KEY_LOCAL="{public_key}"\nA=encrypted:x\n', encoding="utf-8"
     )
     body = (
         "from pathlib import Path\n"
-        "from envdrift.cli_commands.sync import _find_stale_private_key_name\n"
-        f"stale = _find_stale_private_key_name(Path(r{str(keys_path)!r}), "
-        '"DOTENV_PRIVATE_KEY_LOCALENV")\n'
-        'assert stale == "DOTENV_PRIVATE_KEY_LOCAL", stale\n'
+        "from envdrift.cli_commands.sync_lock_relabel import relabel_dotenvx_key\n"
+        f"outcome = relabel_dotenvx_key(Path(r{str(env_path)!r}), Path(r{str(keys_path)!r}), "
+        '"DOTENV_PRIVATE_KEY_LOCALENV", apply=False)\n'
+        'assert outcome.action == "planned", outcome\n'
+        'assert outcome.old_name == "DOTENV_PRIVATE_KEY_LOCAL", outcome\n'
     )
 
     result = _run_under_ascii_locale(body)
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# #938 (S2): EnvKeysFile reads and rewrites key lines the way dotenvx reads them
+# ---------------------------------------------------------------------------
+
+
+def test_read_values_returns_every_value_as_dotenvx_reads_it(tmp_path: Path) -> None:
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text(
+        chr(0xFEFF) + "DOTENV_PRIVATE_KEY_PRODUCTION=first # comment\n"
+        "export DOTENV_PRIVATE_KEY_PRODUCTION = 'second'\n",
+        encoding="utf-8",
+    )
+    keys = EnvKeysFile(keys_path)
+
+    assert keys.read_values("DOTENV_PRIVATE_KEY_PRODUCTION") == ["first", "second"]
+    assert keys.read_key("DOTENV_PRIVATE_KEY_PRODUCTION") == "first"
+    assert EnvKeysFile(tmp_path / "missing").read_values("X") == []
+
+
+def test_write_key_rewrites_every_line_a_reader_would_load(tmp_path: Path) -> None:
+    """An ``export`` or spaced line is the same key: rewrite it, never append a second."""
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text(
+        "# .env.production\nexport DOTENV_PRIVATE_KEY_PRODUCTION = old\n", encoding="utf-8"
+    )
+
+    EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new")
+
+    assert keys_path.read_text(encoding="utf-8") == (
+        "# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION=new\n"
+    )
+
+
+def _git_init(path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)  # nosec B603 B607
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_create_backup_is_gitignored_before_it_is_written(tmp_path: Path) -> None:
+    """N2: a ``.env.keys`` entry does not cover ``.env.keys.backup.<ts>``."""
+    _git_init(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env.keys\n", encoding="utf-8")
+    folder = tmp_path / "svc"
+    folder.mkdir()
+    keys_path = folder / ".env.keys"
+    keys_path.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n", encoding="utf-8")
+
+    backup = EnvKeysFile(keys_path).create_backup()
+
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == (
+        ".env.keys\nsvc/.env.keys.backup.*\n"
+    )
+    check = subprocess.run(  # nosec B603 B607
+        ["git", "check-ignore", "-q", backup.relative_to(tmp_path).as_posix()], cwd=tmp_path
+    )
+    assert check.returncode == 0
+    # A second backup needs no new entry.
+    EnvKeysFile(keys_path).create_backup()
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").count("backup") == 1
+
+
+def test_create_backup_makes_no_copy_when_gitignore_cannot_be_updated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n", encoding="utf-8")
+
+    def unwritable(*args, **kwargs):
+        raise PermissionError(".gitignore is read-only")
+
+    monkeypatch.setattr("envdrift.utils.git.ensure_gitignore_glob", unwritable)
+
+    with pytest.raises(PermissionError):
+        EnvKeysFile(keys_path).create_backup()
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]

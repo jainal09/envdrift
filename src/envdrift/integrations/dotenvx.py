@@ -21,6 +21,7 @@ import sys
 import tempfile
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
@@ -29,6 +30,17 @@ from envdrift.install_integrity import (
     ChecksumVerificationError,
     atomic_install,
     verify_download,
+)
+from envdrift.integrations.dotenvx_keys import (
+    KeyReuseError,
+    KeyReusePlan,
+    assignment_values,
+    distinct_keys,
+    dotenvx_key_names,
+    key_outcome_problem,
+    parse_assignments,
+    plan_key_reuse,
+    private_key_candidates,
 )
 from envdrift.utils.text import strip_ansi
 
@@ -108,6 +120,17 @@ class DotenvxError(Exception):
     pass
 
 
+class DotenvxKeyError(DotenvxError):
+    """envdrift refused a dotenvx key change, and left both files as they were.
+
+    Raised when the keys file cannot tell which key a file must be encrypted
+    with, when ``dotenvx encrypt`` created or replaced a key instead of using
+    the one the folder holds (#938), or when normalizing a custom filename
+    would write one key over a different one. The message describes the state
+    of the files, so every command can show it as it is.
+    """
+
+
 class DotenvxInstallError(Exception):
     """Failed to install dotenvx."""
 
@@ -182,8 +205,17 @@ def _sibling_env_keys_file(env_file: Path, env_keys_file: Path | str | None) -> 
     return env_keys_file
 
 
-_PUBLIC_KEY_NAME_RE = re.compile(r"\bDOTENV_PUBLIC_KEY_[A-Za-z0-9_-]+=")
-_PRIVATE_KEY_LINE_RE = re.compile(r"^DOTENV_PRIVATE_KEY_[A-Za-z0-9_-]+=(.*)$")
+# A public-key assignment at the start of an env-file line, as dotenvx parses
+# one: optional leading whitespace or BOM, optional ``export``, then the name.
+_PUBLIC_KEY_NAME_LINE_RE = re.compile(
+    r"^(?P<head>[ \t\ufeff]*(?:export[ \t]+)?)DOTENV_PUBLIC_KEY(?:_[A-Za-z0-9_.-]+)?"
+    r"(?P<tail>[ \t]*(?:=|:[ \t]))"
+)
+# The same for a private key in ``.env.keys``; ``name`` is the whole key name.
+_PRIVATE_KEY_NAME_LINE_RE = re.compile(
+    r"^(?P<head>[ \t\ufeff]*(?:export[ \t]+)?)(?P<name>DOTENV_PRIVATE_KEY(?:_[A-Za-z0-9_.-]+)?)"
+    r"(?P<tail>[ \t]*(?:=|:[ \t]).*)$"
+)
 
 # A private-key assignment as dotenvx writes it into ``.env.keys``: bare
 # ``DOTENV_PRIVATE_KEY=`` (for a plain ``.env``) or ``DOTENV_PRIVATE_KEY_<SLUG>=``,
@@ -208,6 +240,104 @@ def dotenvx_filename_needs_normalization(env_file: Path | str, environment: str)
     return name != ".env" and name != f".env.{environment}"
 
 
+def _decode_utf8(data: bytes, path: Path) -> str:
+    """Decode ``data`` as UTF-8 (BOM kept), raising ValueError naming ``path``."""
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{path} is not valid UTF-8 ({exc.reason})") from None
+
+
+def _canonical_env_text(
+    text: str, custom_comment: str, canonical_comment: str, public_key: str
+) -> str:
+    """Rename the dotenvx filename comment and public-key names in an env file.
+
+    Line-anchored and split on ``\\n`` only, so a value holding another line
+    separator, a ``\\r`` line ending or prose that mentions a key name is never
+    touched.
+    """
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        body = line[:-1] if line.endswith("\r") else line
+        ending = line[len(body) :]
+        if body.strip() == custom_comment:
+            lines[index] = canonical_comment + ending
+            continue
+        match = _PUBLIC_KEY_NAME_LINE_RE.match(body)
+        if match:
+            lines[index] = f"{match.group('head')}{public_key}{match.group('tail')}" + (
+                body[match.end() :] + ending
+            )
+    return "\n".join(lines)
+
+
+def _generated_key_line(lines: list[str], custom_comment: str) -> tuple[int, int, str, str] | None:
+    """Find the key dotenvx wrote under ``# <custom filename>`` in ``.env.keys``.
+
+    Returns ``(comment_index, line_index, name, value)`` for the first
+    private-key line after the comment (blank lines skipped, another comment
+    ends the search), or ``None``.
+    """
+    comment_index = next(
+        (index for index, line in enumerate(lines) if line.strip() == custom_comment), None
+    )
+    if comment_index is None:
+        return None
+    for index in range(comment_index + 1, len(lines)):
+        stripped = lines[index].strip()
+        if not stripped:
+            continue
+        match = _PRIVATE_KEY_NAME_LINE_RE.match(lines[index].rstrip("\r"))
+        if stripped.startswith("#") or match is None:
+            return None
+        values = assignment_values(lines[index], match.group("name"))
+        return comment_index, index, match.group("name"), values[0] if values else ""
+    return None
+
+
+def _canonical_keys_text(
+    text: str,
+    env_file: Path,
+    keys_file: Path,
+    environment: str,
+) -> str:
+    """Rename the key dotenvx generated for ``env_file`` to the canonical name.
+
+    Never writes one key over another: when the canonical name already holds a
+    different key, both stay and :class:`DotenvxKeyError` is raised (#938).
+    """
+    canonical_private = f"DOTENV_PRIVATE_KEY_{environment.upper()}"
+    lines = text.split("\n")
+    generated = _generated_key_line(lines, f"# {env_file.name}")
+    if generated is None:
+        return text
+    comment_index, line_index, name, value = generated
+    if name == canonical_private:
+        lines[comment_index] = f"# .env.{environment}"
+        return "\n".join(lines)
+    held = distinct_keys(private_key_candidates(parse_assignments(text).get(canonical_private, [])))
+    if held and (len(held) > 1 or distinct_keys([*held, value]) != held):
+        raise DotenvxKeyError(
+            f"{keys_file} holds two different keys for {env_file.name}: "
+            f"{canonical_private} and {name} (written under '# {env_file.name}'). "
+            f"envdrift will not write one over the other, so both files were left as "
+            f"they are. Keep the key your vault holds for {canonical_private}, delete "
+            f"the other line, and re-run."
+        )
+    if held:
+        # The same key under both names: drop the duplicate dotenvx wrote.
+        del lines[line_index]
+        del lines[comment_index]
+        return "\n".join(lines)
+    match = _PRIVATE_KEY_NAME_LINE_RE.match(lines[line_index].rstrip("\r"))
+    if match is not None:
+        ending = lines[line_index][len(lines[line_index].rstrip("\r")) :]
+        lines[line_index] = f"{match.group('head')}{canonical_private}{match.group('tail')}{ending}"
+    lines[comment_index] = f"# .env.{environment}"
+    return "\n".join(lines)
+
+
 def normalize_dotenvx_metadata(
     env_file: Path | str,
     env_keys_file: Path | str,
@@ -220,80 +350,49 @@ def normalize_dotenvx_metadata(
     filename. Vault sync uses the configured mapping environment as the source of
     truth, so mapped custom filenames are normalized back to
     ``DOTENV_*_<environment>`` after dotenvx runs.
+
+    Both new contents are computed before anything is written. A key dotenvx
+    generated is renamed to the canonical name only when that name is free or
+    already holds the same key; a different held key is never overwritten
+    (#938) and :class:`DotenvxKeyError` leaves both files untouched. Files are
+    written as bytes, so Windows newline translation cannot turn ``\\n`` into
+    ``\\r\\n``, and a failed second write puts the first file back.
+
+    Raises:
+        DotenvxKeyError: ``.env.keys`` holds a different key under the canonical name.
+        OSError: A file cannot be read or written.
+        ValueError: A file is not valid UTF-8.
     """
     env_file = Path(env_file)
     env_keys_file = Path(env_keys_file)
-    canonical_suffix = environment.upper()
-    canonical_public_key = f"DOTENV_PUBLIC_KEY_{canonical_suffix}"
-    canonical_private_key = f"DOTENV_PRIVATE_KEY_{canonical_suffix}"
     custom_comment = f"# {env_file.name}"
     canonical_comment = f"# .env.{environment}"
+    canonical_public = f"DOTENV_PUBLIC_KEY_{environment.upper()}"
 
+    planned: list[tuple[Path, bytes, bytes]] = []
+    if env_keys_file.exists():
+        keys_before = env_keys_file.read_bytes()
+        keys_text = _decode_utf8(keys_before, env_keys_file)
+        keys_after = _canonical_keys_text(keys_text, env_file, env_keys_file, environment)
+        planned.append((env_keys_file, keys_before, keys_after.encode("utf-8")))
     if env_file.exists():
-        content = env_file.read_text(encoding="utf-8")
-        rewritten = []
-        for line in content.splitlines():
-            # Line-anchored: only rewrite the dotenvx filename comment and the
-            # public-key assignment line, never substrings of unrelated prose.
-            if line.strip() == custom_comment:
-                rewritten.append(canonical_comment)
-            else:
-                rewritten.append(_PUBLIC_KEY_NAME_RE.sub(f"{canonical_public_key}=", line))
-        new_content = "\n".join(rewritten)
-        if content.endswith("\n"):
-            new_content += "\n"
-        if new_content != content:
-            env_file.write_text(new_content, encoding="utf-8")
+        env_before = env_file.read_bytes()
+        env_text = _decode_utf8(env_before, env_file)
+        env_after = _canonical_env_text(
+            env_text, custom_comment, canonical_comment, canonical_public
+        )
+        planned.append((env_file, env_before, env_after.encode("utf-8")))
 
-    if not env_keys_file.exists():
-        return
-
-    content = env_keys_file.read_text(encoding="utf-8")
-    lines = content.splitlines()
-
-    canonical_idx = next(
-        (i for i, line in enumerate(lines) if line.startswith(f"{canonical_private_key}=")),
-        None,
-    )
-    custom_comment_idx = next(
-        (i for i, line in enumerate(lines) if line.strip() == custom_comment),
-        None,
-    )
-
-    generated_idx = None
-    key_value = ""
-    if custom_comment_idx is not None:
-        for i in range(custom_comment_idx + 1, len(lines)):
-            stripped = lines[i].strip()
-            if not stripped:
-                continue
-            if stripped.startswith("#"):
-                break
-            match = _PRIVATE_KEY_LINE_RE.match(stripped)
-            if match:
-                generated_idx = i
-                key_value = match.group(1)
-            break
-
-    if generated_idx is None:
-        return
-    if canonical_idx is not None and canonical_idx != generated_idx:
-        lines[canonical_idx] = f"{canonical_private_key}={key_value}"
-        indexes_to_delete = [generated_idx]
-        if custom_comment_idx is not None:
-            indexes_to_delete.append(custom_comment_idx)
-        for idx in sorted(indexes_to_delete, reverse=True):
-            del lines[idx]
-    else:
-        if custom_comment_idx is not None:
-            lines[custom_comment_idx] = canonical_comment
-        lines[generated_idx] = f"{canonical_private_key}={key_value}"
-
-    new_content = "\n".join(lines)
-    if content.endswith("\n"):
-        new_content += "\n"
-    if new_content != content:
-        env_keys_file.write_text(new_content, encoding="utf-8")
+    written: list[tuple[Path, bytes]] = []
+    try:
+        for path, before, after in planned:
+            if after != before:
+                path.write_bytes(after)
+                written.append((path, before))
+    except OSError:
+        for path, before in reversed(written):
+            path.write_bytes(before)
+        raise
 
 
 def get_platform_info() -> tuple[str, str]:
@@ -416,6 +515,82 @@ def get_dotenvx_path() -> Path:
     bin_dir = get_venv_bin_dir()
     binary_name = "dotenvx.exe" if platform.system() == "Windows" else "dotenvx"
     return bin_dir / binary_name
+
+
+def _read_text_for_check(path: Path) -> str | None:
+    """Read ``path`` as UTF-8 text, or ``None`` when it cannot be read."""
+    try:
+        return path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+@dataclass(frozen=True)
+class _EncryptSnapshot:
+    """The bytes of an env file and its keys file before ``encrypt`` touched them."""
+
+    env_file: Path
+    env_bytes: bytes
+    keys_file: Path
+    keys_bytes: bytes | None
+    keys_text: str | None
+
+    @classmethod
+    def take(cls, env_file: Path, keys_file: Path) -> _EncryptSnapshot:
+        """Read both files, failing cleanly on a keys file dotenvx could not use.
+
+        A keys file that is a directory, unreadable or not UTF-8 raises
+        ``DotenvxError`` instead of a traceback, before anything changed.
+        """
+        try:
+            env_bytes = env_file.read_bytes()
+        except OSError as exc:
+            raise DotenvxError(f"Cannot read {env_file}: {exc.strerror or exc}") from None
+        if not keys_file.exists():
+            return cls(env_file, env_bytes, keys_file, None, None)
+        try:
+            keys_bytes = keys_file.read_bytes()
+            keys_text = keys_bytes.decode("utf-8")
+        except OSError as exc:
+            raise DotenvxError(
+                f"Cannot read the keys file {keys_file}: {exc.strerror or exc}. "
+                f"Nothing was changed."
+            ) from None
+        except UnicodeDecodeError:
+            raise DotenvxError(
+                f"Cannot read the keys file {keys_file}: it is not valid UTF-8. "
+                f"Nothing was changed."
+            ) from None
+        return cls(env_file, env_bytes, keys_file, keys_bytes, keys_text)
+
+    def restore(self) -> None:
+        """Put both files back exactly as they were (a created keys file goes).
+
+        Raises:
+            DotenvxError: A file could not be put back; the message says which.
+        """
+        try:
+            if _read_bytes_or_none(self.env_file) != self.env_bytes:
+                self.env_file.write_bytes(self.env_bytes)
+            current_keys = _read_bytes_or_none(self.keys_file)
+            if self.keys_bytes is None:
+                if current_keys is not None:
+                    self.keys_file.unlink()
+            elif current_keys != self.keys_bytes:
+                self.keys_file.write_bytes(self.keys_bytes)
+        except OSError as exc:
+            raise DotenvxError(
+                f"Could not put {self.env_file} and {self.keys_file} back after a failed "
+                f"encryption: {exc}"
+            ) from exc
+
+
+def _read_bytes_or_none(path: Path) -> bytes | None:
+    """Return the bytes of ``path``, or ``None`` when it does not exist as a file."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
 
 
 class DotenvxInstaller:
@@ -936,68 +1111,70 @@ class DotenvxWrapper:
                 "lock out every file encrypted with its keys."
             )
 
-    # Regex pattern for dotenvx public key header blocks
+    # A public-key header block as dotenvx writes it (prependPublicKey): the
+    # four-line banner, the DOTENV_PUBLIC_KEY* line (with dotenvx's optional
+    # " # -fk <path>" hint), a blank line and the "# <filename>" line.
     DOTENVX_HEADER_BLOCK_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
         r"#/---+\[DOTENV_PUBLIC_KEY\]---+/\n"
         r"#/[^\n]+/\n"
         r"#/[^\n]+/\n"
         r"#/---+/\n"
-        r'DOTENV_PUBLIC_KEY_(\w+)="[^"]+"\n\n'
-        r"# \.env\.(\w+)\n",
-        re.MULTILINE,
+        r'(DOTENV_PUBLIC_KEY[A-Za-z0-9_.-]*)="[^"\n]*"[^\n]*\n'
+        r"\n"
+        r"# [^\n]*\n",
     )
 
     @classmethod
-    def _clean_mismatched_headers(cls, file_path: Path) -> bool:
-        """
-        Remove dotenvx header blocks that don't match the current filename.
+    def _clean_mismatched_header_text(
+        cls, text: str, filename: str, environment: str | None = None
+    ) -> str:
+        """Drop another file's header block, but only next to this file's own one.
 
-        When a file is renamed (e.g., .env.local -> .env.localenv), dotenvx
-        prepends a new header block without removing the old one, causing
-        duplicate headers. This method removes any header blocks where the
-        environment suffix doesn't match the current filename.
+        dotenvx 1.x prepended a new header to a renamed file and kept the old
+        one, so a file could carry two blocks. Removing the old block is safe
+        only when the file's own block is there to replace it. A lone header
+        under another name still holds the public key the file's values were
+        encrypted with, and removing it made dotenvx create a new key next to
+        the folder's key (#938), so it stays. A block is the file's own when its
+        name is the one dotenvx derives from the filename or, for a mapped
+        file, the canonical ``DOTENV_PUBLIC_KEY_<ENVIRONMENT>``.
+        """
+        own = {dotenvx_key_names(filename)[0]}
+        if environment:
+            own.add(f"DOTENV_PUBLIC_KEY_{environment.upper()}")
+        blocks = list(cls.DOTENVX_HEADER_BLOCK_PATTERN.finditer(text))
+        stale = [block for block in blocks if block.group(1) not in own]
+        if not stale or len(stale) == len(blocks):
+            return text
+        cleaned = text
+        for block in reversed(stale):
+            cleaned = cleaned[: block.start()] + cleaned[block.end() :]
+        return cleaned.lstrip("\n")
+
+    @classmethod
+    def _clean_mismatched_headers(cls, file_path: Path, environment: str | None = None) -> bool:
+        """
+        Remove another file's header blocks when this file's own header is present.
+
+        See :meth:`_clean_mismatched_header_text`. The file is rewritten as
+        bytes, so Windows newline translation cannot change its line endings.
 
         Parameters:
             file_path (Path): Path to the env file to clean.
+            environment (str | None): The mapping environment, for a mapped file.
 
         Returns:
             bool: True if any headers were removed, False otherwise.
         """
         try:
-            content = file_path.read_text(encoding="utf-8")
-        except OSError:
+            content = file_path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
             return False
-
-        # Extract expected environment from filename (e.g., .env.localenv -> localenv)
-        filename = file_path.name
-        if filename.startswith(".env."):
-            expected_env = filename[5:].lower()  # Remove ".env." prefix
-        elif filename == ".env":
-            expected_env = ""
-        else:
-            return False  # Not a .env file
-
-        # Find all header blocks and check for mismatches
-        modified = False
-        new_content = content
-
-        for match in cls.DOTENVX_HEADER_BLOCK_PATTERN.finditer(content):
-            key_env = match.group(1).lower()  # Environment from DOTENV_PUBLIC_KEY_XXX
-            comment_env = match.group(2).lower()  # Environment from # .env.xxx comment
-
-            # If the key/comment environment doesn't match the filename, remove this block
-            if key_env != expected_env or comment_env != expected_env:
-                new_content = new_content.replace(match.group(0), "")
-                modified = True
-
-        if modified:
-            # Clean up any resulting double newlines
-            while "\n\n\n" in new_content:
-                new_content = new_content.replace("\n\n\n", "\n\n")
-            new_content = new_content.lstrip("\n")
-            file_path.write_text(new_content, encoding="utf-8")
-
-        return modified
+        cleaned = cls._clean_mismatched_header_text(content, file_path.name, environment)
+        if cleaned == content:
+            return False
+        file_path.write_bytes(cleaned.encode("utf-8"))
+        return True
 
     def _raise_on_error_output(self, result: subprocess.CompletedProcess, action: str) -> None:
         """Raise ``DotenvxError`` if a dotenvx run reported a failure.
@@ -1031,22 +1208,39 @@ class DotenvxWrapper:
         env_keys_file: Path | str | None = None,
         env: dict[str, str] | None = None,
         cwd: Path | str | None = None,
+        environment: str | None = None,
     ) -> None:
         """
-        Encrypt the specified .env file in place.
+        Encrypt the specified .env file in place, with the key the folder holds.
 
         Automatically normalizes line endings to Unix-style (LF) before encryption
         to ensure cross-platform compatibility with dotenvx.
+
+        dotenvx 2.x creates a brand-new key whenever the file carries no public
+        key, even when ``.env.keys`` already holds the file's key (#938). So
+        before dotenvx runs, the key the keys file holds for this file is looked
+        up (``DOTENV_PRIVATE_KEY_<ENVIRONMENT>`` for a mapped file, else the name
+        dotenvx gives the filename) and the file's header is seeded with its
+        public key; see :func:`~envdrift.integrations.dotenvx_keys.plan_key_reuse`.
+        dotenvx is not trusted afterwards either: when a held key ends up
+        replaced or joined by another value, a new key appears although one was
+        held, or a failed run leaves anything behind, both files are put back
+        byte for byte (as they were before line endings were normalized) and
+        the call fails.
 
         Parameters:
             env_file (Path | str): Path to the .env file to encrypt.
             env_keys_file (Path | str | None): Optional path to the .env.keys file to use.
             env (dict[str, str] | None): Optional environment variables for the subprocess.
             cwd (Path | str | None): Optional working directory for the subprocess.
+            environment (str | None): The mapping environment of a mapped file, whose
+                key the folder holds as ``DOTENV_PRIVATE_KEY_<ENVIRONMENT>``.
 
         Raises:
             DotenvxFilenameError: If the filename is not compatible with dotenvx.
-            DotenvxError: If the file does not exist or the encryption command fails.
+            DotenvxKeyError: If the keys file cannot tell which key to use, or
+                dotenvx did not use it. Both files are left as they were.
+            DotenvxError: If a file cannot be read or the encryption command fails.
         """
         env_file = Path(env_file)
         if not env_file.exists():
@@ -1064,29 +1258,95 @@ class DotenvxWrapper:
         # this wrapper directly, not the guarded backend (#443/#457, #467).
         self._validate_encryptable_filename(env_file)
 
-        # Normalize CRLF -> LF before encryption so a file encrypted on Windows
-        # decrypts cleanly on Linux/macOS and vice versa (cross-platform
-        # consistency; unrelated to any specific dotenvx version).
-        self._normalize_line_endings(env_file)
-
-        # Clean up mismatched headers from renamed files
-        # When a file is renamed (e.g., .env.local -> .env.localenv), dotenvx
-        # prepends a new header without removing the old one, causing duplicates
-        self._clean_mismatched_headers(env_file)
-
         # Pin -fk to the sibling .env.keys: dotenvx v2 otherwise writes the key
         # store into the process cwd (v1 kept it next to the file), scattering a
         # subfolder file's private key away from it (#566).
-        env_keys_file = _sibling_env_keys_file(env_file, env_keys_file)
+        keys_file = Path(_sibling_env_keys_file(env_file, env_keys_file))
+
+        # Snapshot both files before anything changes, so every refusal or
+        # failure below restores the exact original bytes (CRLF included).
+        snapshot = _EncryptSnapshot.take(env_file, keys_file)
+        plan = self._plan_encryption(env_file, keys_file, snapshot, environment)
 
         # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
         # misparses them as flags and fabricates a different file (#474).
         args = ["encrypt", "-f", _dash_safe_path(env_file)]
-        args.extend(["-fk", _dash_safe_path(env_keys_file)])
+        args.extend(["-fk", _dash_safe_path(keys_file)])
 
-        # Run with check=False to handle exit code 0 errors ourselves
-        result = self._run(args, env=env, cwd=cwd, check=False)
-        self._raise_on_error_output(result, "encryption")
+        try:
+            self._stage(env_file, plan.env_text.encode("utf-8"), snapshot)
+            # Run with check=False to handle exit code 0 errors ourselves
+            result = self._run(args, env=env, cwd=cwd, check=False)
+            self._raise_on_error_output(result, "encryption")
+            problem = self._key_outcome_problem(plan, snapshot)
+        except BaseException:
+            snapshot.restore()
+            raise
+        if problem is not None:
+            snapshot.restore()
+            raise DotenvxKeyError(
+                f"Refusing to keep the encryption of {env_file}: {problem}. Both "
+                f"{env_file.name} and {keys_file} were put back as they were."
+            )
+
+    @staticmethod
+    def _stage(env_file: Path, staged: bytes, snapshot: _EncryptSnapshot) -> None:
+        """Write the prepared text for dotenvx, failing cleanly when it cannot."""
+        if staged == snapshot.env_bytes:
+            return
+        try:
+            env_file.write_bytes(staged)
+        except OSError as exc:
+            raise DotenvxError(f"Cannot write {env_file}: {exc.strerror or exc}") from None
+
+    def _plan_encryption(
+        self,
+        env_file: Path,
+        keys_file: Path,
+        snapshot: _EncryptSnapshot,
+        environment: str | None,
+    ) -> KeyReusePlan:
+        """Prepare the text dotenvx will encrypt, refusing before anything is written.
+
+        Line endings are normalized (CRLF/CR -> LF, so a file encrypted on
+        Windows decrypts on Linux/macOS), another file's stale header is dropped
+        when the file's own one is present, and the header is seeded or
+        corrected for the held key.
+        """
+        try:
+            env_text = snapshot.env_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            raise DotenvxError(
+                f"Cannot encrypt {env_file}: it is not valid UTF-8, and dotenvx would "
+                f"replace its undecodable bytes. Nothing was changed."
+            ) from None
+        env_text = env_text.replace("\r\n", "\n").replace("\r", "\n")
+        env_text = self._clean_mismatched_header_text(env_text, env_file.name, environment)
+        if environment:
+            key_name = f"DOTENV_PRIVATE_KEY_{environment.upper()}"
+        else:
+            key_name = dotenvx_key_names(env_file)[1]
+        try:
+            return plan_key_reuse(
+                env_text,
+                snapshot.keys_text,
+                env_file=env_file,
+                keys_file=keys_file,
+                key_name=key_name,
+            )
+        except KeyReuseError as exc:
+            raise DotenvxKeyError(f"{exc} Nothing was changed.") from None
+
+    @staticmethod
+    def _key_outcome_problem(plan: KeyReusePlan, snapshot: _EncryptSnapshot) -> str | None:
+        """Re-read both files after dotenvx and describe any broken key promise."""
+        env_after = _read_text_for_check(snapshot.env_file)
+        keys_after = (
+            _read_text_for_check(snapshot.keys_file) if snapshot.keys_file.exists() else None
+        )
+        if env_after is None or (snapshot.keys_file.exists() and keys_after is None):
+            return "the files could not be read back after dotenvx ran"
+        return key_outcome_problem(plan, snapshot.keys_text, keys_after, env_after)
 
     def decrypt(
         self,

@@ -46,6 +46,31 @@ def version_tuple(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
 
 
+# secp256k1 key pairs minted by the real dotenvx binary (``dotenvx encrypt`` of a
+# scratch ``.env``): the DOTENV_PRIVATE_KEY it saved and the DOTENV_PUBLIC_KEY it
+# wrote into the file. Split in halves so no whole key literal is in the source
+# (push protection). Tests derive public keys with envdrift's own arithmetic and
+# check it against these dotenvx-made pairs.
+DOTENVX_KEY_PAIRS: tuple[tuple[str, str], ...] = (
+    (
+        "8d035dcb76ef61ce6421cca90802489d" + "341d19fa58ec886f781f68f61ac6f374",
+        "03e0f88dd23b3a2444ddcb00e5427bcf3" + "9677e45c4ecf3454979812b89c2326819",
+    ),
+    (
+        "32a511ac477afab9f2f7e20a58f2375d" + "2069d38a58208f7d81ce31124665609f",
+        "024419652e149b752e5c9b0d89e68a1e3" + "c1dd93772fd12d592d9c7a55395cec521",
+    ),
+    (
+        "bb0a4f70aebc97170fa607766207577a" + "acbc1e97f1fa16ac5448a5331f074557",
+        "03113cdc847cd8e1464e4b0f035d7a5b1" + "f0004d997f9f13ce4bf4b2463d0dfaf7c",
+    ),
+    (
+        "908c71d57aea0f21553dd1b680212f94" + "5acafd9cdaf4d76fcbc026e4200cb2b8",
+        "028433c0817ba0277b4a2acd80a20df3e" + "0bac8075c82c81e9e4b200c122b4e3b69",
+    ),
+)
+
+
 class DummyEncryptionBackend:
     """Minimal encryption backend for unit tests."""
 

@@ -471,6 +471,39 @@ def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = N
     return new_entries
 
 
+def ensure_gitignore_glob(sample: Path, pattern: str) -> str | None:
+    """Ensure files named like ``pattern`` next to ``sample`` are gitignored.
+
+    ``sample`` is one concrete path the pattern must cover (it need not exist;
+    ``git check-ignore`` works on names). When it is not ignored yet, the
+    pattern is appended to the repo's ``.gitignore``, scoped to ``sample``'s
+    folder (``svc/.env.keys.backup.*``). A no-op outside a git repo.
+
+    Returns:
+        The entry added, or ``None`` when nothing had to change.
+
+    Raises:
+        OSError: ``.gitignore`` could not be read or written.
+    """
+    git_root = get_git_root(sample.parent)
+    if git_root is None or _is_path_ignored(sample, git_root):
+        return None
+    try:
+        folder = sample.parent.resolve().relative_to(git_root)
+    except ValueError:
+        return None
+    entry = pattern if folder == Path() else f"{folder.as_posix()}/{pattern}"
+    gitignore_path = git_root / ".gitignore"
+    content = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
+    if entry in {line.strip() for line in content.splitlines()}:
+        return None
+    with gitignore_path.open("a", encoding="utf-8", newline="\n") as handle:
+        if content and not content.endswith("\n"):
+            handle.write("\n")
+        handle.write(f"{entry}\n")
+    return entry
+
+
 def _is_path_ignored(path: Path, git_root: Path) -> bool:
     try:
         relative_path = path.resolve().relative_to(git_root)

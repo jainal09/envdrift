@@ -1406,7 +1406,7 @@ KEY=value
     @patch("subprocess.run")
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
     def test_encrypt_cleans_headers_before_encryption(self, mock_path, mock_run, tmp_path):
-        """Test encrypt method cleans mismatched headers before encryption."""
+        """encrypt drops the stale block when the file's own header is also there."""
         binary_path = tmp_path / "dotenvx"
         binary_path.touch()
         mock_path.return_value = binary_path
@@ -1414,8 +1414,15 @@ KEY=value
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         env_file = tmp_path / ".env.localenv"
-        # File with mismatched header from previous .env.local
+        # dotenvx 1.x left both blocks after .env.local was renamed to .env.localenv
         content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_LOCALENV="03abc123"
+
+# .env.localenv
 #/-------------------[DOTENV_PUBLIC_KEY]--------------------/
 #/            public-key encryption for .env files          /
 #/       [how it works](https://dotenvx.com/encryption)     /
@@ -1432,8 +1439,108 @@ KEY=value
 
         # Verify mismatched header was removed before dotenvx was called
         result = env_file.read_text()
-        assert "DOTENV_PUBLIC_KEY_LOCAL" not in result
+        assert "DOTENV_PUBLIC_KEY_LOCAL=" not in result
+        assert 'DOTENV_PUBLIC_KEY_LOCALENV="03abc123"' in result
         mock_run.assert_called_once()
+
+    def test_keeps_a_lone_header_of_another_name(self, tmp_path):
+        """#938: a lone header under another name is the file's key, so it stays.
+
+        Stripping it (the old rule) left dotenvx 2.x no public key, and it
+        created a brand-new key next to the folder's key: the values already
+        encrypted with the old key and the new ones no longer shared a key.
+        """
+        env_file = tmp_path / ".env.prod"
+        content = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_PRODUCTION="03abc123"
+
+# .env.production
+KEY=encrypted:abc
+"""
+        env_file.write_text(content)
+
+        assert DotenvxWrapper._clean_mismatched_headers(env_file) is False
+        assert env_file.read_text() == content
+
+    def test_mapped_file_canonical_header_counts_as_its_own(self, tmp_path):
+        """For a mapped file, the canonical DOTENV_PUBLIC_KEY_<ENV> block is its own."""
+        env_file = tmp_path / ".env.prod"
+        block = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_{name}="03abc123"
+
+# {comment}
+"""
+        content = (
+            block.format(name="PRODUCTION", comment=".env.production")
+            + block.format(name="STAGING", comment=".env.staging")
+            + "KEY=value\n"
+        )
+        env_file.write_text(content)
+
+        assert DotenvxWrapper._clean_mismatched_headers(env_file, "production") is True
+        result = env_file.read_text()
+        assert "DOTENV_PUBLIC_KEY_PRODUCTION" in result
+        assert "DOTENV_PUBLIC_KEY_STAGING" not in result
+
+    def test_multi_part_name_is_matched_like_dotenvx(self, tmp_path):
+        """N1: .env.prod.eu.west's own header is PROD_EU (dotenvx keeps two parts)."""
+        env_file = tmp_path / ".env.prod.eu.west"
+        block = """\
+#/-------------------[DOTENV_PUBLIC_KEY]--------------------/
+#/            public-key encryption for .env files          /
+#/       [how it works](https://dotenvx.com/encryption)     /
+#/----------------------------------------------------------/
+DOTENV_PUBLIC_KEY_{name}="03abc123"
+
+# .env.prod.eu.west
+"""
+        env_file.write_text(
+            block.format(name="PROD_EU") + block.format(name="PROD") + "KEY=value\n"
+        )
+
+        assert DotenvxWrapper._clean_mismatched_headers(env_file) is True
+        result = env_file.read_text()
+        assert "DOTENV_PUBLIC_KEY_PROD_EU=" in result
+        assert "DOTENV_PUBLIC_KEY_PROD=" not in result
+
+    def test_keeps_blank_lines_inside_a_value(self, tmp_path):
+        """Removing a stale block changes nothing else in the file.
+
+        The old cleanup collapsed every run of blank lines in the whole file,
+        which silently rewrote a double-quoted multi-line value holding blank
+        lines before dotenvx encrypted it.
+        """
+        env_file = tmp_path / ".env.localenv"
+        block = (
+            "#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\n"
+            "#/            public-key encryption for .env files          /\n"
+            "#/       [how it works](https://dotenvx.com/encryption)     /\n"
+            "#/----------------------------------------------------------/\n"
+            'DOTENV_PUBLIC_KEY_{name}="03abc123"\n'
+            "\n"
+            "# {comment}\n"
+        )
+        body = 'NOTE="first\n\n\n\nlast"\nKEY=value\n'
+        env_file.write_bytes(
+            (
+                block.format(name="LOCALENV", comment=".env.localenv")
+                + block.format(name="LOCAL", comment=".env.local")
+                + body
+            ).encode("utf-8")
+        )
+
+        assert DotenvxWrapper._clean_mismatched_headers(env_file) is True
+        assert env_file.read_bytes().decode("utf-8") == (
+            block.format(name="LOCALENV", comment=".env.localenv") + body
+        )
 
 
 def test_clean_output_strips_cursor_and_erase_sequences():

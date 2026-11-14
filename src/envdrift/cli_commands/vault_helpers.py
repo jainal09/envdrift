@@ -72,6 +72,9 @@ class VaultPullRequest:
     connection: VaultConnectionOptions
     no_decrypt: bool
     env_file: Path | None
+    # Replace a different local key (after backing up .env.keys) instead of
+    # refusing (#939).
+    force: bool = False
 
 
 @dataclass(frozen=True)
@@ -427,7 +430,7 @@ def _encrypt_target(
 
     console.print(f"Encrypting {target.env_file} with {context.backend.name}...")
     try:
-        result = context.backend.encrypt(target.env_file, **context.sops_kwargs)
+        result = context.backend.encrypt(target.env_file, **_bulk_encrypt_kwargs(context, target))
     except (EncryptionNotFoundError, EncryptionBackendError) as e:
         print_error(f"Failed to encrypt {target.env_file}: {e}")
         stats.errors += 1
@@ -437,6 +440,27 @@ def _encrypt_target(
         stats.errors += 1
         return False
     return True
+
+
+def _bulk_keys_file(context: _BulkPushContext, mapping: ServiceMapping) -> Path:
+    """The mapping's keys file: ``[vault.sync] env_keys_filename`` in its folder."""
+    return mapping.folder_path / (context.sync_config.env_keys_filename or ".env.keys")
+
+
+def _bulk_encrypt_kwargs(context: _BulkPushContext, target: _PushTarget) -> dict[str, Any]:
+    """Encrypt options: dotenvx gets the keys file and environment, SOPS its own.
+
+    dotenvx must write into the keys file that is then read and pushed (#943),
+    and reuse the key the folder holds for the mapping environment (#938).
+    """
+    from envdrift.encryption import EncryptionProvider
+
+    if context.backend_provider == EncryptionProvider.DOTENVX:
+        return {
+            "keys_file": _bulk_keys_file(context, target.mapping),
+            "environment": target.environment,
+        }
+    return context.sops_kwargs
 
 
 def _normalize_mapping_metadata(context: _BulkPushContext, target: _PushTarget) -> None:
@@ -452,9 +476,7 @@ def _normalize_mapping_metadata(context: _BulkPushContext, target: _PushTarget) 
     if not dotenvx_filename_needs_normalization(target.env_file, target.environment):
         return
     normalize_dotenvx_metadata(
-        target.env_file,
-        target.mapping.folder_path / (context.sync_config.env_keys_filename or ".env.keys"),
-        target.environment,
+        target.env_file, _bulk_keys_file(context, target.mapping), target.environment
     )
 
 
@@ -463,11 +485,17 @@ def _ensure_encrypted(
     target: _PushTarget,
     stats: _PushStats,
 ) -> bool:
-    """Ensure a target uses the configured backend, then normalize its metadata."""
+    """Ensure a target uses the configured backend, then normalize its metadata.
+
+    The metadata is normalized before encrypting too, as ``lock`` does, so a
+    keys file holding two different keys for the file is refused before the
+    file is encrypted rather than after (#938).
+    """
     from envdrift.cli_commands.encryption_helpers import is_encrypted_content
     from envdrift.encryption import detect_encryption_provider
 
-    content = target.env_file.read_text()
+    _normalize_mapping_metadata(context, target)
+    content = target.env_file.read_text(encoding="utf-8")
     if not is_encrypted_content(context.backend_provider, context.backend, content):
         detected_provider = detect_encryption_provider(target.env_file)
         if detected_provider and _handle_provider_mismatch(
@@ -485,23 +513,68 @@ def _mapping_secret_value(
     target: _PushTarget,
     stats: _PushStats,
 ) -> str | None:
-    """Read the canonical private key value for one mapping."""
+    """Read the canonical private key value for one mapping.
+
+    Refuses to publish an ambiguous key (two different values under the key
+    name, either of which dotenvx may have used) or one whose public key is
+    not the env file's: pushing it would hand the team a key that cannot
+    decrypt the file just encrypted (#938, #943).
+    """
     from envdrift.sync.operations import EnvKeysFile
 
-    env_keys_path = target.mapping.folder_path / (
-        context.sync_config.env_keys_filename or ".env.keys"
-    )
+    env_keys_path = _bulk_keys_file(context, target.mapping)
     if not env_keys_path.exists():
-        print_error(f"Skipped {target.mapping.folder_path}: .env.keys not found")
+        print_error(f"Skipped {target.mapping.folder_path}: {env_keys_path.name} not found")
         stats.errors += 1
         return None
     key_name = f"DOTENV_PRIVATE_KEY_{target.environment.upper()}"
-    key_value = EnvKeysFile(env_keys_path).read_key(key_name)
+    keys_file = EnvKeysFile(env_keys_path)
+    key_value = keys_file.read_key(key_name)
     if not key_value:
         print_error(f"Skipped {target.mapping.folder_path}: {key_name} not found in keys file")
         stats.errors += 1
         return None
+    problem = _push_key_problem(context, target, key_value, list(keys_file.read_values(key_name)))
+    if problem is not None:
+        print_error(f"Not pushed {target.mapping.secret_name}: {problem}")
+        stats.errors += 1
+        return None
     return f"{key_name}={key_value}"
+
+
+def _push_key_problem(
+    context: _BulkPushContext, target: _PushTarget, key_value: str, values: list[str]
+) -> str | None:
+    """Why ``key_value`` must not be published for ``target``, or None."""
+    from envdrift.encryption import EncryptionProvider
+    from envdrift.integrations.dotenvx_keys import (
+        normalize_public_key,
+        private_key_scalar,
+        public_key_for,
+        public_key_values,
+    )
+
+    others = sorted({value for value in values if value != key_value})
+    if others:
+        return (
+            f"{target.mapping.folder_path} holds {len(others) + 1} different values for "
+            f"DOTENV_PRIVATE_KEY_{target.environment.upper()}; keep the one the file is "
+            f"encrypted with and delete the other"
+        )
+    if context.backend_provider != EncryptionProvider.DOTENVX:
+        return None
+    if private_key_scalar(key_value) is None or not target.env_file.is_file():
+        return None
+    present = {
+        normalize_public_key(value)
+        for value in public_key_values(target.env_file.read_bytes().decode("utf-8"))
+    }
+    if present and present != {public_key_for(key_value)}:
+        return (
+            f"{target.env_file} is not encrypted with this key, so the vault copy "
+            f"could not decrypt it"
+        )
+    return None
 
 
 def _push_mapping(
@@ -510,6 +583,7 @@ def _push_mapping(
     stats: _PushStats,
 ) -> None:
     """Process one bulk-push mapping without leaking per-service failures."""
+    from envdrift.integrations.dotenvx import DotenvxError
     from envdrift.vault import VaultError
 
     try:
@@ -527,7 +601,9 @@ def _push_mapping(
         context.client.set_secret(mapping.secret_name, value)
         print_success(f"Pushed {mapping.secret_name}")
         stats.pushed += 1
-    except (VaultError, OSError, ValueError) as e:
+    except (VaultError, OSError, ValueError, DotenvxError) as e:
+        # One mapping's failure (a refused key change included) is reported
+        # and counted; the remaining mappings still run and the command exits 1.
         print_error(f"Error processing {mapping.folder_path}: {e}")
         stats.errors += 1
 
@@ -578,14 +654,22 @@ def _read_file_push_key(env_keys_path: Path, key_name: str) -> str:
         print_error(f"File not found: {env_keys_path}")
         raise typer.Exit(code=1)
     try:
-        key_value = EnvKeysFile(env_keys_path).read_key(key_name)
+        values = EnvKeysFile(env_keys_path).read_values(key_name)
     except (OSError, ValueError) as e:
         print_error(f"Cannot read {env_keys_path}: {e}")
         raise typer.Exit(code=1) from None
-    if not key_value:
+    if not values or not values[0]:
         print_error(f"Key '{key_name}' not found in {env_keys_path}")
         raise typer.Exit(code=1)
-    return key_value
+    if len(set(values)) > 1:
+        # dotenvx loads every value; publishing the first could hand the team a
+        # key the files were not encrypted with (#938).
+        print_error(
+            f"{env_keys_path} holds {len(set(values))} different values for '{key_name}'; "
+            f"keep the one your files are encrypted with and delete the other. Nothing was pushed."
+        )
+        raise typer.Exit(code=1)
+    return values[0]
 
 
 def _push_single_secret(request: VaultPushRequest) -> None:
@@ -666,11 +750,62 @@ def _extract_pull_key(request: VaultPullRequest, secret: SecretValue) -> tuple[s
     return key_name, key_value
 
 
-def _write_pull_key(request: VaultPullRequest, key_name: str, key_value: str) -> Path:
-    """Write fetched key material while preserving clean filesystem errors."""
+def _held_pull_values(env_keys_path: Path, key_name: str) -> list[str]:
+    """Every value ``.env.keys`` holds under ``key_name``, exiting cleanly on a bad file."""
+    from envdrift.sync.operations import EnvKeysFile
+
+    try:
+        return EnvKeysFile(env_keys_path).read_values(key_name)
+    except (OSError, ValueError) as e:
+        print_error(f"Cannot write {env_keys_path}: cannot read the existing keys file ({e})")
+        raise typer.Exit(code=1) from None
+
+
+def _refuse_pull_overwrite(env_keys_path: Path, key_name: str) -> Never:
+    """Stop before a different local key would be replaced (#939)."""
+    print_error(
+        f"{env_keys_path} already holds a different {key_name}. vault-pull would replace "
+        f"it with the vault's key, and anything encrypted with the local key could not be "
+        f"decrypted any more. Nothing was changed."
+    )
+    console.print(
+        "  Push the local key first (envdrift vault-push), or re-run with --force to "
+        f"replace it; --force backs up {env_keys_path.name} before writing."
+    )
+    raise typer.Exit(code=1)
+
+
+def _backup_pull_keys(env_keys_path: Path) -> None:
+    """Back up ``.env.keys`` (gitignored) before a forced replacement."""
+    from envdrift.sync.operations import EnvKeysFile
+
+    try:
+        backup = EnvKeysFile(env_keys_path).create_backup()
+    except OSError as e:
+        print_error(f"Cannot back up {env_keys_path}: {e}. Nothing was changed.")
+        raise typer.Exit(code=1) from None
+    print_warning(f"Replacing the local {env_keys_path.name} key; backup: {backup}")
+
+
+def _write_pull_key(request: VaultPullRequest, key_name: str, key_value: str) -> Path | None:
+    """Install fetched key material without destroying a different local key.
+
+    Every value ``.env.keys`` already holds under ``key_name`` is compared with
+    the vault's key, because ``write_key`` rewrites all of them: a matching
+    first line must not hide a second, different key (#939). A different key
+    is replaced only with ``--force``, after a backup. Returns ``None`` when
+    the key was already there (nothing written).
+    """
     from envdrift.sync.operations import EnvKeysFile
 
     env_keys_path = request.folder / ".env.keys"
+    held = _held_pull_values(env_keys_path, key_name)
+    if held and all(value == key_value for value in held):
+        return None
+    if held:
+        if not request.force:
+            _refuse_pull_overwrite(env_keys_path, key_name)
+        _backup_pull_keys(env_keys_path)
     try:
         EnvKeysFile(env_keys_path).write_key(
             key_name,
@@ -725,9 +860,13 @@ def _decrypt_pull_target(
 
     backend, provider = _resolve_pull_backend(request.connection.config)
     if provider == EncryptionProvider.DOTENVX and request.env_file is not None:
-        from envdrift.integrations.dotenvx import normalize_dotenvx_metadata
+        from envdrift.integrations.dotenvx import DotenvxError, normalize_dotenvx_metadata
 
-        normalize_dotenvx_metadata(target, env_keys_path, request.environment)
+        try:
+            normalize_dotenvx_metadata(target, env_keys_path, request.environment)
+        except (DotenvxError, OSError, ValueError) as e:
+            print_error(f"Not decrypting {target}: {e}")
+            raise typer.Exit(code=1) from None
     try:
         result = backend.decrypt(target.resolve(), keys_file=env_keys_path.resolve())
     except (EncryptionNotFoundError, EncryptionBackendError) as e:
@@ -746,8 +885,12 @@ def execute_vault_pull(request: VaultPullRequest) -> None:
     client = build_authenticated_client(settings)
     secret = _fetch_pull_secret(request, settings, client)
     key_name, key_value = _extract_pull_key(request, secret)
-    env_keys_path = _write_pull_key(request, key_name, key_value)
-    print_success(f"Pulled '{request.secret_name}' -> {key_name} written to {env_keys_path}")
+    written = _write_pull_key(request, key_name, key_value)
+    env_keys_path = request.folder / ".env.keys"
+    if written is None:
+        print_success(f"Pulled '{request.secret_name}' -> {key_name} already in {env_keys_path}")
+    else:
+        print_success(f"Pulled '{request.secret_name}' -> {key_name} written to {env_keys_path}")
     if request.no_decrypt:
         return
     target = _resolve_pull_target(request)
