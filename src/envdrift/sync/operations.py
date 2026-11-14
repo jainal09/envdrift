@@ -141,12 +141,21 @@ class EnvKeysFile:
         overwritten (#413). The target path is claimed atomically with
         ``O_CREAT | O_EXCL`` so a concurrent ``envdrift`` run sharing the
         workspace can't slip a file in between the name choice and the copy.
+
+        A backup holds the same private keys as the file, and a ``.gitignore``
+        entry for ``.env.keys`` does not cover ``.env.keys.backup.<ts>``. So
+        before anything is copied, ``<name>.backup.*`` in this folder is added
+        to ``.gitignore`` when git would not already ignore it; if that fails,
+        no backup is made.
         """
         if not self.path.exists():
             raise FileNotFoundError(f"Cannot backup non-existent file: {self.path}")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}"
+        from envdrift.utils.git import ensure_gitignore_glob
+
+        ensure_gitignore_glob(backup_path, f"{self.path.name}.backup.*")
         counter = 1
         while True:
             try:

@@ -59,6 +59,20 @@ envdrift vault-pull ./services/myapp my-secret-name --env production --no-decryp
   -p azure --vault-url https://myvault.vault.azure.net/
 ```
 
+### A different local key is never replaced silently
+
+When `.env.keys` already holds a `DOTENV_PRIVATE_KEY_<ENV>` that differs from the vault's
+key, `vault-pull` refuses, changes nothing and exits 1 (with or without `--no-decrypt`).
+The local key may be the only copy of the key a local file is encrypted with. Every value
+the file holds under that name is compared, because dotenvx loads them all: a first line
+that matches the vault does not hide a second, different one.
+
+Push the local key first with [`vault-push`](vault-push.md), or re-run with `--force` to
+replace it. `--force` first backs up `.env.keys` as `.env.keys.backup.<timestamp>` and makes
+sure git ignores the backup (it adds `<folder>/.env.keys.backup.*` to `.gitignore` when no
+existing rule covers it), then writes the vault's key. If the backup cannot be made, nothing
+is changed. A key that already matches the vault is left as it is.
+
 ## Options
 
 ### `{folder}`
@@ -104,6 +118,12 @@ contain whitespace or look like structured documents after normalization.
 ### `--no-decrypt`
 
 Only write the key to `.env.keys`; do not decrypt the `.env.<env>` file.
+
+### `--force`, `-f`
+
+Replace a different `DOTENV_PRIVATE_KEY_<ENV>` already in `.env.keys`. A gitignored backup
+(`.env.keys.backup.<timestamp>`) is made first. Without `--force`, a different local key is
+refused and nothing is changed.
 
 ### `--env-file`
 
@@ -201,6 +221,20 @@ Pulled 'myapp-key' -> DOTENV_PRIVATE_KEY_PRODUCTION written to services/myapp/.e
 Decrypted services/myapp/.env.production
 ```
 
+When `.env.keys` already holds the vault's key, nothing is written:
+
+```text
+Pulled 'myapp-key' -> DOTENV_PRIVATE_KEY_PRODUCTION already in services/myapp/.env.keys
+```
+
+When it holds a different key (no `--force`):
+
+```text
+[ERROR] services/myapp/.env.keys already holds a different DOTENV_PRIVATE_KEY_PRODUCTION. vault-pull would
+replace it with the vault's key, and anything encrypted with the local key could not be decrypted any more.
+Nothing was changed.
+```
+
 On error, the command prints a single clean `[ERROR]` line and exits 1 — never
 a raw traceback. AWS not-found errors name the region that was searched (the
 client defaults to `us-east-1` when `--region` is omitted):
@@ -219,8 +253,10 @@ fetched.
 
 | Code | Meaning                                              |
 | :--- | :--------------------------------------------------- |
-| 0    | Success (key written, file decrypted if applicable)  |
+| 0    | Success (key written or already there, file decrypted if applicable) |
 | 1    | Error (auth failure, secret not found, decrypt error) |
+| 1    | `.env.keys` holds a different key and `--force` was not given (nothing changed) |
+| 1    | `--force`: the backup could not be made (nothing changed) |
 
 ## Authentication
 
@@ -238,7 +274,7 @@ Both commands fetch a key from your vault, but they do very different things —
 | | `vault-pull` | `decrypt --verify-vault` |
 | :--- | :--- | :--- |
 | **Purpose** | Onboarding — get the key and use it | CI health-check — does the shared key still work? |
-| **Writes `.env.keys`?** | **Yes** | No |
+| **Writes `.env.keys`?** | **Yes** (a different key only with `--force`, after a backup) | No |
 | **Decrypts the real file?** | **Yes** (unless `--no-decrypt`) | No — tests in a throwaway temp dir, then discards |
 | **Persists anything?** | Yes | No (prints *"Original file was not decrypted"*) |
 

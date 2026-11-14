@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess  # nosec B404
 import sys
 import tempfile
@@ -810,3 +811,48 @@ def test_write_key_rewrites_every_line_a_reader_would_load(tmp_path: Path) -> No
     assert keys_path.read_text(encoding="utf-8") == (
         "# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION=new\n"
     )
+
+
+def _git_init(path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)  # nosec B603 B607
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_create_backup_is_gitignored_before_it_is_written(tmp_path: Path) -> None:
+    """N2: a ``.env.keys`` entry does not cover ``.env.keys.backup.<ts>``."""
+    _git_init(tmp_path)
+    (tmp_path / ".gitignore").write_text(".env.keys\n", encoding="utf-8")
+    folder = tmp_path / "svc"
+    folder.mkdir()
+    keys_path = folder / ".env.keys"
+    keys_path.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n", encoding="utf-8")
+
+    backup = EnvKeysFile(keys_path).create_backup()
+
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == (
+        ".env.keys\nsvc/.env.keys.backup.*\n"
+    )
+    check = subprocess.run(  # nosec B603 B607
+        ["git", "check-ignore", "-q", backup.relative_to(tmp_path).as_posix()], cwd=tmp_path
+    )
+    assert check.returncode == 0
+    # A second backup needs no new entry.
+    EnvKeysFile(keys_path).create_backup()
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").count("backup") == 1
+
+
+def test_create_backup_makes_no_copy_when_gitignore_cannot_be_updated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n", encoding="utf-8")
+
+    def unwritable(*args, **kwargs):
+        raise PermissionError(".gitignore is read-only")
+
+    monkeypatch.setattr("envdrift.utils.git.ensure_gitignore_glob", unwritable)
+
+    with pytest.raises(PermissionError):
+        EnvKeysFile(keys_path).create_backup()
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]

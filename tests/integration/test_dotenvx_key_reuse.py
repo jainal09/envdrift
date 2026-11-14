@@ -1,7 +1,8 @@
 """End to end: envdrift encrypts with the key the folder holds, or fails closed.
 
 Covers #938 (lock/encrypt minted a new dotenvx key next to the folder's key, or
-replaced it, and still reported success) and #943 (``[vault.sync]
+replaced it, and still reported success), #939 (vault-pull replaced a different
+local key with no backup and no prompt) and #943 (``[vault.sync]
 env_keys_filename`` was ignored whenever pull, lock and vault-push --all ran
 dotenvx).
 
@@ -526,6 +527,132 @@ def test_lock_relabels_a_renamed_files_key(cli: _Cli, tmp_path: Path):
     code, out = cli.run("lock", "--force")
     assert code == 0, out
     assert "already encrypted" in out
+
+
+# --- #939: vault-pull never replaces a different local key silently -------------
+
+
+def _pull_args(vault: KV2StandIn, *extra: str) -> list[str]:
+    return [
+        "vault-pull",
+        "svc",
+        "app-key",
+        "--env",
+        "production",
+        "-p",
+        "hashicorp",
+        "--vault-url",
+        vault.url,
+        *extra,
+    ]
+
+
+def _local_only_key_setup(cli: _Cli, vault: KV2StandIn, tmp_path: Path) -> tuple[str, Path]:
+    """The vault holds K1; svc/.env.production is encrypted with a local K2."""
+    k1 = _mint_key(cli, tmp_path / "k1")
+    vault.put("app-key", {"value": f"{PRODUCTION}={k1}"})
+    svc = cli.cwd / "svc"
+    svc.mkdir()
+    (svc / ".env.production").write_text("API_TOKEN=local-only\n", encoding="utf-8")
+    assert (
+        cli.dotenvx("encrypt", "-f", ".env.production", "-fk", ".env.keys", cwd=svc).returncode == 0
+    )
+    return k1, svc
+
+
+@pytest.mark.parametrize("extra", [(), ("--no-decrypt",)], ids=["decrypt", "no-decrypt"])
+def test_vault_pull_refuses_to_replace_a_different_local_key(
+    cli: _Cli, vault: KV2StandIn, tmp_path: Path, extra: tuple[str, ...]
+):
+    """#939: refuse, change nothing, make no backup."""
+    _, svc = _local_only_key_setup(cli, vault, tmp_path)
+    before = _snapshot(svc / ".env.keys", svc / ".env.production")
+
+    code, out = cli.run(*_pull_args(vault, *extra))
+
+    assert code == 1, out
+    assert f"already holds a different {PRODUCTION}" in out
+    assert "Nothing was changed" in out
+    assert _snapshot(svc / ".env.keys", svc / ".env.production") == before
+    assert sorted(path.name for path in svc.iterdir()) == [".env.keys", ".env.production"]
+
+
+def test_vault_pull_compares_every_held_value(cli: _Cli, vault: KV2StandIn, tmp_path: Path):
+    """B1: a first line equal to the vault key must not hide a second, different one."""
+    k1, svc = _local_only_key_setup(cli, vault, tmp_path)
+    keys_file = svc / ".env.keys"
+    (k2,) = _held(keys_file)
+    keys_file.write_text(f"{PRODUCTION}={k1}\n{PRODUCTION}={k2}\n", encoding="utf-8")
+    before = _snapshot(keys_file, svc / ".env.production")
+
+    code, out = cli.run(*_pull_args(vault))
+
+    assert code == 1, out
+    assert f"already holds a different {PRODUCTION}" in out
+    assert _snapshot(keys_file, svc / ".env.production") == before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_vault_pull_force_backs_up_a_gitignored_copy_first(
+    cli: _Cli, vault: KV2StandIn, tmp_path: Path
+):
+    """#939 + N2: --force backs up .env.keys, and git ignores the backup."""
+    subprocess.run(["git", "init", "-q"], cwd=cli.cwd, check=True)
+    (cli.cwd / ".gitignore").write_text(".env.keys\n", encoding="utf-8")
+    k1, svc = _local_only_key_setup(cli, vault, tmp_path)
+    (k2,) = _held(svc / ".env.keys")
+
+    code, out = cli.run(*_pull_args(vault, "--force", "--no-decrypt"))
+
+    assert code == 0, out
+    assert _held(svc / ".env.keys") == [k1]
+    backups = sorted(svc.glob(".env.keys.backup.*"))
+    assert len(backups) == 1, out
+    assert _held(backups[0]) == [k2]
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", backups[0].relative_to(cli.cwd).as_posix()], cwd=cli.cwd
+    )
+    assert ignored.returncode == 0, (cli.cwd / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_vault_pull_leaves_a_matching_key_alone(cli: _Cli, vault: KV2StandIn, tmp_path: Path):
+    k1 = _mint_key(cli, tmp_path / "k1")
+    vault.put("app-key", {"value": f"{PRODUCTION}={k1}"})
+    svc = cli.cwd / "svc"
+    svc.mkdir()
+    (svc / ".env.keys").write_text(f"export {PRODUCTION}={k1}\n", encoding="utf-8")
+    before = (svc / ".env.keys").read_bytes()
+
+    code, out = cli.run(*_pull_args(vault, "--no-decrypt"))
+
+    assert code == 0, out
+    assert "already in" in out
+    assert (svc / ".env.keys").read_bytes() == before
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_sync_backup_is_gitignored(cli: _Cli, vault: KV2StandIn, tmp_path: Path):
+    """N2: sync's .env.keys backups hold the same keys, so git must ignore them."""
+    subprocess.run(["git", "init", "-q"], cwd=cli.cwd, check=True)
+    (cli.cwd / ".gitignore").write_text(".env.keys\n", encoding="utf-8")
+    k1 = _mint_key(cli, tmp_path / "k1")
+    k2 = _mint_key(cli, tmp_path / "k2")
+    vault.put("app-key", {"value": f"{PRODUCTION}={k1}"})
+    _write_config(cli, vault.url, _mapping("app-key"))
+    svc = cli.cwd / "svc"
+    svc.mkdir()
+    (svc / ".env.production").write_text("A=1\n", encoding="utf-8")
+    (svc / ".env.keys").write_text(f"{PRODUCTION}={k2}\n", encoding="utf-8")
+
+    code, out = cli.run("sync", "--force")
+
+    assert code == 0, out
+    backups = sorted(svc.glob(".env.keys.backup.*"))
+    assert len(backups) == 1, out
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", backups[0].relative_to(cli.cwd).as_posix()], cwd=cli.cwd
+    )
+    assert ignored.returncode == 0, (cli.cwd / ".gitignore").read_text(encoding="utf-8")
 
 
 # --- #943: [vault.sync] env_keys_filename reaches every dotenvx call ------------

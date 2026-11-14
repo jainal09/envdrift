@@ -72,6 +72,9 @@ class VaultPullRequest:
     connection: VaultConnectionOptions
     no_decrypt: bool
     env_file: Path | None
+    # Replace a different local key (after backing up .env.keys) instead of
+    # refusing (#939).
+    force: bool = False
 
 
 @dataclass(frozen=True)
@@ -747,11 +750,62 @@ def _extract_pull_key(request: VaultPullRequest, secret: SecretValue) -> tuple[s
     return key_name, key_value
 
 
-def _write_pull_key(request: VaultPullRequest, key_name: str, key_value: str) -> Path:
-    """Write fetched key material while preserving clean filesystem errors."""
+def _held_pull_values(env_keys_path: Path, key_name: str) -> list[str]:
+    """Every value ``.env.keys`` holds under ``key_name``, exiting cleanly on a bad file."""
+    from envdrift.sync.operations import EnvKeysFile
+
+    try:
+        return EnvKeysFile(env_keys_path).read_values(key_name)
+    except (OSError, ValueError) as e:
+        print_error(f"Cannot write {env_keys_path}: cannot read the existing keys file ({e})")
+        raise typer.Exit(code=1) from None
+
+
+def _refuse_pull_overwrite(env_keys_path: Path, key_name: str) -> Never:
+    """Stop before a different local key would be replaced (#939)."""
+    print_error(
+        f"{env_keys_path} already holds a different {key_name}. vault-pull would replace "
+        f"it with the vault's key, and anything encrypted with the local key could not be "
+        f"decrypted any more. Nothing was changed."
+    )
+    console.print(
+        "  Push the local key first (envdrift vault-push), or re-run with --force to "
+        f"replace it; --force backs up {env_keys_path.name} before writing."
+    )
+    raise typer.Exit(code=1)
+
+
+def _backup_pull_keys(env_keys_path: Path) -> None:
+    """Back up ``.env.keys`` (gitignored) before a forced replacement."""
+    from envdrift.sync.operations import EnvKeysFile
+
+    try:
+        backup = EnvKeysFile(env_keys_path).create_backup()
+    except OSError as e:
+        print_error(f"Cannot back up {env_keys_path}: {e}. Nothing was changed.")
+        raise typer.Exit(code=1) from None
+    print_warning(f"Replacing the local {env_keys_path.name} key; backup: {backup}")
+
+
+def _write_pull_key(request: VaultPullRequest, key_name: str, key_value: str) -> Path | None:
+    """Install fetched key material without destroying a different local key.
+
+    Every value ``.env.keys`` already holds under ``key_name`` is compared with
+    the vault's key, because ``write_key`` rewrites all of them: a matching
+    first line must not hide a second, different key (#939). A different key
+    is replaced only with ``--force``, after a backup. Returns ``None`` when
+    the key was already there (nothing written).
+    """
     from envdrift.sync.operations import EnvKeysFile
 
     env_keys_path = request.folder / ".env.keys"
+    held = _held_pull_values(env_keys_path, key_name)
+    if held and all(value == key_value for value in held):
+        return None
+    if held:
+        if not request.force:
+            _refuse_pull_overwrite(env_keys_path, key_name)
+        _backup_pull_keys(env_keys_path)
     try:
         EnvKeysFile(env_keys_path).write_key(
             key_name,
@@ -831,8 +885,12 @@ def execute_vault_pull(request: VaultPullRequest) -> None:
     client = build_authenticated_client(settings)
     secret = _fetch_pull_secret(request, settings, client)
     key_name, key_value = _extract_pull_key(request, secret)
-    env_keys_path = _write_pull_key(request, key_name, key_value)
-    print_success(f"Pulled '{request.secret_name}' -> {key_name} written to {env_keys_path}")
+    written = _write_pull_key(request, key_name, key_value)
+    env_keys_path = request.folder / ".env.keys"
+    if written is None:
+        print_success(f"Pulled '{request.secret_name}' -> {key_name} already in {env_keys_path}")
+    else:
+        print_success(f"Pulled '{request.secret_name}' -> {key_name} written to {env_keys_path}")
     if request.no_decrypt:
         return
     target = _resolve_pull_target(request)

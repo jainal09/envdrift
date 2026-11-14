@@ -372,7 +372,8 @@ missing, verify reports an error instead of a skip:
 
 ### Force Mode (`--force`)
 
-Updates all mismatches without prompting. Creates backups before updating.
+Updates all mismatches without prompting. Creates backups before updating. A backup holds the same private keys as `.env.keys`, so envdrift makes
+sure git ignores it (it adds `<folder>/.env.keys.backup.*` to `.gitignore` when no existing rule covers it) before writing it.
 
 ```text
   ~ services/myapp (myapp-key, env: production) - updated
