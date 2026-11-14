@@ -83,6 +83,18 @@ class TestUnprotectedReason:
         elsewhere.write_text("K=v\n", encoding="utf-8")
         assert _reason(elsewhere) == "outside a git repository"
 
+    def test_untracked_file_whose_name_is_a_glob_of_a_tracked_one(self, repo: Path) -> None:
+        # As a glob pathspec, c/[p]/x.env matches the tracked c/p/x.env, which made
+        # an untracked file look tracked: "skip-worktree failed".
+        (repo / "c" / "p").mkdir(parents=True)
+        (repo / "c" / "p" / "x.env").write_text("K=v\n", encoding="utf-8")
+        _git(repo, "add", "c/p/x.env")
+        _git(repo, "commit", "-q", "-m", "c/p")
+        (repo / "c" / "[p]").mkdir()
+        (repo / "c" / "[p]" / "x.env").write_text("K=v\n", encoding="utf-8")
+
+        assert _reason(Path("c/[p]/x.env")) == "untracked"
+
     def test_git_not_installed(self, tmp_path: Path) -> None:
         with patch(
             "envdrift.core.partial_encryption.subprocess.run",
@@ -340,3 +352,25 @@ class TestSymlinkedSecretFile:
         # git refuses a path "beyond a symbolic link"; the real file is marked.
         assert _git_skip_worktree(Path("config/.env.secret")) is True
         assert _flags(repo, "real/.env.secret") == {"real/.env.secret": "S"}
+
+
+def test_a_secret_file_in_a_submodule_is_marked_in_the_submodule(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """git run from the superproject could not mark it, and called it untracked."""
+    from envdrift.core.partial_encryption import _git_skip_worktree, _git_unskip_worktree
+
+    inner = tmp_path_factory.mktemp("inner")
+    _git(inner, "init", "-q")
+    _git(inner, "config", "user.email", "t@example.com")
+    _git(inner, "config", "user.name", "t")
+    (inner / ".env.secret").write_text("K=v\n", encoding="utf-8")
+    _git(inner, "add", ".env.secret")
+    _git(inner, "commit", "-q", "-m", "inner")
+    _git(repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner), "sub")
+    _git(repo, "commit", "-q", "-m", "submodule")
+
+    assert _git_skip_worktree(Path("sub/.env.secret")) is True
+    assert _flags(repo / "sub", ".env.secret") == {".env.secret": "S"}
+    assert _git_unskip_worktree(Path("sub/.env.secret")) is True
+    assert _flags(repo / "sub", ".env.secret") == {".env.secret": "H"}

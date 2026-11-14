@@ -151,7 +151,8 @@ into the file the link points to, so that is the file marked `skip-worktree` (an
 the one `push` lifts the mark from). When git does not track that file, the
 warning names the link and where the plaintext is:
 `config/.env.production.secret (untracked; through a symlink, the plaintext is in
-shared/production.secret)`.
+shared/production.secret)`. A secret file in a git submodule is marked in the
+submodule, the repository that tracks it.
 
 ## When a decrypt fails
 

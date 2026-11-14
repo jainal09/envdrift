@@ -615,16 +615,19 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
     """Run ``git update-index <flag>`` on the file ``path`` writes to; report success.
 
     That is the target of a symlinked ``path`` (``_written_file``), so the bit is
-    set on, and lifted from, the file that holds the plaintext.
+    set on, and lifted from, the file that holds the plaintext. git runs in that
+    file's own directory, so it uses the repository that tracks the file: run
+    from the superproject, git could not mark a file in a submodule.
 
     Returns True only when git exits 0. A non-zero exit (e.g. the file is not
     tracked) is logged as a warning rather than failing silently; git being
     unavailable is logged at debug level. Either way the caller gets False so it
     can avoid claiming protection that was never applied.
     """
+    target = _written_file(path)
     try:
         result = subprocess.run(  # nosec B603, B607
-            ["git", "update-index", flag, str(_written_file(path))],
+            ["git", "-C", str(target.parent), "update-index", flag, "--", str(target)],
             capture_output=True,
             timeout=10,
         )
@@ -675,17 +678,26 @@ def unprotected_reason(path: Path) -> str:
     """Say why ``git update-index --skip-worktree`` could not protect ``path`` (#998).
 
     Asks git, by exit code rather than by its (translated) messages, whether the
-    file the protection was for (``_written_file``) is in the index, from the
-    same working directory the protection ran in: ``untracked`` (exit 1),
-    ``outside a git repository`` (exit 128: no repository here, or the path lies
-    outside it), else ``skip-worktree failed`` (a tracked file, for example while
-    another git process holds the index lock). When a symlink sends ``path``
+    file the protection was for (``_written_file``) is in the index, in that
+    file's own directory as the protection ran: ``untracked`` (exit 1),
+    ``outside a git repository`` (exit 128), else ``skip-worktree failed`` (a
+    tracked file, for example while another git process holds the index lock).
+    The name is a literal pathspec: as a glob, ``[prod]`` could match another,
+    tracked file and call an untracked one tracked. When a symlink sends ``path``
     elsewhere, the reason names the file the plaintext is in.
     """
     target = _written_file(path)
     try:
         listed = subprocess.run(  # nosec B603, B607
-            ["git", "ls-files", "--error-unmatch", "--", str(target)],
+            [
+                "git",
+                "-C",
+                str(target.parent),
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                f":(literal){target.name}",
+            ],
             capture_output=True,
             timeout=10,
         )
