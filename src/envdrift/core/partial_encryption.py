@@ -784,19 +784,37 @@ def _decrypt_in_place(dotenvx: DotenvxWrapper, file: Path) -> None:
     read back, and if it still holds ciphertext it is put back as it was and
     reported, so the caller neither counts it as decrypted nor marks it
     skip-worktree (#963).
+
+    Any failure, not only a ``DotenvxError`` (dotenvx missing, the read-back
+    failing), is a ``PartialEncryptionError`` that says what became of the file,
+    so a secrets-only pull can report the files it decrypted before it.
     """
     try:
         snapshot = DecryptSnapshot(file)
     except OSError as e:
-        raise PartialEncryptionError.decrypt_failed(file, e, "Nothing was decrypted.") from e
+        raise PartialEncryptionError.decrypt_failed(file, e, f"{file} was left as it was.") from e
     try:
         with snapshot:
             dotenvx.decrypt(file)
-    except DotenvxError as e:
+            # Inside the snapshot, so a read-back that fails restores the file too.
+            ciphertext = _leftover_ciphertext(file)
+    except Exception as e:
         raise PartialEncryptionError.decrypt_failed(file, e, snapshot.note) from e
-    ciphertext = _leftover_ciphertext(file)
     if ciphertext:
         raise PartialEncryptionError.still_encrypted(file, ciphertext, snapshot.restore())
+
+
+def _holds_ciphertext(file: Path) -> bool:
+    """``is_file_encrypted``, with a file that cannot be read refused as a failed decrypt.
+
+    An unreadable secret file raised a bare ``PermissionError``: pull-partial
+    called it an "Unexpected error", ``envdrift pull`` crashed, and a
+    secrets-only pull lost the tally of the files it had decrypted before it.
+    """
+    try:
+        return is_file_encrypted(file)
+    except OSError as e:
+        raise PartialEncryptionError.decrypt_failed(file, e, f"{file} was left as it was.") from e
 
 
 def _encrypt_and_verify(dotenvx: DotenvxWrapper, file: Path) -> None:
@@ -881,7 +899,7 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> bool:
         raise PartialEncryptionError.file_not_found(secret_file)
 
     # Check if already decrypted
-    if not is_file_encrypted(secret_file):
+    if not _holds_ciphertext(secret_file):
         # Already plaintext on disk — still protect it from accidental commit.
         return _git_skip_worktree(secret_file)
 
@@ -1119,26 +1137,29 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> Secrets
     dotenvx = DotenvxWrapper()
 
     for file in files:
-        if not file.is_file():
-            continue
-        if _is_excluded_env_file(file.name):
-            # Never decrypt companion files (.example/.sample/.template) or the
-            # dotenvx key file (.keys), even if they match the glob pattern (#358).
-            continue
-        if not is_file_encrypted(file):
-            # Already plaintext on disk — still protect it from accidental commit.
-            # This pull did not decrypt it, so it does not count as protected:
-            # counting it let the notice call an unprotected set protected (#998).
-            _git_skip_worktree(file)
-            already_decrypted += 1
-            continue
         try:
+            if not file.is_file():
+                continue
+            if _is_excluded_env_file(file.name):
+                # Never decrypt companion files (.example/.sample/.template) or the
+                # dotenvx key file (.keys), even if they match the glob pattern (#358).
+                continue
+            if not _holds_ciphertext(file):
+                # Already plaintext on disk — still protect it from accidental commit.
+                # This pull did not decrypt it, so it does not count as protected:
+                # counting it let the notice call an unprotected set protected (#998).
+                _git_skip_worktree(file)
+                already_decrypted += 1
+                continue
             _decrypt_in_place(dotenvx, file)
-        except PartialEncryptionError as e:
-            # The files decrypted before this one are plaintext now: report
-            # them instead of an environment that looks untouched (#948).
+        except Exception as e:
+            # Whatever failed, the files decrypted before this one are plaintext
+            # now: report them instead of an environment that looks untouched (#948).
+            message = str(e)
+            if not isinstance(e, PartialEncryptionError):
+                message = f"Failed to decrypt {file}: {message}"
             raise SecretsOnlyPullError(
-                str(e),
+                message,
                 decrypted=decrypted,
                 already_decrypted=already_decrypted,
                 protected=protected,
@@ -1191,7 +1212,7 @@ def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> P
     if not secret_file.exists():
         raise PartialEncryptionError.file_not_found(secret_file)
 
-    was_encrypted = is_file_encrypted(secret_file)
+    was_encrypted = _holds_ciphertext(secret_file)
 
     # Decrypt secret file
     protected = decrypt_secret_file(env_config)

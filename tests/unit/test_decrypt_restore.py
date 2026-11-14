@@ -24,6 +24,7 @@ import pytest
 from envdrift.encryption.base import EncryptionBackendError
 from envdrift.encryption.dotenvx import DotenvxEncryptionBackend
 from envdrift.integrations.dotenvx import DotenvxError
+from tests.helpers import unreadable_file
 
 # A dotenvx-encrypted file whose second value is under another key, with CRLF
 # line endings so a restore that is not byte for byte would show.
@@ -269,20 +270,25 @@ class TestDotenvxBackendDecryptRestores:
         assert target.read_bytes() == _ENCRYPTED
 
     def test_unreadable_file_is_refused_before_dotenvx_runs(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, searchable_tmp_path: Path
     ) -> None:
-        target = tmp_path / ".env.production"
+        """A file this process really cannot read, not a patched ``read_bytes``.
+
+        The "nothing to decrypt" check read it before the snapshot did, so the
+        caller got a bare PermissionError instead of this refusal.
+        """
+        target = searchable_tmp_path / ".env.production"
         target.write_bytes(_ENCRYPTED)
         backend, wrapper = _backend_with(lambda **_kwargs: None)
 
-        def _unreadable(self: Path) -> bytes:
-            raise PermissionError(13, "Permission denied")
-
-        monkeypatch.setattr(Path, "read_bytes", _unreadable)
-
-        with pytest.raises(EncryptionBackendError, match="Nothing was decrypted"):
+        with unreadable_file(target), pytest.raises(EncryptionBackendError) as excinfo:
             backend.decrypt(target)
+
         wrapper.decrypt.assert_not_called()
+        message = str(excinfo.value)
+        assert message.startswith(f"Could not read {target} before decrypting it: [Errno 13]")
+        assert message.endswith("Nothing was decrypted."), message
+        assert target.read_bytes() == _ENCRYPTED
 
 
 class TestDotenvxBackendPrefixOnce:

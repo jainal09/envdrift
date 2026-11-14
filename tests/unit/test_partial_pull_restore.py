@@ -23,9 +23,11 @@ from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
     decrypt_secret_file,
+    pull_partial_encryption,
     pull_secrets_only,
 )
 from envdrift.integrations.dotenvx import DotenvxError
+from tests.helpers import unreadable_file
 
 _FOREIGN = "STRIPE_API_KEY=encrypted:BFOREIGN\n"
 _FAILURE = "dotenvx decryption failed: [DECRYPTION_FAILED] could not decrypt STRIPE_API_KEY"
@@ -93,23 +95,31 @@ class TestDecryptSecretFileRestores:
         assert f"{secret} was left as it was: envdrift restored" in message
         assert skip_worktree_calls == []  # restored, so nothing to protect
 
+    @pytest.mark.parametrize("pull", [decrypt_secret_file, pull_partial_encryption])
     def test_unreadable_secret_file_is_refused_before_dotenvx_runs(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, searchable_tmp_path: Path, pull
     ) -> None:
-        secret = tmp_path / ".env.production.secret"
+        """A file this process really cannot read, not a patched ``read_bytes``.
+
+        The encrypted check reads the file before any snapshot, and its bare
+        PermissionError was "Unexpected error" in pull-partial and a traceback in
+        ``envdrift pull``.
+        """
+        secret = searchable_tmp_path / ".env.production.secret"
         secret.write_text(_encrypted("JWT_SECRET"), encoding="utf-8")
         config = PartialEncryptionEnvironmentConfig(
             name="production", clear_file="", secret_file=str(secret), combined_file=""
         )
 
-        def _unreadable(self: Path) -> bytes:
-            raise PermissionError(13, "Permission denied")
-
-        monkeypatch.setattr(Path, "read_bytes", _unreadable)
         with patch("envdrift.core.partial_encryption.DotenvxWrapper") as wrapper_cls:
-            with pytest.raises(PartialEncryptionError, match="Nothing was decrypted"):
-                decrypt_secret_file(config)
+            with unreadable_file(secret), pytest.raises(PartialEncryptionError) as excinfo:
+                pull(config)
             wrapper_cls.return_value.decrypt.assert_not_called()
+
+        message = str(excinfo.value)
+        assert message.startswith(f"Failed to decrypt {secret}: [Errno 13]"), message
+        assert message.endswith(f"{secret} was left as it was."), message
+        assert secret.read_text(encoding="utf-8") == _encrypted("JWT_SECRET")
 
 
 class TestPullSecretsOnlyReportsTheTally:
@@ -151,6 +161,76 @@ class TestPullSecretsOnlyReportsTheTally:
         assert db.read_text(encoding="utf-8") == db_original
         assert db not in skip_worktree_calls and api in skip_worktree_calls
         assert later.read_text(encoding="utf-8") == _encrypted("LATER")
+
+    def test_an_unreadable_later_file_carries_the_counts(
+        self, searchable_tmp_path: Path, skip_worktree_calls: list[Path]
+    ) -> None:
+        """Any failure keeps the tally, not only a PartialEncryptionError.
+
+        A real unreadable file (a root-owned one left by a container, say) raised a
+        bare PermissionError, which dropped the count and the warning for the files
+        decrypted before it.
+        """
+        from envdrift.core.partial_encryption import SecretsOnlyPullError
+
+        secrets = searchable_tmp_path / "secrets"
+        secrets.mkdir()
+        secrets.chmod(0o755)
+        api = secrets / ".env.api"  # sorted first: decrypts
+        api.write_text(_encrypted("API_KEY"), encoding="utf-8")
+        api.chmod(0o666)  # as root the pull runs as nobody, who must write it
+        db = secrets / ".env.db"  # sorted second: unreadable
+        db.write_text(_encrypted("DB_PASS"), encoding="utf-8")
+        config = PartialEncryptionEnvironmentConfig(
+            name="production", secrets_only=True, secrets_dir=str(secrets), pattern=".env*"
+        )
+
+        with patch("envdrift.core.partial_encryption.DotenvxWrapper") as wrapper_cls:
+            wrapper_cls.return_value.decrypt.side_effect = _dotenvx_stand_in
+            with unreadable_file(db), pytest.raises(SecretsOnlyPullError) as excinfo:
+                pull_secrets_only(config)
+
+        error = excinfo.value
+        assert (error.decrypted, error.already_decrypted, error.protected) == (1, 0, 1)
+        assert str(error).startswith(f"Failed to decrypt {db}: [Errno 13]"), str(error)
+        assert str(error).endswith(f"{db} was left as it was."), str(error)
+        assert "API_KEY=plain-value" in api.read_text(encoding="utf-8")
+        assert db.read_text(encoding="utf-8") == _encrypted("DB_PASS")
+        assert skip_worktree_calls == [api]
+
+    def test_any_dotenvx_failure_on_a_later_file_carries_the_counts(
+        self, tmp_path: Path, skip_worktree_calls: list[Path]
+    ) -> None:
+        """Not only a ``DotenvxError``: dotenvx missing is reported with the tally."""
+        from envdrift.core.partial_encryption import SecretsOnlyPullError
+        from envdrift.integrations.dotenvx import DotenvxNotFoundError
+
+        secrets = tmp_path / "secrets"
+        secrets.mkdir()
+        api = secrets / ".env.api"
+        api.write_text(_encrypted("API_KEY"), encoding="utf-8")
+        db = secrets / ".env.db"
+        db.write_text(_encrypted("DB_PASS"), encoding="utf-8")
+        config = PartialEncryptionEnvironmentConfig(
+            name="production", secrets_only=True, secrets_dir=str(secrets), pattern=".env*"
+        )
+
+        def _decrypt(path: Path) -> None:
+            if path == db:
+                raise DotenvxNotFoundError("dotenvx binary not found")
+            _dotenvx_stand_in(path)
+
+        with patch("envdrift.core.partial_encryption.DotenvxWrapper") as wrapper_cls:
+            wrapper_cls.return_value.decrypt.side_effect = _decrypt
+            with pytest.raises(SecretsOnlyPullError) as excinfo:
+                pull_secrets_only(config)
+
+        error = excinfo.value
+        assert (error.decrypted, error.protected, error.unprotected) == (1, 1, [])
+        assert str(error) == (
+            f"Failed to decrypt {db}: dotenvx binary not found\n{db} was left as it was."
+        )
+        assert skip_worktree_calls == [api]
 
 
 # ---------------------------------------------------------------------------

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import stat
+import sys
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+
+import pytest
 
 from envdrift.encryption.base import EncryptionResult
 
@@ -127,3 +133,50 @@ def write_checksums_for(
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     checksums_path.write_text(f"{digest}  {name}\n", encoding="utf-8")
     return checksums_path.resolve().as_uri()
+
+
+@contextlib.contextmanager
+def unreadable_file(path: Path) -> Iterator[None]:
+    """Make the file ``path`` really unreadable to this process while the block runs.
+
+    ``chmod 000`` is enough for a normal user. root reads any file whatever its mode,
+    so as root the block runs with the effective uid of ``nobody``, and ``path`` must
+    be in a directory ``nobody`` can search (the ``searchable_tmp_path`` fixture).
+    Skips where neither works: on Windows, which has no such mode bits, or as root
+    without a ``nobody`` account.
+    """
+    if sys.platform == "win32":
+        pytest.skip("Windows has no POSIX mode bits to make a file unreadable")
+    mode = stat.S_IMODE(path.stat().st_mode)
+    path.chmod(0)
+    try:
+        with _as_nobody_if_root():
+            path.stat()  # still reachable: only reading it is refused
+            try:
+                path.open("rb").close()
+            except PermissionError:
+                pass
+            else:
+                pytest.skip("this process reads a chmod 000 file (CAP_DAC_OVERRIDE?)")
+            yield
+    finally:
+        path.chmod(mode)
+
+
+@contextlib.contextmanager
+def _as_nobody_if_root() -> Iterator[None]:
+    """Run the block with the effective uid of ``nobody`` when this process is root."""
+    if sys.platform == "win32" or os.geteuid() != 0:
+        yield
+        return
+    import pwd
+
+    try:
+        nobody = pwd.getpwnam("nobody").pw_uid
+    except KeyError:
+        pytest.skip("running as root, with no 'nobody' account to drop privileges to")
+    os.seteuid(nobody)
+    try:
+        yield
+    finally:
+        os.seteuid(0)

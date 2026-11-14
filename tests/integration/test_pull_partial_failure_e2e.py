@@ -13,6 +13,9 @@ outcome: the exit code, the summary, the bytes on disk, and git's view.
   prints "no change" and exits 0. ``pull-partial`` reported ``Decrypted: 1``,
   exit 0, and marked the still-encrypted file skip-worktree. It must instead
   fail, name the file and the format, and leave the file as it was.
+- A secrets-only pull that stops at a file it cannot even read (root-owned,
+  mode 600) raised a bare PermissionError: the files decrypted before it were
+  not counted and got no warning, and ``envdrift pull`` crashed.
 """
 
 from __future__ import annotations
@@ -20,7 +23,11 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -390,3 +397,202 @@ class TestSopsSecretFileIsNotReportedAsDecrypted:
         assert sops_file.read_bytes() == committed
         assert _skip_worktree_flag(git_repo, "secrets/.env.sops") == "H"
         assert _skip_worktree_flag(git_repo, "secrets/.env.api") == "S"
+
+
+class _Unprivileged:
+    """A repository, and a CLI run there that really cannot read a file made unreadable.
+
+    For a normal user ``chmod 000`` is enough. root reads any file, so as root the
+    CLI runs as ``nobody`` instead, in a repository it owns outside
+    ``/tmp/pytest-of-root`` (mode 0700, which ``nobody`` cannot enter), with a
+    ``HOME`` of its own.
+    """
+
+    def __init__(self, base: Path, nobody: Any = None) -> None:
+        self.base = base
+        self.repo = base / "repo"
+        self.repo.mkdir()
+        self.nobody = nobody
+        _git(self.repo, "init", "-q")
+        _git(self.repo, "config", "user.email", "test@example.com")
+        _git(self.repo, "config", "user.name", "Test")
+
+    def make_unreadable(self, path: Path) -> None:
+        """Make ``path`` unreadable to the CLI and everything else in the repository its own."""
+        if self.nobody is None:
+            path.chmod(0)
+            return
+        for owned in [self.base, *self.base.rglob("*")]:
+            os.chown(owned, self.nobody.pw_uid, self.nobody.pw_gid, follow_symlinks=False)
+        os.chown(path, 0, 0)
+        path.chmod(0o600)
+
+    def make_readable(self, path: Path) -> None:
+        """Let this test read ``path`` again (root always could)."""
+        if self.nobody is None:
+            path.chmod(0o600)
+
+    def run(
+        self, args: list[str], *, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        kwargs: dict[str, Any] = {}
+        if self.nobody is not None:
+            home = self.base / "home"
+            home.mkdir(exist_ok=True)
+            os.chown(home, self.nobody.pw_uid, self.nobody.pw_gid)
+            env["HOME"] = str(home)
+            for name in ("XDG_CONFIG_HOME", "COVERAGE_PROCESS_START", "COVERAGE_PROCESS_CONFIG"):
+                env.pop(name, None)
+            kwargs = {
+                "user": self.nobody.pw_uid,
+                "group": self.nobody.pw_gid,
+                "extra_groups": [],
+            }
+        return subprocess.run(
+            [*envdrift_cmd, *args],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            **kwargs,
+        )
+
+    def git(self, *args: str) -> str:
+        """git as this test's user, in a repository ``nobody`` may own by now."""
+        return _git(self.repo, "-c", "safe.directory=*", *args)
+
+
+@pytest.fixture
+def unprivileged(tmp_path: Path) -> Iterator[_Unprivileged]:
+    if sys.platform == "win32":
+        pytest.skip("Windows has no POSIX mode bits to make a file unreadable")
+    if os.geteuid() != 0:
+        yield _Unprivileged(tmp_path)
+        return
+    import pwd
+
+    try:
+        nobody = pwd.getpwnam("nobody")
+    except KeyError:
+        pytest.skip("running as root, with no 'nobody' account to drop privileges to")
+    base = Path(tempfile.mkdtemp(prefix="envdrift-unreadable-"))
+    try:
+        yield _Unprivileged(base, nobody)
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+_VAULT_SYNC = (
+    "[vault]\n"
+    'provider = "azure"\n\n'
+    "[vault.azure]\n"
+    'vault_url = "https://dummy.vault.azure.net/"\n\n'
+    "[vault.sync]\n"
+    'default_vault_name = "dummy"\n\n'
+    "[[vault.sync.mappings]]\n"
+    'secret_name = "unused"\n'
+    'folder_path = "."\n'
+    'environment = "production"\n\n'
+)
+
+
+class TestUnreadableLaterSecretFile:
+    """Any failure on a later file keeps the tally and the warning, not only a decrypt error."""
+
+    @pytest.mark.parametrize("command", ["pull-partial", "pull"])
+    def test_the_files_decrypted_before_it_are_counted_and_named(
+        self,
+        unprivileged: _Unprivileged,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+        command: str,
+    ) -> None:
+        repo = unprivileged.repo
+        partial = (
+            "[partial_encryption]\n"
+            "enabled = true\n\n"
+            "[[partial_encryption.environments]]\n"
+            'name = "production"\n'
+            "secrets_only = true\n"
+            'secrets_dir = "secrets"\n'
+        )
+        (repo / "envdrift.toml").write_text(partial, encoding="utf-8")
+        secrets = repo / "secrets"
+        secrets.mkdir()
+        api = secrets / ".env.api"  # sorted first: decrypts, and is untracked
+        api.write_text(f"API_KEY={_API_VALUE}\n", encoding="utf-8")
+        db = secrets / ".env.db"  # sorted second: unreadable
+        db.write_text(f"DB_PASS={_DB_VALUE}\n", encoding="utf-8")
+        _push(repo, integration_pythonpath=integration_pythonpath, envdrift_cmd=envdrift_cmd)
+        unprivileged.git("add", "envdrift.toml", ".gitignore")
+        unprivileged.git("commit", "-q", "-m", "config")
+        args = ["pull-partial"]
+        if command == "pull":
+            # --skip-sync never contacts the dummy vault; the mapping's plaintext
+            # .env.production is skipped.
+            (repo / ".env.production").write_text("DEBUG=false\n", encoding="utf-8")
+            (repo / "envdrift.toml").write_text(_VAULT_SYNC + partial, encoding="utf-8")
+            args = ["pull", "--skip-sync"]
+        db_before = db.read_bytes()
+        unprivileged.make_unreadable(db)
+
+        result = unprivileged.run(
+            args, integration_pythonpath=integration_pythonpath, envdrift_cmd=envdrift_cmd
+        )
+
+        out = _flat(result)
+        assert result.returncode == 1, out
+        assert "Traceback" not in out, out
+        summary = out.rsplit("Summary", 1)[1]
+        assert "Decrypted: 1" in summary and "Errors: 1" in summary, out
+        assert "Failed to decrypt secrets/.env.db: [Errno 13]" in out, out
+        assert "secrets/.env.db was left as it was" in out, out
+        # .env.api is untracked plaintext now, so it is named in the warning.
+        assert "DANGER: No Git Protection Applied" in out, out
+        assert "• secrets/.env.api (untracked)" in out, out
+        assert f"API_KEY={_API_VALUE}" in api.read_text(encoding="utf-8")
+        unprivileged.make_readable(db)
+        assert db.read_bytes() == db_before
+        untracked = unprivileged.git("status", "--porcelain", "--untracked-files=all", "secrets")
+        assert "?? secrets/.env.api" in untracked, untracked
+
+
+def test_pull_reports_any_secrets_only_failure_for_that_environment(
+    git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+) -> None:
+    """``envdrift pull`` caught only PartialEncryptionError, so anything else was a crash.
+
+    An absolute ``pattern`` makes ``Path.glob`` raise NotImplementedError; pull-partial
+    reports it for the environment, and so must ``pull``.
+    """
+    (git_repo / "secrets").mkdir()
+    (git_repo / "secrets" / ".env.api").write_text(f"API_KEY={_API_VALUE}\n", encoding="utf-8")
+    (git_repo / ".env.production").write_text("DEBUG=false\n", encoding="utf-8")
+    (git_repo / "envdrift.toml").write_text(
+        _VAULT_SYNC + "[partial_encryption]\n"
+        "enabled = true\n\n"
+        "[[partial_encryption.environments]]\n"
+        'name = "production"\n'
+        "secrets_only = true\n"
+        'secrets_dir = "secrets"\n'
+        f'pattern = "{(git_repo / ".env*").as_posix()}"\n',
+        encoding="utf-8",
+    )
+
+    result = _run_envdrift(
+        ["pull", "--skip-sync"],
+        cwd=git_repo,
+        integration_pythonpath=integration_pythonpath,
+        envdrift_cmd=envdrift_cmd,
+    )
+
+    out = _flat(result)
+    assert result.returncode == 1, out
+    assert "Traceback" not in out, out
+    summary = out.split("Partial Encryption Summary", 1)[1]
+    assert "Errors: 1" in summary, out
+    assert "• production: Non-relative patterns are unsupported" in out, out

@@ -216,7 +216,8 @@ When partial encryption is enabled, `pull` then decrypts each `.secret` file and
 each secrets-only directory the way [`pull-partial`](pull-partial.md#when-a-decrypt-fails)
 does: a file that fails to decrypt is left as it was, and in secrets-only mode the
 files decrypted before the failing one are still counted under `Decrypted:` in
-the Partial Encryption Summary.
+the Partial Encryption Summary, whatever stopped the pull (a file it cannot read,
+say). An environment that fails is reported in that summary, never as a traceback.
 
 Like `pull-partial`, `pull` marks each decrypted secret file `skip-worktree` so a
 plain `git add .` does not stage its plaintext. git can only mark a file it tracks.

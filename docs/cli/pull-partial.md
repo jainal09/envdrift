@@ -25,8 +25,9 @@ but no `secrets_dir` is rejected at config-load time.
 The summary panel reports `Decrypted: N` (files actually decrypted on this run)
 and `Skipped: M` (files that were already decrypted, including those skipped in
 environments where some other files were decrypted). In secrets-only mode a pull
-stops at the first file it cannot decrypt; the files decrypted before it are
-still counted in `Decrypted: N`.
+stops at the first file it cannot decrypt, for whatever reason (a file it cannot
+even read, say); the files decrypted before it are still counted in
+`Decrypted: N`, and named in the DANGER warning if git could not protect them.
 
 Like `push`, `pull-partial` first makes sure `.gitignore` lists each combined file
 and the dotenvx private-key file next to each secret file (`<secret dir>/.env.keys`,

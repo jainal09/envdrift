@@ -266,6 +266,20 @@ class DotenvxEncryptionBackend(EncryptionBackend):
 
         from envdrift.core.partial_encryption import DecryptSnapshot, is_file_encrypted
 
+        # dotenvx decrypts value by value: with one value under another key it
+        # writes the values it could decrypt, then exits 1. Snapshot the bytes
+        # first so a failed decrypt leaves the file as it was instead of half
+        # plaintext in a tracked file (#962). Shared by decrypt, pull,
+        # vault-pull and lock's re-key, which all call this backend. Taken before
+        # any other read, so an unreadable file is refused here, not by a bare
+        # PermissionError from the check below.
+        try:
+            snapshot = DecryptSnapshot(env_file)
+        except OSError as e:
+            raise EncryptionBackendError(
+                f"Could not read {env_file} before decrypting it: {e}. Nothing was decrypted."
+            ) from e
+
         # Nothing to decrypt: the file holds no ciphertext value. dotenvx would
         # still rewrite it (line-ending normalization, header cleanup) and exit 0
         # — and handed a binary blob it corrupts the file outright — so report an
@@ -287,18 +301,6 @@ class DotenvxEncryptionBackend(EncryptionBackend):
             )
 
         from envdrift.integrations.dotenvx import DotenvxError
-
-        # dotenvx decrypts value by value: with one value under another key it
-        # writes the values it could decrypt, then exits 1. Snapshot the bytes
-        # first so a failed decrypt leaves the file as it was instead of half
-        # plaintext in a tracked file (#962). Shared by decrypt, pull,
-        # vault-pull and lock's re-key, which all call this backend.
-        try:
-            snapshot = DecryptSnapshot(env_file)
-        except OSError as e:
-            raise EncryptionBackendError(
-                f"Could not read {env_file} before decrypting it: {e}. Nothing was decrypted."
-            ) from e
 
         try:
             with snapshot:

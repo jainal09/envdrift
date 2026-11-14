@@ -535,15 +535,13 @@ def _load_partial_config(config_file: Path | None, runtime: PullRuntime):
 
 
 def _pull_secrets_only_environment(env_config: Any, state: _PullPartialState) -> None:
-    from envdrift.core.partial_encryption import (
-        PartialEncryptionError,
-        SecretsOnlyPullError,
-        pull_secrets_only,
-    )
+    from envdrift.core.partial_encryption import SecretsOnlyPullError, pull_secrets_only
 
     try:
         result = pull_secrets_only(env_config)
-    except PartialEncryptionError as exc:
+    except Exception as exc:
+        # Any failure is this environment's error, as in pull-partial: a
+        # traceback dropped the tally and the warning for what was decrypted.
         if isinstance(exc, SecretsOnlyPullError):
             # The files decrypted before the failing one are plaintext on
             # disk: count them in the summary (#948) and warn if unprotected.
@@ -592,7 +590,7 @@ def _pull_combined_environment(
     state: _PullPartialState,
     runtime: PullRuntime,
 ) -> None:
-    from envdrift.core.partial_encryption import PartialEncryptionError, pull_partial_encryption
+    from envdrift.core.partial_encryption import pull_partial_encryption
 
     secret_file = Path(env_config.secret_file)
     if not secret_file.exists():
@@ -601,7 +599,7 @@ def _pull_combined_environment(
         return
     try:
         was_decrypted, protected = pull_partial_encryption(env_config)
-    except PartialEncryptionError as exc:
+    except Exception as exc:  # this environment's error, as in pull-partial
         console.print(f"  [red]![/red] {secret_file} [red]- error: {exc}[/red]")
         state.errors.append(f"{env_config.name}: {exc}")
         return
