@@ -734,3 +734,45 @@ def test_vault_push_all_pushes_the_held_key_that_decrypts_the_file(
     assert _decrypt_with_only(cli, svc / ".env.production", k1, tmp_path / "d") == {
         "API_TOKEN": "new"
     }
+
+
+# --- #1015: a mapping whose file is a plain .env (found here, not fixed here) ----
+
+
+@pytest.mark.xfail(
+    strict=False,
+    raises=AssertionError,
+    reason="a plain .env mapping's bare DOTENV_PRIVATE_KEY is never pushed or verified (see #1015)",
+)
+def test_a_plain_env_mapping_can_be_locked_pushed_and_verified(
+    cli: _Cli, vault: KV2StandIn, tmp_path: Path
+):
+    """#1015: lock, vault-push --all and lock --verify-vault --check all succeed.
+
+    dotenvx names a plain ``.env`` file's key ``DOTENV_PRIVATE_KEY``, but
+    vault-push --all and lock --verify-vault look for the mapping
+    environment's ``DOTENV_PRIVATE_KEY_PRODUCTION``, so the key is never
+    pushed. The issue leaves the fix open (read the bare name, or name the
+    key for the environment), so this asks only that the key pushed decrypts
+    the file on its own.
+    """
+    _write_config(
+        cli, vault.url, '[[vault.sync.mappings]]\nsecret_name = "app-key"\nfolder_path = "svc"\n'
+    )
+    svc = cli.cwd / "svc"
+    svc.mkdir()
+    secret = "plain-env-" + "secret"
+    (svc / ".env").write_text(f"API_TOKEN={secret}\n", encoding="utf-8")
+
+    code, out = cli.run("lock", "--force")
+    assert code == 0, out
+
+    code, out = cli.run("vault-push", "--all", "--force")
+    assert code == 0, out
+    pushed = vault.get("app-key")
+    assert pushed is not None, out
+    key = pushed["value"].split("=", 1)[1]
+    assert _decrypt_with_only(cli, svc / ".env", key, tmp_path / "d") == {"API_TOKEN": secret}
+
+    code, out = cli.run("lock", "--verify-vault", "--check")
+    assert code == 0, out
