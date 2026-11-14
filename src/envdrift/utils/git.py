@@ -8,6 +8,7 @@ is unchanged.
 from __future__ import annotations
 
 import os
+import re
 import subprocess  # nosec B404
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -426,19 +427,18 @@ def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = N
     """
     Ensure the provided paths are listed in the repo's .gitignore.
 
+    Each entry is the path relative to the repository root, escaped so that it matches
+    that path and nothing else (``gitignore_pattern``).
+
     Parameters:
         paths: Iterable of file paths to ignore.
         git_root: Optional git root override; auto-detected when omitted.
 
     Returns:
-        List of entries added to .gitignore (relative paths).
+        List of entries added to .gitignore, as written there.
     """
     path_list = [Path(path) for path in paths]
-    if not path_list:
-        return []
-
-    if git_root is None:
-        git_root = get_git_root(path_list[0]) or get_git_root(Path.cwd())
+    git_root = _gitignore_root(path_list, git_root)
     if git_root is None:
         return []
 
@@ -453,17 +453,19 @@ def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = N
     new_entries: list[str] = []
 
     for path in path_list:
-        if _is_path_ignored(path, git_root):
+        if _check_ignore(path, git_root) == 0:
             continue
         try:
             relative_path = path.resolve().relative_to(git_root)
         except ValueError:
             continue
 
-        entry = relative_path.as_posix()
-        if entry not in existing:
+        entry = gitignore_pattern(relative_path.as_posix())
+        # Compared stripped, as the lines are: an escaped trailing space must not
+        # make every run append the entry again.
+        if entry.strip() not in existing:
             new_entries.append(entry)
-            existing.add(entry)
+            existing.add(entry.strip())
 
     if new_entries:
         with gitignore_path.open("a", encoding="utf-8") as handle:
@@ -475,11 +477,58 @@ def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = N
     return new_entries
 
 
-def _is_path_ignored(path: Path, git_root: Path) -> bool:
+def gitignore_pattern(relative_path: str) -> str:
+    """The .gitignore line that matches exactly ``relative_path`` (POSIX separators).
+
+    git reads ``\\``, ``*``, ``?`` and ``[`` as glob syntax, a leading ``!`` as a
+    negation and a leading ``#`` as a comment, and drops trailing spaces. Written as
+    it is, ``config/[prod]/.env.keys`` is a character class that matches
+    ``config/p/.env.keys`` but not the folder ``[prod]``, so the private key it was
+    meant to hide stayed stageable. Each of those is escaped with a backslash.
+    """
+    pattern = re.sub(r"([\\*?\[])", r"\\\1", relative_path)
+    if pattern.startswith(("!", "#")):
+        pattern = "\\" + pattern
+    body = pattern.rstrip(" ")
+    return body + "\\ " * (len(pattern) - len(body))
+
+
+def unignored_paths(paths: Iterable[Path], *, git_root: Path | None = None) -> list[str]:
+    """The paths in ``paths`` that git does not ignore, relative to the repository root.
+
+    The check behind ``ensure_gitignore_entries``, to run after it: an entry it wrote can
+    still be overridden, by a later ``!`` rule in a .gitignore for example. The
+    repository's own rules count, a user's global excludes file does not. A path outside
+    the repository, or one git cannot answer for (in a submodule, say), is not listed.
+    """
+    path_list = [Path(path) for path in paths]
+    git_root = _gitignore_root(path_list, git_root)
+    if git_root is None:
+        return []
+    return [
+        path.resolve().relative_to(git_root).as_posix()
+        for path in path_list
+        if _check_ignore(path, git_root) == 1
+    ]
+
+
+def _gitignore_root(path_list: list[Path], git_root: Path | None) -> Path | None:
+    """``git_root``, else the repository of the first path or of the working directory."""
+    if git_root is not None or not path_list:
+        return git_root
+    return get_git_root(path_list[0]) or get_git_root(Path.cwd())
+
+
+def _check_ignore(path: Path, git_root: Path) -> int | None:
+    """``git check-ignore``'s exit code for ``path``: 0 ignored, 1 not ignored.
+
+    None when ``path`` is outside ``git_root`` or git could not be run; git's own fatal
+    errors (a path in a submodule, say) exit 128.
+    """
     try:
         relative_path = path.resolve().relative_to(git_root)
     except ValueError:
-        return False
+        return None
 
     try:
         result = run_tool(
@@ -499,6 +548,6 @@ def _is_path_ignored(path: Path, git_root: Path) -> bool:
             errors="surrogateescape",
             timeout=10,
         )
-        return result.returncode == 0
+        return result.returncode
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+        return None

@@ -109,7 +109,9 @@ When this flag is used with partial encryption enabled, the command will:
 3. Add the combined file to `.gitignore` (it contains decrypted secrets), along
    with the dotenvx `.env.keys` next to each `.secret` file, as `push` does
 
-This creates a single usable `.env` file for local development.
+This creates a single usable `.env` file for local development. If git still does
+not ignore one of those key files (a `!` rule re-includes it), the partial-encryption
+step stops with exit 1 before it decrypts or merges anything, as `push` does.
 
 > **Note:** The merged `.env.{env}` file contains decrypted secrets, so it is
 > added to `.gitignore` (just like `envdrift push`) to keep a routine

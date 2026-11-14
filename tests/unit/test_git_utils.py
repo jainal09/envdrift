@@ -8,6 +8,8 @@ import sys
 from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 
+import pytest
+
 from envdrift.utils.git import (
     ensure_gitignore_entries,
     get_file_from_git,
@@ -376,6 +378,91 @@ class TestEnsureGitignoreEntries:
 
         assert added == []
         assert gitignore.read_text().splitlines() == [".env.*"]
+
+    @pytest.mark.parametrize(
+        ("path", "decoy"),
+        [
+            ("config/[prod]/.env.keys", "config/p/.env.keys"),
+            ("a*b/.env.keys", "aXb/.env.keys"),
+            ("q?/.env.keys", "qz/.env.keys"),
+            ("back\\slash/.env.keys", None),
+            ("!bang/.env.keys", None),
+            ("#hash/.env.keys", None),
+            ("trailing  ", "trailing"),
+        ],
+    )
+    def test_entry_matches_exactly_its_own_path(
+        self, tmp_path: Path, path: str, decoy: str | None
+    ) -> None:
+        """A path with gitignore syntax in it is ignored, and nothing else is.
+
+        Written raw, ``config/[prod]/.env.keys`` is a character class: it ignores
+        ``config/p/.env.keys`` but not the private key in the folder ``[prod]``.
+        """
+        if sys.platform == "win32" and (any(ch in path for ch in "*?\\") or path.endswith(" ")):
+            pytest.skip("not a valid Windows file name")
+        repo = tmp_path.resolve()  # git's own spelling of the root (macOS: /private/var)
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+
+        added = ensure_gitignore_entries([repo / path], git_root=repo)
+
+        assert len(added) == 1, added
+        assert _check_ignore(repo, path) == 0, (repo / ".gitignore").read_text()
+        if decoy is not None:
+            assert _check_ignore(repo, decoy) == 1, (repo / ".gitignore").read_text()
+        # A second run finds it ignored and writes nothing.
+        assert ensure_gitignore_entries([repo / path], git_root=repo) == []
+
+
+def _check_ignore(repo: Path, path: str) -> int:
+    """``git check-ignore``'s exit code for ``path``: 0 ignored, 1 not."""
+    return subprocess.run(
+        ["git", "check-ignore", "-q", "--no-index", "--", path], cwd=repo, capture_output=True
+    ).returncode
+
+
+def unignored_paths(paths: list[Path], **kwargs) -> list[str]:
+    """``envdrift.utils.git.unignored_paths``, imported here so this module still
+    collects, and its other tests still run, against code without it."""
+    from envdrift.utils.git import unignored_paths as _unignored_paths
+
+    return _unignored_paths(paths, **kwargs)
+
+
+class TestUnignoredPaths:
+    """``unignored_paths`` asks git, after the entries are written, what it still sees."""
+
+    def test_lists_a_path_a_deeper_rule_re_includes(self, tmp_path: Path) -> None:
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / ".gitignore").write_text("!.env.keys\n", encoding="utf-8")
+        key_file = tmp_path / "config" / ".env.keys"
+
+        assert ensure_gitignore_entries([key_file]) == ["config/.env.keys"]
+        assert unignored_paths([key_file]) == ["config/.env.keys"]
+
+    def test_an_ignored_path_is_not_listed(self, tmp_path: Path) -> None:
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        (tmp_path / "config").mkdir()
+        key_file = tmp_path / "config" / ".env.keys"
+
+        ensure_gitignore_entries([key_file])
+
+        assert unignored_paths([key_file]) == []
+
+    def test_paths_outside_the_repository_are_not_listed(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+
+        assert unignored_paths([tmp_path / "elsewhere" / ".env.keys"], git_root=repo) == []
+
+    def test_nothing_is_listed_outside_a_repository(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)  # not the envdrift checkout the suite runs in
+
+        assert unignored_paths([tmp_path / ".env.keys"]) == []
 
 
 class TestGitUtilsExceptions:

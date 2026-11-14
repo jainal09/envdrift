@@ -76,20 +76,20 @@ def _assert_ignored(repo: Path, key_file: str) -> None:
     assert key_file not in staged, staged
 
 
-def _write_combine_config(directory: Path) -> None:
+def _write_combine_config(directory: Path, folder: str = "config") -> None:
     (directory / "envdrift.toml").write_text(
         "[partial_encryption]\n"
         "enabled = true\n\n"
         "[[partial_encryption.environments]]\n"
         'name = "production"\n'
-        'clear_file = "config/.env.production.clear"\n'
-        'secret_file = "config/.env.production.secret"\n'
-        'combined_file = "config/.env.production"\n',
+        f'clear_file = "{folder}/.env.production.clear"\n'
+        f'secret_file = "{folder}/.env.production.secret"\n'
+        f'combined_file = "{folder}/.env.production"\n',
         encoding="utf-8",
     )
-    (directory / "config").mkdir()
-    (directory / "config" / ".env.production.clear").write_text("DEBUG=false\n", encoding="utf-8")
-    (directory / "config" / ".env.production.secret").write_text(
+    (directory / folder).mkdir(parents=True)
+    (directory / folder / ".env.production.clear").write_text("DEBUG=false\n", encoding="utf-8")
+    (directory / folder / ".env.production.secret").write_text(
         f"JWT_SECRET={_JWT_VALUE}\n", encoding="utf-8"
     )
 
@@ -163,6 +163,80 @@ class TestPushIgnoresTheRealKeyFile:
 
         assert result.returncode == 0, _flat(result)
         _assert_ignored(git_repo, "config/.env.keys")
+
+    def test_folder_named_with_gitignore_syntax(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """``config/[prod]/.env.keys`` written raw is a character class, not that folder."""
+        _write_combine_config(git_repo, "config/[prod]")
+
+        result = _run_envdrift(
+            ["push"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert result.returncode == 0, _flat(result)
+        _assert_ignored(git_repo, "config/[prod]/.env.keys")
+        combined = _git(
+            git_repo, "check-ignore", "-q", "config/[prod]/.env.production", check=False
+        )
+        assert combined.returncode == 0, (git_repo / ".gitignore").read_text(encoding="utf-8")
+        # The escaped entry matches only that folder, not what the glob would.
+        decoy = _git(
+            git_repo, "check-ignore", "-q", "--no-index", "config/p/.env.keys", check=False
+        )
+        assert decoy.returncode == 1, (git_repo / ".gitignore").read_text(encoding="utf-8")
+
+
+# pull needs a [vault.sync] section; --skip-sync never contacts this dummy vault.
+_VAULT_SYNC = (
+    "[vault]\n"
+    'provider = "azure"\n\n'
+    "[vault.azure]\n"
+    'vault_url = "https://dummy.vault.azure.net/"\n\n'
+    "[vault.sync]\n"
+    'default_vault_name = "dummy"\n\n'
+    "[[vault.sync.mappings]]\n"
+    'secret_name = "unused"\n'
+    'folder_path = "."\n'
+    'environment = "production"\n\n'
+)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["push"], ["pull-partial"], ["pull", "--skip-sync", "--merge"]],
+    ids=["push", "pull-partial", "pull-merge"],
+)
+def test_a_rule_that_re_includes_the_key_file_stops_the_command(
+    git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str], args: list[str]
+) -> None:
+    """Fail closed: git still sees the key file after envdrift's entry, so dotenvx never
+    touches a partial-encryption file."""
+    _write_combine_config(git_repo)
+    if args[0] == "pull":
+        config = git_repo / "envdrift.toml"
+        config.write_text(_VAULT_SYNC + config.read_text(encoding="utf-8"), encoding="utf-8")
+        # The mapping's plaintext .env.production is skipped by the decrypt step.
+        (git_repo / ".env.production").write_text("DEBUG=false\n", encoding="utf-8")
+    (git_repo / "config" / ".gitignore").write_text("!.env.keys\n", encoding="utf-8")
+
+    result = _run_envdrift(
+        args,
+        cwd=git_repo,
+        integration_pythonpath=integration_pythonpath,
+        envdrift_cmd=envdrift_cmd,
+    )
+
+    out = _flat(result)
+    assert result.returncode == 1, out
+    assert "git does not ignore config/.env.keys" in out, out
+    assert "stopped before it encrypted or decrypted any partial-encryption file" in out, out
+    assert not (git_repo / "config" / ".env.keys").exists()
+    secret = (git_repo / "config" / ".env.production.secret").read_text(encoding="utf-8")
+    assert secret == f"JWT_SECRET={_JWT_VALUE}\n"
 
 
 def test_pull_partial_ignores_a_key_file_placed_next_to_the_secret_file(

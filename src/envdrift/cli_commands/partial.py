@@ -25,7 +25,7 @@ from envdrift.core.partial_encryption import (
     unprotected_reason,
 )
 from envdrift.output.rich import console, print_error, print_success, print_warning
-from envdrift.utils import ensure_gitignore_entries
+from envdrift.utils import ensure_gitignore_entries, unignored_paths
 
 
 def _validate_partial_config_or_exit(config: EnvdriftConfig) -> None:
@@ -51,11 +51,23 @@ def _ensure_combined_gitignore(envs_to_process) -> None:
     # a cwd entry did not cover them and `git add .` staged the key (#961).
     # ensure_gitignore_entries writes repository-root-relative entries, so they
     # stay anchored wherever push runs.
-    for env_config in envs_to_process:
-        paths.extend(dotenvx_key_files(env_config))
-    added_entries = ensure_gitignore_entries(paths)
+    key_files = [key for env_config in envs_to_process for key in dotenvx_key_files(env_config)]
+    added_entries = ensure_gitignore_entries([*paths, *key_files])
     if added_entries:
         console.print(f"[dim]Updated .gitignore: {', '.join(added_entries)}[/dim]")
+    # Fail closed: an entry can still be overridden (by a later `!` rule in a
+    # .gitignore), and then `git add .` stages the private key. Ask git, and stop
+    # before dotenvx touches a partial-encryption file. (pull --merge gets here
+    # after its earlier steps, which may have decrypted mapped files.)
+    exposed = unignored_paths(key_files)
+    if exposed:
+        print_error(
+            f"git does not ignore {', '.join(exposed)}, where dotenvx keeps the private "
+            "key, so `git add .` would stage it. A rule in your git ignore files "
+            "re-includes it (a `!` pattern, for example). Fix that and run again: "
+            "envdrift stopped before it encrypted or decrypted any partial-encryption file."
+        )
+        raise typer.Exit(code=1)
 
 
 def push(

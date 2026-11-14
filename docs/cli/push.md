@@ -40,8 +40,15 @@ next to each `secret_file` in combine mode, and in secrets-only mode the
 `.env.keys` in `secrets_dir` and in every folder the `pattern` reaches (a
 recursive pattern like `**/.env*` gets one key file per folder). The entries are
 relative to the repository root, so they still match when `push` runs from a
-subdirectory. In combine mode it also adds each `combined_file` to `.gitignore`.
-`pull-partial` adds the same entries.
+subdirectory, and gitignore syntax in a path is escaped (a folder named `[prod]` is
+written `\[prod]`), so each entry matches exactly that file. In combine mode it also
+adds each `combined_file` to `.gitignore`. `pull-partial` adds the same entries.
+
+It then asks git whether each key file is ignored. A rule can still re-include
+one after the entry, such as `!.env.keys` in a deeper `.gitignore`, and then
+`git add .` would stage the private key. In that case `push` exits 1 with
+`git does not ignore <key file>, ...` before any environment runs, so nothing
+is encrypted or decrypted. `pull-partial` and `pull --merge` make the same check.
 
 This command requires partial encryption to be configured in `envdrift.toml`.
 
