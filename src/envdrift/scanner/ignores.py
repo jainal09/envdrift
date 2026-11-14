@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING
 
+from envdrift.utils.text import LINE_CACHE_SIZE, split_lines
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
@@ -219,6 +221,7 @@ class IgnoreFilter:
         """
         self.config = config or IgnoreConfig()
         self._file_cache: dict[Path, list[str]] = {}
+        self._ignore_comments: dict[tuple[Path, int], re.Match[str] | None] = {}
 
     def filter(
         self,
@@ -300,14 +303,7 @@ class IgnoreFilter:
         Returns:
             True if the line has a matching ignore comment.
         """
-        lines = self._get_file_lines(file_path)
-
-        if not lines or line_number < 1 or line_number > len(lines):
-            return False
-
-        line = lines[line_number - 1]
-
-        match = IGNORE_PATTERN.search(line)
+        match = self._ignore_comment(file_path, line_number)
         if not match:
             return False
 
@@ -320,6 +316,29 @@ class IgnoreFilter:
 
         # If specific rule, only ignore that rule
         return ignored_rule == rule_id
+
+    def _ignore_comment(self, file_path: Path, line_number: int) -> re.Match[str] | None:
+        """The ignore comment on a line, looked for once: a line can hold thousands of findings.
+
+        Only the comments of the last ``LINE_CACHE_SIZE`` lines looked up are kept, not one for
+        every line with a finding: a scanner reports the findings on one line together.
+
+        Args:
+            file_path: Path to the file.
+            line_number: 1-based line number.
+
+        Returns:
+            The comment's match, or None if the line has none or is not in the file.
+        """
+        key = (file_path, line_number)
+        if key in self._ignore_comments:
+            return self._ignore_comments[key]
+        if len(self._ignore_comments) >= LINE_CACHE_SIZE:
+            del self._ignore_comments[next(iter(self._ignore_comments))]  # the oldest line
+        lines = self._get_file_lines(file_path)
+        line = lines[line_number - 1] if 1 <= line_number <= len(lines) else ""
+        self._ignore_comments[key] = match = IGNORE_PATTERN.search(line)
+        return match
 
     def _get_file_lines(self, file_path: Path) -> list[str]:
         """Get cached file lines.
@@ -335,7 +354,7 @@ class IgnoreFilter:
 
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
-            lines = content.splitlines()
+            lines = split_lines(content)
             self._file_cache[file_path] = lines
             return lines
         except (OSError, UnicodeDecodeError):
