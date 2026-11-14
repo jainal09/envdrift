@@ -149,6 +149,36 @@ def test_extract_metadata_with_config_object_and_typing():
     assert schema.fields["items"].annotation
 
 
+@pytest.mark.parametrize(
+    "config",
+    [
+        SettingsConfigDict(str_min_length=1),
+        SettingsConfigDict(str_max_length=20),
+        SettingsConfigDict(str_max_length=0),
+    ],
+    ids=["minimum", "maximum", "zero-maximum"],
+)
+def test_model_string_limits_require_constraint_validation(config: SettingsConfigDict):
+    """#952: plain string fields still need the model's configured length checks."""
+
+    class Settings(BaseSettings):
+        model_config = config
+        NAME: str
+
+    schema = SchemaLoader().extract_metadata(Settings)
+
+    assert schema.has_constraints is True
+
+
+def test_plain_strings_without_model_limits_keep_the_type_only_path():
+    """A schema with no configured string limits still needs only its type check."""
+
+    class Settings(BaseSettings):
+        NAME: str
+
+    assert SchemaLoader().extract_metadata(Settings).has_constraints is False
+
+
 def test_extract_metadata_alias_path_uses_first_component_without_prefix():
     """AliasPath's environment key bypasses env_prefix like pydantic-settings."""
 
