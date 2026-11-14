@@ -716,7 +716,13 @@ def _decrypt_pull_target(
     target: Path,
     env_keys_path: Path,
 ) -> None:
-    """Normalize custom dotenvx metadata and decrypt the target file."""
+    """Normalize custom dotenvx metadata and decrypt the target file.
+
+    A failed decrypt leaves the file as it was before this command. The backend
+    restores the bytes it had before dotenvx ran and says it "was left as it
+    was"; for ``--env-file`` those bytes already had a rewritten header, so the
+    header rewrite is undone too.
+    """
     from envdrift.encryption import (
         EncryptionBackendError,
         EncryptionNotFoundError,
@@ -724,19 +730,43 @@ def _decrypt_pull_target(
     )
 
     backend, provider = _resolve_pull_backend(request.connection.config)
+    before: bytes | None = None
     if provider == EncryptionProvider.DOTENVX and request.env_file is not None:
         from envdrift.integrations.dotenvx import normalize_dotenvx_metadata
 
-        normalize_dotenvx_metadata(target, env_keys_path, request.environment)
+        try:
+            before = target.read_bytes()
+            normalize_dotenvx_metadata(target, env_keys_path, request.environment)
+        except OSError as e:
+            print_error(f"Failed to decrypt {target}: {e}. Nothing was decrypted.")
+            raise typer.Exit(code=1) from None
     try:
         result = backend.decrypt(target.resolve(), keys_file=env_keys_path.resolve())
     except (EncryptionNotFoundError, EncryptionBackendError) as e:
-        print_error(f"Failed to decrypt {target}: {e}")
+        print_error(f"Failed to decrypt {target}: {e}{_undo_header_rewrite(target, before)}")
         raise typer.Exit(code=1) from None
     if not result.success:
-        print_error(f"Failed to decrypt {target}: {result.message}")
+        message = f"{result.message}{_undo_header_rewrite(target, before)}"
+        print_error(f"Failed to decrypt {target}: {message}")
         raise typer.Exit(code=1)
     print_success(f"Decrypted {target}")
+
+
+def _undo_header_rewrite(target: Path, before: bytes | None) -> str:
+    """Put back the bytes ``target`` had before its header was rewritten.
+
+    Returns what to add to the error: nothing, unless the write failed and the
+    rewritten header (only the header: the backend already put back every
+    value) is still there.
+    """
+    if before is None:
+        return ""
+    try:
+        if target.read_bytes() != before:
+            target.write_bytes(before)
+    except OSError as e:
+        return f"\nenvdrift could not put back the dotenvx header it rewrote in {target}: {e}"
+    return ""
 
 
 def execute_vault_pull(request: VaultPullRequest) -> None:

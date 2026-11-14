@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import typer
 
 pytestmark = [pytest.mark.integration]
 
@@ -187,3 +188,63 @@ class TestPartlyFailedDecryptLeavesTheFileAsItWas:
         assert "Errors: 1" in out, out
         assert "STRIPE_API_KEY" in out, out
         assert "was left as it was" in out, out
+
+
+@_needs_dotenvx
+def test_vault_pull_env_file_failure_puts_back_the_header_too(
+    git_repo: Path,
+    integration_pythonpath: str,
+    envdrift_cmd: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """vault-pull's decrypt step with ``--env-file``, against the real dotenvx.
+
+    It rewrites a custom file's dotenvx header to the environment's name before it
+    decrypts, and the backend's snapshot comes after that rewrite. A failed decrypt
+    left the rewritten header in the file while the error said the file "was left
+    as it was". Fetching the key needs a vault; this step does not.
+    """
+    from envdrift.cli_commands.vault_helpers import (
+        VaultConnectionOptions,
+        VaultPullRequest,
+        _decrypt_pull_target,
+    )
+
+    monkeypatch.chdir(git_repo)
+    _commit_partly_foreign_file(
+        git_repo,
+        integration_pythonpath=integration_pythonpath,
+        envdrift_cmd=envdrift_cmd,
+        crlf=False,
+    )
+    # The same file as a custom one, with the header dotenvx gives custom.env.
+    custom = git_repo / "custom.env"
+    custom.write_text(
+        (git_repo / ".env.production")
+        .read_text(encoding="utf-8")
+        .replace("DOTENV_PUBLIC_KEY_PRODUCTION=", "DOTENV_PUBLIC_KEY_CUSTOM=")
+        .replace("# .env.production\n", "# custom.env\n"),
+        encoding="utf-8",
+    )
+    before = custom.read_bytes()
+    assert b"DOTENV_PUBLIC_KEY_CUSTOM=" in before
+    request = VaultPullRequest(
+        folder=git_repo,
+        secret_name="unused",
+        environment="production",
+        connection=VaultConnectionOptions(
+            config=None, provider=None, vault_url=None, region=None, project_id=None
+        ),
+        no_decrypt=False,
+        env_file=Path("custom.env"),
+    )
+
+    with pytest.raises(typer.Exit) as excinfo:
+        _decrypt_pull_target(request, custom, git_repo / ".env.keys")
+
+    err = " ".join(capsys.readouterr().err.split())
+    assert excinfo.value.exit_code == 1, err
+    assert "STRIPE_API_KEY" in err, err
+    assert "was left as it was" in err, err
+    assert custom.read_bytes() == before
