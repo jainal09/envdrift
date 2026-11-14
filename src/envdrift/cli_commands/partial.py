@@ -23,6 +23,7 @@ from envdrift.core.partial_encryption import (
 )
 from envdrift.output.rich import console, print_error, print_success, print_warning
 from envdrift.utils import ensure_gitignore_entries
+from envdrift.utils.text import styled_text
 
 # dotenvx writes the PRIVATE decryption key here during encryption. It must never
 # be committed, in either combine or secrets-only mode.
@@ -150,7 +151,8 @@ def push(
     errors = []
 
     for env_config in envs_to_process:
-        console.print(f"[bold cyan]→[/bold cyan] {env_config.name}")
+        # Names, paths and errors are printed as they are, never as markup.
+        console.print(styled_text("[bold cyan]→[/bold cyan] {}", env_config.name))
 
         try:
             if env_config.secrets_only:
@@ -158,21 +160,31 @@ def push(
                 if check:
                     if stats["in_sync"]:
                         console.print(
-                            f"  [green]✓[/green] {env_config.secrets_dir} "
-                            f"[dim](all {stats['already_encrypted']} file(s) encrypted)[/dim]"
+                            styled_text(
+                                "  [green]✓[/green] {} [dim](all {} file(s) encrypted)[/dim]",
+                                env_config.secrets_dir,
+                                stats["already_encrypted"],
+                            )
                         )
                     else:
                         out_of_sync += 1
                         console.print(
-                            f"  [yellow]![/yellow] {env_config.secrets_dir} "
-                            f"[dim]({stats['encrypted']} file(s) not encrypted — run "
-                            f"'envdrift push')[/dim]"
+                            styled_text(
+                                "  [yellow]![/yellow] {} "
+                                "[dim]({} file(s) not encrypted — run 'envdrift push')[/dim]",
+                                env_config.secrets_dir,
+                                stats["encrypted"],
+                            )
                         )
                 else:
                     console.print(
-                        f"  [green]✓[/green] Encrypted {stats['encrypted']} file(s) in "
-                        f"{env_config.secrets_dir} "
-                        f"[dim]({stats['already_encrypted']} already encrypted)[/dim]"
+                        styled_text(
+                            "  [green]✓[/green] Encrypted {} file(s) in {} "
+                            "[dim]({} already encrypted)[/dim]",
+                            stats["encrypted"],
+                            env_config.secrets_dir,
+                            stats["already_encrypted"],
+                        )
                     )
                     total_encrypted_files += stats["encrypted"]
                 processed += 1
@@ -181,29 +193,38 @@ def push(
                 if check:
                     if stats["in_sync"]:
                         console.print(
-                            f"  [green]✓[/green] {env_config.combined_file} [dim]is up to date[/dim]"
+                            styled_text(
+                                "  [green]✓[/green] {} [dim]is up to date[/dim]",
+                                env_config.combined_file,
+                            )
                         )
                     else:
                         out_of_sync += 1
                         console.print(
-                            f"  [yellow]![/yellow] {env_config.combined_file} "
-                            f"[dim]is out of date — run 'envdrift push'[/dim]"
+                            styled_text(
+                                "  [yellow]![/yellow] {} "
+                                "[dim]is out of date — run 'envdrift push'[/dim]",
+                                env_config.combined_file,
+                            )
                         )
                 else:
                     console.print(
-                        f"  [green]✓[/green] Generated {env_config.combined_file} "
-                        f"[dim]({stats['clear_lines']} clear + {stats['secret_vars']} "
-                        f"encrypted)[/dim]"
+                        styled_text(
+                            "  [green]✓[/green] Generated {} [dim]({} clear + {} encrypted)[/dim]",
+                            env_config.combined_file,
+                            stats["clear_lines"],
+                            stats["secret_vars"],
+                        )
                     )
                     combined_files += 1
                     total_encrypted_vars += stats["secret_vars"]
                 processed += 1
 
         except PartialEncryptionError as e:
-            console.print(f"  [red]✗[/red] {e}")
+            console.print(styled_text("  [red]✗[/red] {}", e))
             errors.append(f"{env_config.name}: {e}")
         except Exception as e:
-            console.print(f"  [red]✗[/red] Unexpected error: {e}")
+            console.print(styled_text("  [red]✗[/red] Unexpected error: {}", e))
             errors.append(f"{env_config.name}: {e}")
 
     # Summary
@@ -226,7 +247,7 @@ def push(
         console.print()
         print_warning("Some environments had errors:")
         for error in errors:
-            console.print(f"  • {error}")
+            console.print(Text(f"  • {error}"))
         raise typer.Exit(code=1)
 
     if check:
@@ -317,7 +338,8 @@ def pull_cmd(
     errors = []
 
     for env_config in envs_to_process:
-        console.print(f"[bold cyan]→[/bold cyan] {env_config.name}")
+        # Names, paths and errors are printed as they are, never as markup.
+        console.print(styled_text("[bold cyan]→[/bold cyan] {}", env_config.name))
 
         try:
             if env_config.secrets_only:
@@ -326,33 +348,45 @@ def pull_cmd(
                 protected_any = protected_any or result.get("protected", 0) > 0
                 if result["decrypted"]:
                     console.print(
-                        f"  [green]✓[/green] Decrypted {result['decrypted']} file(s) in "
-                        f"{env_config.secrets_dir} "
-                        f"[dim]({result['already_decrypted']} already decrypted)[/dim]"
+                        styled_text(
+                            "  [green]✓[/green] Decrypted {} file(s) in {} "
+                            "[dim]({} already decrypted)[/dim]",
+                            result["decrypted"],
+                            env_config.secrets_dir,
+                            result["already_decrypted"],
+                        )
                     )
                     decrypted_count += result["decrypted"]
                 else:
                     console.print(
-                        f"  [dim]=[/dim] {env_config.secrets_dir} "
-                        f"[dim](all {result['already_decrypted']} file(s) already decrypted)[/dim]"
+                        styled_text(
+                            "  [dim]=[/dim] {} [dim](all {} file(s) already decrypted)[/dim]",
+                            env_config.secrets_dir,
+                            result["already_decrypted"],
+                        )
                     )
             else:
                 was_decrypted, protected = pull_partial_encryption(env_config)
                 protected_any = protected_any or protected
                 if was_decrypted:
-                    console.print(f"  [green]✓[/green] Decrypted {env_config.secret_file}")
+                    console.print(
+                        styled_text("  [green]✓[/green] Decrypted {}", env_config.secret_file)
+                    )
                     decrypted_count += 1
                 else:
                     console.print(
-                        f"  [dim]=[/dim] {env_config.secret_file} [dim](already decrypted)[/dim]"
+                        styled_text(
+                            "  [dim]=[/dim] {} [dim](already decrypted)[/dim]",
+                            env_config.secret_file,
+                        )
                     )
                     skipped_count += 1
 
         except PartialEncryptionError as e:
-            console.print(f"  [red]✗[/red] {e}")
+            console.print(styled_text("  [red]✗[/red] {}", e))
             errors.append(f"{env_config.name}: {e}")
         except Exception as e:
-            console.print(f"  [red]✗[/red] Unexpected error: {e}")
+            console.print(styled_text("  [red]✗[/red] Unexpected error: {}", e))
             errors.append(f"{env_config.name}: {e}")
 
     # Summary
@@ -370,7 +404,7 @@ def pull_cmd(
         console.print()
         print_warning("Some environments had errors:")
         for error in errors:
-            console.print(f"  • {error}")
+            console.print(Text(f"  • {error}"))
         raise typer.Exit(code=1)
 
     console.print()
