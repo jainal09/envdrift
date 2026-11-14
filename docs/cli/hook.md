@@ -120,6 +120,9 @@ code 1 without touching the file.
 
 Files without a final newline are supported: existing hooks stay in their original
 repository entries, and a newline separates the last line from the appended envdrift block.
+If that separator would change an existing YAML value, such as a block-scalar hook
+argument, installation fails with exit code 1 and leaves the file unchanged. Add
+the hooks manually in that case; the error includes the configuration snippet command.
 
 ## Manual Setup
 
