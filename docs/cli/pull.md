@@ -202,6 +202,11 @@ Step 2: Decrypting environment files...
 Setup complete! Your environment files are ready to use.
 ```
 
+A file that dotenvx can only partly decrypt (for example, one value was encrypted
+under another key) is counted as an error, and the file is left byte for byte as
+it was instead of half decrypted. The error names the value dotenvx could not
+decrypt; see [decrypt](decrypt.md#a-value-encrypted-under-another-key).
+
 ## Configuration File Format
 
 Same as `envdrift sync`. See [sync documentation](sync.md#configuration-file-format) for details.

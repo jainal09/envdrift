@@ -11,12 +11,15 @@ import logging
 import re
 import subprocess  # nosec B404
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.env_files import _is_excluded_env_file
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError, DotenvxWrapper
 from envdrift.sync.operations import atomic_write
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 logger = logging.getLogger(__name__)
 
@@ -586,6 +589,83 @@ def _git_unskip_worktree(path: Path) -> bool:
     Best-effort: returns False (and logs) if git is unavailable or the file is not tracked.
     """
     return _run_git_update_index("--no-skip-worktree", path)
+
+
+class DecryptSnapshot:
+    """The exact bytes of a file about to be decrypted in place by dotenvx.
+
+    dotenvx decrypts value by value. When one value is encrypted under another
+    key (after a merge, or through key drift), it writes the values it could
+    decrypt to the file and then exits 1, so a failed decrypt left plaintext
+    secrets in a tracked file (#948, #962). Take the snapshot before dotenvx
+    runs; ``restore`` writes it back when the decrypt fails, or exits 0 but
+    leaves ciphertext behind, if the file changed (byte for byte, so CRLF line
+    endings survive the wrapper's LF normalization).
+
+    Used as a context manager, it restores the file on any exception from the
+    body and keeps the outcome in ``note`` for the caller's error message. The
+    pull-partial paths and the dotenvx backend (decrypt, pull, vault-pull and
+    lock's re-key) share it.
+    """
+
+    def __init__(self, path: Path) -> None:
+        """Read ``path``'s bytes; an ``OSError`` means nothing can be restored."""
+        self.path = path
+        self.original = path.read_bytes()
+        self.note = ""
+
+    def __enter__(self) -> DecryptSnapshot:
+        """Return the snapshot; the body runs the decrypt."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Restore the file when the decrypt raised; the exception propagates."""
+        if exc_type is not None:
+            self.note = self.restore()
+
+    def restore(self) -> str:
+        """Put the original bytes back if the file changed; return what happened.
+
+        The returned sentence ends the caller's error message. When the write
+        itself fails the file may hold decrypted plaintext, so it is marked
+        skip-worktree and the sentence says whether that protection worked.
+        """
+        try:
+            changed = self.path.read_bytes() != self.original
+        except OSError:
+            changed = True  # Unreadable now: write the original back to be safe.
+        if not changed:
+            return f"{self.path} was left as it was."
+        try:
+            self.path.write_bytes(self.original)
+            failure = "" if self.path.read_bytes() == self.original else "its bytes still differ"
+        except OSError as exc:
+            failure = str(exc)
+        if not failure:
+            return (
+                f"{self.path} was left as it was: envdrift restored the bytes it had "
+                "before the decrypt."
+            )
+        lead = (
+            f"envdrift could not restore {self.path} ({failure}), so it may now hold "
+            "decrypted plaintext values"
+        )
+        if _git_skip_worktree(self.path):
+            # git checkout refuses a skip-worktree path, so lift the bit first.
+            return (
+                f"{lead}. It is marked skip-worktree, so a plain `git add .` won't stage it. "
+                f"To restore it, run `git update-index --no-skip-worktree {self.path}` and "
+                f"then `git checkout -- {self.path}`."
+            )
+        return (
+            f"{lead}, and it could not be marked skip-worktree: a plain `git add .` "
+            f"WILL stage it. Run `git checkout -- {self.path}` before you commit."
+        )
 
 
 def _encrypt_and_verify(dotenvx: DotenvxWrapper, file: Path) -> None:

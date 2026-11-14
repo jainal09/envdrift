@@ -223,14 +223,37 @@ steps:
 ### Missing or Wrong Private Key
 
 When the private key is missing or does not match the encrypted file, decryption
-fails with a single line carrying the underlying dotenvx error:
+fails with the underlying dotenvx error (the `dotenvx decryption failed:` prefix
+appears once) and says what happened to the file:
 
 ```text
 [ERROR] Decryption failed: dotenvx decryption failed: <dotenvx error>
+.env.production was left as it was.
 ```
 
 Check that `.env.keys` exists or `DOTENV_PRIVATE_KEY_*` is set, and that the key
 matches the one used to encrypt the file.
+
+### A Value Encrypted Under Another Key
+
+dotenvx decrypts value by value. When one value was encrypted under a different
+key (for example after a merge, or through key drift), dotenvx writes the values
+it could decrypt to the file and then fails. envdrift takes a byte-for-byte copy
+of the file before dotenvx runs and writes it back, CRLF line endings included,
+so a failed decrypt never leaves decrypted secrets in a tracked file. The error
+names the value dotenvx could not decrypt:
+
+```text
+[ERROR] Decryption failed: dotenvx decryption failed: ☠ [DECRYPTION_FAILED] could not decrypt STRIPE_API_KEY. ...
+.env.production was left as it was: envdrift restored the bytes it had before the decrypt.
+```
+
+The same applies when dotenvx exits 0 but leaves ciphertext behind (`Decryption
+did not take effect`). If envdrift cannot write the file back, the message says
+the file may now hold decrypted plaintext, marks it `skip-worktree` so a plain
+`git add .` won't stage it, and says whether that protection worked. `envdrift
+pull`, `vault-pull` and the re-key step of `lock` decrypt through the same code,
+so they leave a file as it was in the same way.
 
 When using `--verify-vault`, a wrong key returns exit 1 with a message like:
 

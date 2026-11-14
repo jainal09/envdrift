@@ -17,6 +17,18 @@ from envdrift.encryption.base import (
 from envdrift.integrations.dotenvx import is_dotenvx_safe_filename
 
 
+def _dotenvx_failure_message(action: str, error: Exception) -> str:
+    """Return ``error`` prefixed with ``dotenvx <action> failed:`` exactly once.
+
+    ``DotenvxWrapper`` already words a failure it detects as ``dotenvx <action>
+    failed: <dotenvx output>``, so wrapping that message again printed the prefix
+    twice (#962). Other errors (a non-zero exit, a pre-flight refusal) still get it.
+    """
+    prefix = f"dotenvx {action} failed:"
+    text = str(error)
+    return text if text.startswith(prefix) else f"{prefix} {text}"
+
+
 class DotenvxEncryptionBackend(EncryptionBackend):
     """Encryption backend using dotenvx CLI.
 
@@ -200,7 +212,7 @@ class DotenvxEncryptionBackend(EncryptionBackend):
             # renamed private-key store caught by its content sniff, which
             # name-based checks above cannot see) with the file untouched —
             # surface it cleanly instead of an uncaught traceback (#474).
-            raise EncryptionBackendError(f"dotenvx encryption failed: {e}") from e
+            raise EncryptionBackendError(_dotenvx_failure_message("encryption", e)) from e
 
         # Verify the encryption actually took effect rather than trusting the
         # exit code. dotenvx can exit 0 *without* encrypting when the private key
@@ -252,7 +264,7 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 file_path=env_file,
             )
 
-        from envdrift.core.partial_encryption import is_file_encrypted
+        from envdrift.core.partial_encryption import DecryptSnapshot, is_file_encrypted
 
         # Nothing to decrypt: the file holds no ciphertext value. dotenvx would
         # still rewrite it (line-ending normalization, header cleanup) and exit 0
@@ -276,27 +288,45 @@ class DotenvxEncryptionBackend(EncryptionBackend):
 
         from envdrift.integrations.dotenvx import DotenvxError
 
+        # dotenvx decrypts value by value: with one value under another key it
+        # writes the values it could decrypt, then exits 1. Snapshot the bytes
+        # first so a failed decrypt leaves the file as it was instead of half
+        # plaintext in a tracked file (#962). Shared by decrypt, pull,
+        # vault-pull and lock's re-key, which all call this backend.
         try:
-            wrapper = self._get_wrapper()
-            wrapper.decrypt(
-                env_file=env_file,
-                env_keys_file=keys_file,
-                env=kwargs.get("env"),
-                cwd=kwargs.get("cwd"),
-            )
+            snapshot = DecryptSnapshot(env_file)
+        except OSError as e:
+            raise EncryptionBackendError(
+                f"Could not read {env_file} before decrypting it: {e}. Nothing was decrypted."
+            ) from e
+
+        try:
+            with snapshot:
+                wrapper = self._get_wrapper()
+                wrapper.decrypt(
+                    env_file=env_file,
+                    env_keys_file=keys_file,
+                    env=kwargs.get("env"),
+                    cwd=kwargs.get("cwd"),
+                )
         except DotenvxError as e:
-            raise EncryptionBackendError(f"dotenvx decryption failed: {e}") from e
+            # dotenvx's own output names the value it could not decrypt.
+            raise EncryptionBackendError(
+                f"{_dotenvx_failure_message('decryption', e)}\n{snapshot.note}"
+            ) from e
 
         # Verify the decryption took effect rather than trusting the exit code:
         # dotenvx can exit 0 while leaving ciphertext in place when the key is
-        # missing or invalid. If any encrypted value survived, report failure.
+        # missing or invalid. If any encrypted value survived, report failure
+        # and put back whatever dotenvx did decrypt.
         if is_file_encrypted(env_file):
             return EncryptionResult(
                 success=False,
                 changed=False,
                 message=(
                     f"Decryption did not take effect: {env_file} still contains "
-                    "encrypted values. The decryption key may be missing or invalid."
+                    "encrypted values. The decryption key may be missing or invalid. "
+                    f"{snapshot.restore()}"
                 ),
                 file_path=env_file,
             )
