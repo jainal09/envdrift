@@ -998,6 +998,9 @@ def decrypt_cmd(
     if not env_file.exists():
         print_error(f"ENV file not found: {env_file}")
         raise typer.Exit(code=1)
+    if not env_file.is_file():
+        print_error(f"Not a file: {env_file}")
+        raise typer.Exit(code=1)
 
     _refuse_companion_target(env_file, "decrypt")
 
