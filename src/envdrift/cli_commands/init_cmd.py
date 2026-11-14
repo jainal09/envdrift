@@ -137,11 +137,14 @@ def _infer_type(value: str) -> tuple[str, object | None]:
     """Infer a Python type hint and literal default from a raw .env value.
 
     Returns ``(type_hint, default)`` where ``default`` is ``None`` for values
-    that should stay required (plain strings). ``str.isdigit()`` is True for some
+    that should stay required (plain strings). Leading-zero digit strings stay
+    strings so their values are preserved. ``str.isdigit()`` is True for some
     non-ASCII digits that ``int()`` rejects, so the ASCII guard avoids a crash.
     """
     if value.lower() in ("true", "false"):
         return "bool", value.lower() == "true"
+    if value.startswith("0") and value != "0":
+        return "str", None
     if value.isascii() and value.isdigit():
         return "int", int(value)
     return "str", None
@@ -154,7 +157,7 @@ def _field_call_args(
     args: list[str] = []
     if alias is not None:
         args.append(f"alias={alias!r}")
-    if default_val is not None:
+    if default_val is not None and not is_sensitive:
         args.append(f"default={default_val!r}")
     if is_sensitive:
         args.append('json_schema_extra={"sensitive": True}')
