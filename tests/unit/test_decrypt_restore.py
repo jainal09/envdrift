@@ -145,9 +145,13 @@ class TestDecryptSnapshotRestore:
         _git(repo, "checkout", "--", str(tracked_file))
         assert tracked_file.read_bytes() == _ENCRYPTED
 
-    def test_failed_restore_without_protection_says_git_add_will_stage_it(
+    def test_failed_restore_outside_a_repository_says_to_re_encrypt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """No repository: git can neither stage the file nor restore it.
+
+        The advice was ``git checkout -- <file>``, and that `git add .` WILL stage it.
+        """
         monkeypatch.chdir(tmp_path)  # not a git repository: no protection possible
         target = tmp_path / ".env.production"
         target.write_bytes(_ENCRYPTED)
@@ -157,9 +161,35 @@ class TestDecryptSnapshotRestore:
 
         flat = " ".join(snapshot.restore().split())
 
-        assert "could not be marked skip-worktree" in flat
-        assert "a plain `git add .` WILL stage it" in flat
-        assert f"git checkout -- {target}" in flat
+        assert "It is outside a git repository" in flat, flat
+        assert f"`envdrift encrypt {target}`" in flat, flat
+        assert "git checkout" not in flat and "WILL stage" not in flat, flat
+
+    def test_failed_restore_of_an_untracked_file_says_to_re_encrypt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """git has no copy of an untracked file, so ``git checkout -- <file>`` fails."""
+        if shutil.which("git") is None:
+            pytest.skip("git not available")
+        monkeypatch.chdir(tmp_path)
+        _git(tmp_path, "init", "-q")
+        target = tmp_path / ".env.production"
+        target.write_bytes(_ENCRYPTED)
+        snapshot = _snapshot(target)
+        target.write_bytes(_PARTLY_DECRYPTED)
+        _fail_writes(monkeypatch, target)
+
+        flat = " ".join(snapshot.restore().split())
+
+        assert "git does not track it" in flat, flat
+        assert "a plain `git add .` WILL stage it" in flat, flat
+        assert f"`envdrift encrypt {target}`" in flat, flat
+        assert "git checkout" not in flat, flat
+        # The advice it replaces cannot work here.
+        checkout = subprocess.run(
+            ["git", "checkout", "--", str(target)], cwd=tmp_path, capture_output=True
+        )
+        assert checkout.returncode != 0
 
     def test_restore_that_does_not_stick_is_reported(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

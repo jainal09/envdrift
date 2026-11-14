@@ -796,6 +796,20 @@ class DecryptSnapshot:
                 f"To restore it, run `git update-index --no-skip-worktree {self.path}` and "
                 f"then `git checkout -- {self.path}`."
             )
+        # The advice depends on why the mark failed: git checkout can restore
+        # only a file git has a copy of.
+        reason = unprotected_reason(self.path)
+        if reason.startswith("untracked"):
+            return (
+                f"{lead}, and git does not track it, so a plain `git add .` WILL stage "
+                "it and git has no copy to restore. Re-encrypt it with "
+                f"`envdrift encrypt {self.path}` before you commit."
+            )
+        if reason.startswith("outside a git repository"):
+            return (
+                f"{lead}. It is outside a git repository, so git cannot stage it or "
+                f"restore it: re-encrypt it with `envdrift encrypt {self.path}`."
+            )
         return (
             f"{lead}, and it could not be marked skip-worktree: a plain `git add .` "
             f"WILL stage it. Run `git checkout -- {self.path}` before you commit."

@@ -170,7 +170,8 @@ and unprotected. The error names the value dotenvx could not decrypt:
 
 If envdrift cannot write the file back, the message says the file may now hold
 decrypted plaintext, marks it `skip-worktree`, and says whether that protection
-worked.
+worked. When it did not, it says how to recover: `git checkout -- <file>` for a
+tracked file, `envdrift encrypt <file>` for one git has no copy of.
 
 `pull-partial` also reads each secret file back after dotenvx exits 0, because the
 exit code alone can lie. A SOPS-encrypted secret file is one example: dotenvx finds
