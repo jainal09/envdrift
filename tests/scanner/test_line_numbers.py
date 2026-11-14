@@ -14,6 +14,7 @@ from __future__ import annotations
 import random
 import re
 import time
+import tracemalloc
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ from envdrift.scanner.ignores import IgnoreFilter
 from envdrift.scanner.native import NativeScanner
 from envdrift.scanner.patterns import hash_secret
 from envdrift.scanner.trivy import TrivyScanner
-from envdrift.utils.text import line_and_column, split_lines
+from envdrift.utils.text import LINE_CACHE_SIZE, line_and_column, split_lines
 
 AWS_KEY = "AKIA" + "IOSFODNN7" + "EXAMPLX"
 DOTENVX_CIPHERTEXT = "encrypted:BEj2" + "Zq9yKxw0Lr3VtP8sN1mD5cH7aG4fU6eB2oI9kJ3lQ0wR5tY8uA1sD4f=="
@@ -455,7 +456,7 @@ class TestALongLineOfFindings:
         assert _Spans([(3, 4)])
 
     @pytest.mark.parametrize(
-        ("piece", "repeat", "check_entropy", "count"),
+        "case",
         [
             # A SOPS file is not pattern-scanned, so its values reach the entropy check only
             ("a=ENC[AES256_GCM,x] ", 50_000, True, 0),
@@ -465,8 +466,9 @@ class TestALongLineOfFindings:
         ids=["sops-values-entropy-check", "dotenvx-values-patterns"],
     )
     def test_the_native_scanner_reads_many_encrypted_values_quickly(
-        self, tmp_path: Path, piece: str, repeat: int, check_entropy: bool, count: int
+        self, tmp_path: Path, case: tuple[str, int, bool, int]
     ):
+        piece, repeat, check_entropy, count = case
         path = _write(tmp_path / ".env", piece * repeat + "\n")
         started = time.perf_counter()
 
@@ -500,6 +502,49 @@ class TestALongLineOfFindings:
         kept = engine._filter_encrypted_files([in_the_value, past_it, in_the_value, past_it])
 
         assert kept == [past_it, past_it]
+
+    def test_the_engine_keeps_the_values_of_a_few_lines_only(self, tmp_path: Path):
+        """The values of every line with a finding were kept until the filter ended.
+
+        With a finding on each of 100,000 lines, that held 28 MiB more than the findings' own
+        22.9 MiB (reported by cubic on #936).
+        """
+        count = 50_000
+        plaintext = "".join(f"K{index}=plain\n" for index in range(count))
+        path = _write(tmp_path / ".env", f"{SOPS_VALUE}\n{plaintext}")
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        tracemalloc.start()
+        try:
+            started = tracemalloc.get_traced_memory()[0]
+            findings = [_external_finding(path, line, column=1) for line in range(2, count + 2)]
+            held = tracemalloc.get_traced_memory()[0]
+            tracemalloc.reset_peak()
+
+            kept = engine._filter_encrypted_files(findings)
+
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert kept == findings
+        assert peak - held < held - started
+
+    def test_the_ignore_filter_keeps_the_comments_of_a_few_lines_only(self, tmp_path: Path):
+        """Each line's comment was kept for as long as the filter lived (reported by cubic on #936).
+
+        Every second line ignores its findings, and each line is looked up twice, the second
+        time after its comment has been let go.
+        """
+        lines = [
+            f"K{index} = 1" + ("  # envdrift:ignore" if index % 2 else "") for index in range(1_000)
+        ]
+        path = _write(tmp_path / "app.py", "\n".join(lines) + "\n")
+        ignore_filter = IgnoreFilter()
+        findings = [_external_finding(path, line) for line in range(1, 1_001)] * 2
+
+        kept = ignore_filter.filter(findings)
+
+        assert [finding.line_number for finding in kept] == list(range(1, 1_001, 2)) * 2
+        assert len(ignore_filter._ignore_comments) == LINE_CACHE_SIZE
 
     def test_the_ignore_filter_reads_many_findings_on_a_line_quickly(self, tmp_path: Path):
         path = _write(tmp_path / ".env", _many_assignments(10_000) + "\n")

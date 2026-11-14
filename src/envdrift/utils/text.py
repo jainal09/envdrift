@@ -16,6 +16,11 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 # U+2028 and U+2029 (#937).
 _LINE_BREAK_RE = re.compile(r"\r\n|\r|\n")
 
+# How many lines a finding filter keeps what it read from. A scanner reports the findings on one
+# line together, so a few lines are enough to read each long line once, however many findings it
+# holds, and a file of many lines costs no more memory than a few.
+LINE_CACHE_SIZE = 64
+
 
 def split_lines(text: str) -> list[str]:
     """Split ``text`` into lines at ``\\n``, ``\\r\\n`` and ``\\r`` only.

@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING
 
-from envdrift.utils.text import split_lines
+from envdrift.utils.text import LINE_CACHE_SIZE, split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -320,6 +320,9 @@ class IgnoreFilter:
     def _ignore_comment(self, file_path: Path, line_number: int) -> re.Match[str] | None:
         """The ignore comment on a line, looked for once: a line can hold thousands of findings.
 
+        Only the comments of the last ``LINE_CACHE_SIZE`` lines looked up are kept, not one for
+        every line with a finding: a scanner reports the findings on one line together.
+
         Args:
             file_path: Path to the file.
             line_number: 1-based line number.
@@ -328,11 +331,14 @@ class IgnoreFilter:
             The comment's match, or None if the line has none or is not in the file.
         """
         key = (file_path, line_number)
-        if key not in self._ignore_comments:
-            lines = self._get_file_lines(file_path)
-            line = lines[line_number - 1] if 1 <= line_number <= len(lines) else ""
-            self._ignore_comments[key] = IGNORE_PATTERN.search(line)
-        return self._ignore_comments[key]
+        if key in self._ignore_comments:
+            return self._ignore_comments[key]
+        if len(self._ignore_comments) >= LINE_CACHE_SIZE:
+            del self._ignore_comments[next(iter(self._ignore_comments))]  # the oldest line
+        lines = self._get_file_lines(file_path)
+        line = lines[line_number - 1] if 1 <= line_number <= len(lines) else ""
+        self._ignore_comments[key] = match = IGNORE_PATTERN.search(line)
+        return match
 
     def _get_file_lines(self, file_path: Path) -> list[str]:
         """Get cached file lines.

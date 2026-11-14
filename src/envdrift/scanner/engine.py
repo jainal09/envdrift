@@ -16,7 +16,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
-from functools import cache
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,7 +47,7 @@ from envdrift.scanner.native import NativeScanner, _content_is_encrypted
 from envdrift.scanner.patterns import hash_secret
 from envdrift.utils.deadline import ScannerDeadline, scanner_deadline
 from envdrift.utils.git import without_git_location
-from envdrift.utils.text import split_lines
+from envdrift.utils.text import LINE_CACHE_SIZE, split_lines
 
 if TYPE_CHECKING:
     pass
@@ -1004,9 +1004,9 @@ class ScanEngine:
                 return lines[line_number - 1]
             return ""
 
-        @cache
+        @lru_cache(maxsize=LINE_CACHE_SIZE)
         def encrypted_values(file_path: str, line_number: int) -> _Spans:
-            # Found once per line, not once per finding: a long line can hold thousands
+            # Found once for a line's findings, not once for each: a long line can hold thousands
             return _Spans(_encrypted_value_spans(line_at(file_path, line_number)))
 
         def keep(finding: ScanFinding) -> bool:
