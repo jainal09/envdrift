@@ -26,7 +26,7 @@
         "windows_amd64": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_windows_x64.zip"
     },
     "gitleaks_checksums_url": "https://github.com/gitleaks/gitleaks/releases/download/v{version}/gitleaks_{version}_checksums.txt",
-    "trufflehog_version": "3.99.7",
+    "trufflehog_version": "3.99.9",
     "trufflehog_download_urls": {
         "darwin_amd64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_darwin_amd64.tar.gz",
         "darwin_arm64": "https://github.com/trufflesecurity/trufflehog/releases/download/v{version}/trufflehog_{version}_darwin_arm64.tar.gz",
@@ -46,7 +46,7 @@
         "windows_amd64": "https://github.com/thoughtworks/talisman/releases/download/v{version}/talisman_windows_amd64.exe"
     },
     "talisman_checksums_url": "https://github.com/thoughtworks/talisman/releases/download/v{version}/checksums",
-    "trivy_version": "0.76.1",
+    "trivy_version": "0.76.2",
     "trivy_download_urls": {
         "darwin_amd64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_macOS-64bit.tar.gz",
         "darwin_arm64": "https://github.com/aquasecurity/trivy/releases/download/v{version}/trivy_{version}_macOS-ARM64.tar.gz",
