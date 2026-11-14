@@ -227,21 +227,17 @@ def _record_lock_key_error(env_file: Path, error: object, state: _LockState) -> 
 
 
 def _normalize_after_encrypt(
-    env_file: Path,
-    keys_file: Path,
-    environment: str,
-    context: _LockEncryptContext,
-    state: _LockState,
+    file: _LockFile, context: _LockEncryptContext, state: _LockState
 ) -> bool:
     """Canonicalize a custom filename's key after encryption; False when refused."""
     from envdrift.integrations.dotenvx import DotenvxError
 
     try:
         context.runtime.normalize_metadata(
-            env_file, keys_file, environment, context.encryption.provider
+            file.env_file, file.keys_file, file.environment, context.encryption.provider
         )
     except (DotenvxError, OSError, ValueError) as exc:
-        _record_lock_key_error(env_file, exc, state)
+        _record_lock_key_error(file.env_file, exc, state)
         return False
     return True
 
@@ -336,9 +332,7 @@ def _handle_dotenvx_relabel(
         )
         state.encrypted += 1
         return True
-    if not _normalize_after_encrypt(
-        file.env_file, file.keys_file, file.environment, context, state
-    ):
+    if not _normalize_after_encrypt(file, context, state):
         return True
     console.print(
         f"  [green]+[/green] {file.env_file} "
@@ -462,9 +456,7 @@ def _encrypt_interactive_file(
             state.errors.append(f"{file.env_file}: encryption failed - {result.message}")
             state.error_count += 1
             return
-        if not _normalize_after_encrypt(
-            file.env_file, file.keys_file, file.environment, context, state
-        ):
+        if not _normalize_after_encrypt(file, context, state):
             return
         console.print(f"  [green]+[/green] {file.env_file} [dim]- encrypted[/dim]")
         state.encrypted += 1
@@ -633,13 +625,9 @@ def _record_lock_encrypt_result(
         state.errors.append(f"{outcome.task.env_file}: encryption failed - {message}")
         state.error_count += 1
         return
-    if not _normalize_after_encrypt(
-        outcome.task.env_file,
-        outcome.task.env_keys_file,
-        outcome.task.effective_environment,
-        context,
-        state,
-    ):
+    task = outcome.task
+    file = _LockFile(task.mapping, task.env_file, task.env_keys_file, task.effective_environment)
+    if not _normalize_after_encrypt(file, context, state):
         return
     console.print(f"  [green]+[/green] {outcome.task.env_file} [dim]- encrypted[/dim]")
     state.encrypted += 1
@@ -725,7 +713,8 @@ def _print_lock_issue_group(title: str, color: str, messages: list[str]) -> None
     console.print()
     console.print(f"[bold {color}]{title}:[/bold {color}]")
     for message in messages:
-        console.print(f"  [{color}]•[/{color}] {message}")
+        # Messages carry paths and tool output, so print them as text, not markup.
+        console.print(f"  [{color}]•[/{color}] {escape(message)}")
 
 
 def _finish_lock(request: LockRequest, state: _LockState, partial: _LockPartialState) -> None:

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import re
+from bisect import bisect_left
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -125,6 +126,23 @@ def parse_assignments(text: str) -> dict[str, list[str]]:
     for match in _LINE_RE.finditer(normalized):
         parsed.setdefault(match.group(1), []).append(_clean_value(match.group(2)))
     return parsed
+
+
+def value_continuation_lines(text: str) -> set[int]:
+    """Return the indices of the ``text.split("\\n")`` lines that continue a quoted value.
+
+    dotenvx reads a quoted value across lines. Those lines are the value's text,
+    not comments or assignments of their own, so a writer that edits lines must
+    leave them alone.
+    """
+    flat = text.replace("\r\n", "\n")
+    breaks = [index for index, char in enumerate(flat) if char == "\n"]
+    inside: set[int] = set()
+    for match in _LINE_RE.finditer(flat):
+        if match.group(2) is not None:
+            first = bisect_left(breaks, match.start(2))
+            inside.update(range(first + 1, bisect_left(breaks, match.end(2)) + 1))
+    return inside
 
 
 def assignment_values(text: str, name: str) -> list[str]:
@@ -394,84 +412,115 @@ class KeyReusePlan:
     env_text: str
 
 
-def plan_key_reuse(
-    env_text: str,
-    keys_text: str | None,
-    *,
-    env_file: Path,
-    keys_file: Path,
-    key_name: str,
-) -> KeyReusePlan:
+@dataclass(frozen=True)
+class KeyTarget:
+    """The env file to encrypt, its keys file, and the key name it is encrypted under."""
+
+    env_file: Path
+    keys_file: Path
+    key_name: str
+
+
+def plan_key_reuse(env_text: str, keys_text: str | None, target: KeyTarget) -> KeyReusePlan:
     """Decide how to make dotenvx encrypt ``env_text`` with the key the folder holds.
 
     dotenvx 2.x encrypts with the file's first ``DOTENV_PUBLIC_KEY*`` value and,
     when the file has none, creates a brand-new key next to the existing one
-    (#938). So when ``keys_text`` holds exactly one key under ``key_name``, the
-    file must carry that key's public key: an absent header is seeded, a header
-    for another key is corrected while nothing is encrypted yet, and a file
-    already encrypted under another key is refused.
+    (#938). So when ``keys_text`` holds exactly one key under ``target.key_name``,
+    the file must carry that key's public key: an absent header is seeded, a
+    header for another key is corrected while nothing is encrypted yet, and a
+    file already encrypted under another key is refused.
 
     Raises:
-        KeyReuseError: ``key_name`` holds more than one key, holds a value
+        KeyReuseError: the key name holds more than one key, holds a value
             dotenvx cannot use, or the file is encrypted under another key.
     """
-    held = distinct_keys(
-        private_key_candidates(assignment_values(keys_text, key_name) if keys_text else [])
+    held = _held_key(keys_text, target)
+    if held is None:
+        return KeyReusePlan(target.key_name, None, None, env_text)
+    public_key = _usable_public_key(held, target)
+    return KeyReusePlan(
+        target.key_name, held, public_key, _with_public_key(env_text, public_key, target)
     )
-    if not held:
-        return KeyReusePlan(key_name, None, None, env_text)
+
+
+def _held_key(keys_text: str | None, target: KeyTarget) -> str | None:
+    """Return the one key ``target.key_name`` holds, None for none; refuse two."""
+    values = assignment_values(keys_text, target.key_name) if keys_text else []
+    held = distinct_keys(private_key_candidates(values))
     if len(held) > 1:
         raise KeyReuseError(
-            f"{keys_file} holds {len(held)} different keys under {key_name}, so envdrift "
-            f"cannot tell which one {env_file.name} must be encrypted with. Keep the key "
-            f"your team uses (the vault key) and delete the other {key_name} value."
+            f"{target.keys_file} holds {len(held)} different keys under {target.key_name}, "
+            f"so envdrift cannot tell which one {target.env_file.name} must be encrypted "
+            f"with. Keep the key your team uses (the vault key) and delete the other "
+            f"{target.key_name} value."
         )
+    return held[0] if held else None
+
+
+def _usable_public_key(held: str, target: KeyTarget) -> str:
+    """Return the public key of ``held``; refuse a value dotenvx cannot use as a key."""
     try:
-        public_key = public_key_for(held[0])
+        return public_key_for(held)
     except ValueError:
         raise KeyReuseError(
-            f"{key_name} in {keys_file} is not a valid dotenvx key, so envdrift will not "
-            f"encrypt {env_file.name} with it. Restore the key (envdrift sync or "
-            f"vault-pull) or delete the line."
+            f"{target.key_name} in {target.keys_file} is not a valid dotenvx key, so "
+            f"envdrift will not encrypt {target.env_file.name} with it. Restore the key "
+            f"(envdrift sync or vault-pull) or delete the line."
         ) from None
+
+
+def _with_public_key(env_text: str, public_key: str, target: KeyTarget) -> str:
+    """Return ``env_text`` carrying ``public_key`` as its only public key, or refuse."""
     present = [normalize_public_key(value) for value in public_key_values(env_text)]
     if not present:
-        seeded = seed_public_key(env_text, env_file, keys_file, public_key)
-        return KeyReusePlan(key_name, held[0], public_key, seeded)
+        return seed_public_key(env_text, target.env_file, target.keys_file, public_key)
     if all(value == public_key for value in present):
-        return KeyReusePlan(key_name, held[0], public_key, env_text)
+        return env_text
+    return _corrected_public_key(env_text, public_key, target)
+
+
+def _corrected_public_key(env_text: str, public_key: str, target: KeyTarget) -> str:
+    """Rewrite a header for another key while nothing is encrypted under it yet."""
     if has_encrypted_values(env_text):
         raise KeyReuseError(
-            f"{env_file.name} is encrypted with another public key than the one of "
-            f"{key_name} in {keys_file}, so values encrypted now could not be decrypted "
-            f"together with the existing ones. Restore the key the file was encrypted "
-            f"with, or decrypt the file with it first."
+            f"{target.env_file.name} is encrypted with another public key than the one of "
+            f"{target.key_name} in {target.keys_file}, so values encrypted now could not be "
+            f"decrypted together with the existing ones. Restore the key the file was "
+            f"encrypted with, or decrypt the file with it first."
         )
     rewritten = rewrite_public_keys(env_text, public_key)
     if any(normalize_public_key(value) != public_key for value in public_key_values(rewritten)):
         raise KeyReuseError(
-            f"{env_file.name} carries a public key for another key than {key_name} in "
-            f"{keys_file}, and envdrift could not rewrite it safely. Delete its "
-            f"DOTENV_PUBLIC_KEY lines and re-run."
+            f"{target.env_file.name} carries a public key for another key than "
+            f"{target.key_name} in {target.keys_file}, and envdrift could not rewrite it "
+            f"safely. Delete its DOTENV_PUBLIC_KEY lines and re-run."
         )
-    return KeyReusePlan(key_name, held[0], public_key, rewritten)
+    return rewritten
 
 
 def held_key_problem(env_text: str, keys_text: str | None, key_name: str) -> str | None:
     """Describe why an encrypted file does not match the key held for it, or None.
 
     The read-only form of :func:`plan_key_reuse` for a file that is already
-    encrypted: ``key_name`` must hold one key, and every public key in the file
-    must be that key's. A value dotenvx could not use as a key is left to the
-    encrypt step (it cannot be compared), so it returns None.
+    encrypted: ``key_name`` must hold one key that dotenvx can use, and every
+    public key in the file must be that key's. No key held is not a problem:
+    anyone may encrypt with the file's public key.
     """
-    held = distinct_keys(
-        private_key_candidates(assignment_values(keys_text, key_name) if keys_text else [])
-    )
+    values = assignment_values(keys_text, key_name) if keys_text else []
+    return held_values_problem(env_text, values, key_name)
+
+
+def held_values_problem(env_text: str, values: list[str], key_name: str) -> str | None:
+    """:func:`held_key_problem` for ``values``, the values held under ``key_name``."""
+    held = distinct_keys(private_key_candidates(values))
     if len(held) > 1:
         return f"the keys file holds {len(held)} different keys under {key_name}"
-    if not held or private_key_scalar(held[0]) is None:
+    if not held:
         return None
+    if private_key_scalar(held[0]) is None:
+        # dotenvx's key ring skips such a value, so nothing could decrypt the file.
+        return f"{key_name} in the keys file is not a valid dotenvx key"
     public_key = public_key_for(held[0])
     present = {normalize_public_key(value) for value in public_key_values(env_text)}
     if present - {public_key}:
@@ -504,26 +553,45 @@ def key_outcome_problem(
     changed = _changed_key_names(before, after)
     if changed:
         return f"dotenvx changed {', '.join(changed)} in the keys file"
-    added = [name for name in after if name not in before]
     present = {normalize_public_key(value) for value in public_key_values(env_after)}
     if plan.held_key is not None:
-        if added:
-            return f"dotenvx created {', '.join(added)} instead of using {plan.key_name}"
-        if present - {plan.public_key}:
-            return f"dotenvx encrypted the file with another key than {plan.key_name}"
-        return None
+        added = [name for name in after if name not in before]
+        return _held_key_outcome(plan, added, present)
+    return _created_key_outcome(plan, after, present)
+
+
+def _held_key_outcome(plan: KeyReusePlan, added: list[str], present: set[str]) -> str | None:
+    """With a key held: dotenvx added no key name and left only the held key's public key."""
+    if added:
+        return f"dotenvx created {', '.join(added)} instead of using {plan.key_name}"
+    if not present:
+        # The header envdrift seeded is gone, so nothing says the values are the held key's.
+        return f"the file carries no public key after dotenvx ran, so it is not {plan.key_name}'s"
+    if present - {plan.public_key}:
+        return f"dotenvx encrypted the file with another key than {plan.key_name}"
+    return None
+
+
+def _created_key_outcome(
+    plan: KeyReusePlan, after: dict[str, list[str]], present: set[str]
+) -> str | None:
+    """With no key held: a new public key is the file's only one, and its key was saved."""
     carried = {normalize_public_key(value) for value in public_key_values(plan.env_text)}
     new_public = present - carried
     if not new_public:
         return None
     if carried or len(new_public) > 1:
         return "the file now carries two different public keys"
-    saved = {
+    if new_public - _saved_public_keys(after):
+        return "dotenvx encrypted the file with a key it did not save in the keys file"
+    return None
+
+
+def _saved_public_keys(keys: dict[str, list[str]]) -> set[str]:
+    """The public keys of every usable private key in ``keys``."""
+    return {
         public_key_for(candidate)
-        for values in after.values()
+        for values in keys.values()
         for candidate in private_key_candidates(values)
         if private_key_scalar(candidate) is not None
     }
-    if new_public - saved:
-        return "dotenvx encrypted the file with a key it did not save in the keys file"
-    return None

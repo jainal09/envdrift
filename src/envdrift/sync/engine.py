@@ -539,9 +539,8 @@ class SyncEngine:
         The env file is copied into an isolated ``TemporaryDirectory`` next to
         a ``.env.keys`` that holds only the first ``DOTENV_PRIVATE_KEY_<ENV>``
         value of the mapping's keys file (always named ``.env.keys`` so dotenvx
-        finds it regardless of a custom ``env_keys_filename``): the one key
-        sync compared with the vault, not every key the file happens to hold
-        (#938). dotenvx runs with ``cwd`` set to that
+        finds it regardless of a custom ``env_keys_filename``): one key, not
+        every key the file happens to hold (#938). dotenvx runs with ``cwd`` set to that
         directory and only the file *name* on the command line. This fixes the
         relative-``folder_path`` false FAILURE of the old in-place roundtrip,
         which ran ``dotenvx decrypt -f <folder>/<file>`` with ``cwd=<folder>``
@@ -562,8 +561,9 @@ class SyncEngine:
         try:
             # dotenvx 2.x decrypts with ANY key in the keys file, whatever its
             # name, so copying the whole file let a second, locally minted key
-            # pass a check meant for the vault key (#938). Test exactly the
-            # value sync verified: the first value of the mapping's key name.
+            # pass a check meant for the vault key (#938). The check tests the
+            # first value of the mapping's key name only; sync itself compares
+            # every value under that name with the vault.
             key_value = EnvKeysFile(env_keys_path).read_key(key_name)
             with tempfile.TemporaryDirectory(prefix=".envdrift-check-decryption-") as temp_dir:
                 temp_dir_path = Path(temp_dir)

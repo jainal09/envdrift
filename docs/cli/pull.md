@@ -21,8 +21,10 @@ The `pull` command is the recommended way to onboard new developers. It combines
 2. **Decrypt env files** - Decrypts all `.env.<environment>` files for each configured service
 
 dotenvx decrypts with the keys file named by `[vault.sync] env_keys_filename` (default `.env.keys`) in each mapping's folder, the same file the sync
-step writes. When the keys file holds two different keys for a custom filename (the canonical `DOTENV_PRIVATE_KEY_<ENV>` and the one dotenvx wrote for
-the file), that file is reported as not decrypted and neither file is changed: keep the key your vault holds and delete the other line.
+step writes. When the keys file holds two different keys for a file with a custom `env_file` name (the canonical `DOTENV_PRIVATE_KEY_<ENV>` and the
+one dotenvx wrote for the file), that file is reported as not decrypted and neither file is changed. Copy the keys file aside first, then keep the
+key that decrypts the file (`dotenvx decrypt --stdout -f <file> -fk <copy> > /dev/null` succeeds while the copy holds only that key) and
+delete the other line.
 
 Just run `envdrift pull` and all encrypted environment files are ready to use.
 

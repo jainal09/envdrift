@@ -61,73 +61,84 @@ class KV2StandIn:
         self._server.server_close()
         self._thread.join(timeout=5)
 
+    def version(self, path: str) -> int:
+        """The version number of the data stored at ``path``."""
+        with self._lock:
+            return self._versions[path]
+
     def _handler_class(self) -> type[BaseHTTPRequestHandler]:
+        """A handler class bound to this stand-in (the server makes one per request)."""
         standin = self
 
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, format: str, *args: Any) -> None:
-                return
+        class Handler(_KV2Handler):
+            pass
 
-            def _reply(self, status: int, body: dict[str, Any]) -> None:
-                payload = json.dumps(body).encode("utf-8")
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            def _secret_path(self) -> str | None:
-                prefix = f"/v1/{standin.mount}/data/"
-                path = urlparse(self.path).path
-                return path[len(prefix) :] if path.startswith(prefix) else None
-
-            def _authorized(self) -> bool:
-                if self.headers.get("X-Vault-Token") == standin.token:
-                    return True
-                self._reply(403, {"errors": ["permission denied"]})
-                return False
-
-            def do_GET(self) -> None:
-                if not self._authorized():
-                    return
-                if urlparse(self.path).path == "/v1/auth/token/lookup-self":
-                    self._reply(200, {"data": {"id": standin.token, "policies": ["root"]}})
-                    return
-                name = self._secret_path()
-                stored = standin.get(name) if name else None
-                if name is None or stored is None:
-                    self._reply(404, {"errors": []})
-                    return
-                with standin._lock:
-                    version = standin._versions[name]
-                metadata = {
-                    "version": version,
-                    "created_time": datetime.now(UTC).isoformat(),
-                    "deletion_time": "",
-                    "destroyed": False,
-                    "custom_metadata": None,
-                }
-                self._reply(200, {"data": {"data": stored, "metadata": metadata}})
-
-            def _write(self) -> None:
-                if not self._authorized():
-                    return
-                name = self._secret_path()
-                if name is None:
-                    self._reply(404, {"errors": []})
-                    return
-                length = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(length) or b"{}")
-                standin.put(name, body.get("data", {}))
-                with standin._lock:
-                    version = standin._versions[name]
-                created = datetime.now(UTC).isoformat()
-                self._reply(200, {"data": {"version": version, "created_time": created}})
-
-            def do_POST(self) -> None:
-                self._write()
-
-            def do_PUT(self) -> None:
-                self._write()
-
+        Handler.standin = standin
         return Handler
+
+
+class _KV2Handler(BaseHTTPRequestHandler):
+    """The token lookup and the KV-v2 ``data`` endpoint, for ``standin``."""
+
+    standin: KV2StandIn
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
+
+    def _reply(self, status: int, body: dict[str, Any]) -> None:
+        payload = json.dumps(body).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _secret_path(self) -> str | None:
+        prefix = f"/v1/{self.standin.mount}/data/"
+        path = urlparse(self.path).path
+        return path[len(prefix) :] if path.startswith(prefix) else None
+
+    def _authorized(self) -> bool:
+        if self.headers.get("X-Vault-Token") == self.standin.token:
+            return True
+        self._reply(403, {"errors": ["permission denied"]})
+        return False
+
+    def do_GET(self) -> None:
+        if not self._authorized():
+            return
+        if urlparse(self.path).path == "/v1/auth/token/lookup-self":
+            self._reply(200, {"data": {"id": self.standin.token, "policies": ["root"]}})
+            return
+        name = self._secret_path()
+        stored = self.standin.get(name) if name else None
+        if name is None or stored is None:
+            self._reply(404, {"errors": []})
+            return
+        metadata = {
+            "version": self.standin.version(name),
+            "created_time": datetime.now(UTC).isoformat(),
+            "deletion_time": "",
+            "destroyed": False,
+            "custom_metadata": None,
+        }
+        self._reply(200, {"data": {"data": stored, "metadata": metadata}})
+
+    def _write(self) -> None:
+        if not self._authorized():
+            return
+        name = self._secret_path()
+        if name is None:
+            self._reply(404, {"errors": []})
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        self.standin.put(name, body.get("data", {}))
+        created = datetime.now(UTC).isoformat()
+        self._reply(200, {"data": {"version": self.standin.version(name), "created_time": created}})
+
+    def do_POST(self) -> None:
+        self._write()
+
+    def do_PUT(self) -> None:
+        self._write()

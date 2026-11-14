@@ -19,11 +19,12 @@ EXPECTED = "DOTENV_PRIVATE_KEY_PRODUCTION"
 
 
 def _files(tmp_path: Path, env_text: str, keys_text: str | None) -> tuple[Path, Path]:
+    # Bytes, so Windows newline translation cannot change the line ends under test.
     env_file = tmp_path / ".env.production"
-    env_file.write_text(env_text, encoding="utf-8")
+    env_file.write_bytes(env_text.encode("utf-8"))
     keys_file = tmp_path / ".env.keys"
     if keys_text is not None:
-        keys_file.write_text(keys_text, encoding="utf-8")
+        keys_file.write_bytes(keys_text.encode("utf-8"))
     return env_file, keys_file
 
 
@@ -76,27 +77,59 @@ def test_an_unreadable_keys_file_fails_cleanly(tmp_path: Path):
     assert "cannot read" in outcome.message
 
 
-def test_a_failed_write_puts_both_files_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def _renamed_pair(tmp_path: Path) -> tuple[Path, Path, dict[Path, bytes]]:
     env_file, keys_file = _files(
         tmp_path,
         f'DOTENV_PUBLIC_KEY_STAGING="{PUB1}"\n\n# .env.staging\nA=encrypted:x\n',
         f"DOTENV_PRIVATE_KEY_STAGING={K1}\n",
     )
-    before = {env_file: env_file.read_bytes(), keys_file: keys_file.read_bytes()}
-    real_write = Path.write_bytes
+    return env_file, keys_file, {env_file: env_file.read_bytes(), keys_file: keys_file.read_bytes()}
 
-    def failing_write(self: Path, data: bytes) -> int:
-        if self == env_file and data != before[env_file]:
+
+def test_a_failed_write_puts_both_files_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    env_file, keys_file, before = _renamed_pair(tmp_path)
+    real_replace = Path.replace
+
+    def failing_replace(self: Path, target):
+        # The keys file is written first; the env file's rename then fails.
+        if Path(target) == env_file:
             raise OSError("disk full")
-        return real_write(self, data)
+        return real_replace(self, target)
 
-    monkeypatch.setattr(Path, "write_bytes", failing_write)
+    monkeypatch.setattr(Path, "replace", failing_replace)
 
     outcome = relabel_dotenvx_key(env_file, keys_file, EXPECTED, apply=True)
 
     assert outcome.action == "failed"
     assert "disk full" in outcome.message
+    assert "could not put back" not in outcome.message
     assert {path: path.read_bytes() for path in before} == before
+    # A failed write leaves no temp file next to the keys.
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys", ".env.production"]
+
+
+def test_a_failed_put_back_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """When the keys file cannot be put back, the message says so instead of "nothing"."""
+    env_file, keys_file, _ = _renamed_pair(tmp_path)
+    real_replace = Path.replace
+    keys_writes = 0
+
+    def failing_replace(self: Path, target):
+        nonlocal keys_writes
+        if Path(target) == env_file:
+            raise OSError("disk full")
+        keys_writes += 1
+        if keys_writes > 1:
+            raise OSError("read-only now")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+
+    outcome = relabel_dotenvx_key(env_file, keys_file, EXPECTED, apply=True)
+
+    assert outcome.action == "failed"
+    assert "disk full" in outcome.message
+    assert f"could not put back {keys_file} (read-only now)" in outcome.message
 
 
 def test_relabel_renames_the_header_and_its_filename_line(tmp_path: Path):

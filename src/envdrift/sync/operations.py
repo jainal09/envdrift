@@ -116,6 +116,7 @@ class EnvKeysFile:
             if not new_content.endswith("\n"):
                 new_content += "\n"
 
+            self._require_only_value(key_name, value, new_content)
             atomic_write(self.path, new_content)
         else:
             # Create new file with header. dotenvx leaves a blank line between
@@ -123,6 +124,25 @@ class EnvKeysFile:
             # reproduce its layout byte-for-byte (#474).
             content = f"{DOTENVX_HEADER}\n\n# .env.{environment}\n{key_name}={value}\n"
             atomic_write(self.path, content)
+
+    def _require_only_value(self, key_name: str, value: str, new_content: str) -> None:
+        """Refuse a rewrite after which a reader would still load another value.
+
+        dotenvx also reads ``KEY:`` with the value on the next line. That layout
+        cannot be rewritten line by line, so the old key would stay loaded next
+        to the new one; nothing is written instead.
+
+        Raises:
+            ValueError: ``new_content`` holds a value for ``key_name`` that is
+                not ``value`` (``value`` on several lines is the same key).
+        """
+        expected = set(assignment_values(f"{key_name}={value}\n", key_name))
+        if set(assignment_values(new_content, key_name)) != expected:
+            raise ValueError(
+                f"{self.path} holds {key_name} in a layout envdrift cannot rewrite, such "
+                f"as '{key_name}:' with the key on the next line. Write it as "
+                f"{key_name}=<key> and re-run. Nothing was changed."
+            )
 
     def has_dotenvx_header(self) -> bool:
         """Check if file has the dotenvx header."""
@@ -153,9 +173,9 @@ class EnvKeysFile:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = self.path.parent / f"{self.path.name}.backup.{timestamp}"
-        from envdrift.utils.git import ensure_gitignore_glob
+        from envdrift.utils.git import ensure_gitignore_glob, gitignore_escape
 
-        ensure_gitignore_glob(backup_path, f"{self.path.name}.backup.*")
+        ensure_gitignore_glob(backup_path, f"{gitignore_escape(self.path.name)}.backup.*")
         counter = 1
         while True:
             try:
@@ -180,10 +200,17 @@ class EnvKeysFile:
 
 
 def atomic_write(
-    path: Path, content: str, permissions: int = 0o600, *, max_permissions: int | None = None
+    path: Path,
+    content: str | bytes,
+    permissions: int = 0o600,
+    *,
+    max_permissions: int | None = None,
 ) -> None:
     """
     Write file atomically with proper permissions.
+
+    ``content`` is written byte for byte: bytes as given, text as UTF-8 with its
+    line ends as they are.
 
     Creates the temp file in the destination directory with an unguessable name
     via ``tempfile.mkstemp`` (``O_EXCL``, owned by us, never following a
@@ -228,21 +255,22 @@ def atomic_write(
     # and leaking the temp file) or leak it. ``fchmod`` and ``fsync`` operate on
     # the same fd via ``fileno()`` while the wrapper still owns it.
     try:
-        # Pin UTF-8: ``os.fdopen`` in text mode otherwise uses the platform
-        # default codec, and content can be non-ASCII (the dotenvx .env.keys
+        # Bytes, with text encoded as UTF-8: a text-mode file would use the
+        # platform codec, and content can be non-ASCII (the dotenvx .env.keys
         # header contains "⛨") — under a non-UTF-8 locale (Windows cp1252,
-        # LC_ALL=C) the write would raise UnicodeEncodeError. Pin LF newlines
-        # too: Windows text mode would otherwise translate "\n" to "\r\n", but
-        # dotenvx (Node.js) writes these files byte-exactly with LF on every
-        # platform, and its Windows parser is known to fail on CRLF ("Input
-        # string must contain hex characters" — the reason
-        # DotenvxWrapper._normalize_line_endings exists). Match dotenvx (#474).
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as tmp_file:
+        # LC_ALL=C) the write would raise UnicodeEncodeError. And Windows text
+        # mode would translate "\n" to "\r\n", but dotenvx (Node.js) writes
+        # these files byte-exactly with LF on every platform, and its Windows
+        # parser is known to fail on CRLF ("Input string must contain hex
+        # characters" — the reason DotenvxWrapper._normalize_line_endings
+        # exists). Match dotenvx (#474).
+        data = content.encode("utf-8") if isinstance(content, str) else content
+        with os.fdopen(fd, "wb") as tmp_file:
             # ``os.fchmod`` applies to the fd we own, never a symlink target. It
             # is absent on Windows, where permission bits are largely a no-op.
             if hasattr(os, "fchmod"):
                 os.fchmod(tmp_file.fileno(), mode)
-            tmp_file.write(content)
+            tmp_file.write(data)
             tmp_file.flush()
             os.fsync(tmp_file.fileno())
         # The fdopen wrapper has closed the fd; the rename promotes the temp

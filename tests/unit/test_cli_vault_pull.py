@@ -1226,7 +1226,9 @@ class TestVaultPullNeverDropsADifferentLocalKey:
 
         result = runner.invoke(app, self._args(tmp_path))
 
-        assert result.exit_code == 1, result.output
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "already holds a different DOTENV_PRIVATE_KEY_PRODUCTION" in out
         assert keys.read_bytes() == before
 
     @patch("envdrift.vault.get_vault_client")
@@ -1249,6 +1251,27 @@ class TestVaultPullNeverDropsADifferentLocalKey:
         content = keys.read_text(encoding="utf-8")
         assert f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}" in content
         assert self.LOCAL_KEY not in content
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_force_refuses_a_layout_it_cannot_rewrite(self, mock_get_client, tmp_path):
+        """dotenvx loads ``KEY:`` + newline + key: --force must not add a second key."""
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(
+            f"# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION:\n{self.LOCAL_KEY}\n",
+            encoding="utf-8",
+        )
+        before = keys.read_bytes()
+
+        result = runner.invoke(app, self._args(tmp_path, "--force"))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "cannot rewrite" in out
+        assert "Nothing was changed" in out
+        assert keys.read_bytes() == before
 
     @patch("envdrift.vault.get_vault_client")
     def test_force_stops_when_the_backup_cannot_be_ignored(

@@ -55,6 +55,17 @@ def _child_env(pythonpath: str) -> dict[str, str]:
     return env
 
 
+def _dotenvx_command() -> str:
+    """The dotenvx the CLI under test runs: the virtualenv's, else the one on PATH."""
+    from envdrift.integrations.dotenvx import get_dotenvx_path
+
+    try:
+        venv_binary = get_dotenvx_path()
+    except RuntimeError:
+        return "dotenvx"
+    return str(venv_binary) if venv_binary.exists() else "dotenvx"
+
+
 class _Cli:
     """Run the real envdrift CLI (and dotenvx) in one work directory."""
 
@@ -77,7 +88,7 @@ class _Cli:
 
     def dotenvx(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["dotenvx", *args],
+            [_dotenvx_command(), *args],
             cwd=cwd or self.cwd,
             env=self.env,
             capture_output=True,

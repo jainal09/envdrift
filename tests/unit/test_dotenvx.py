@@ -1288,6 +1288,29 @@ KEY=value
         assert 'DOTENV_PUBLIC_KEY_LOCAL="' not in result
         assert "# .env.local\n" not in result
 
+    def test_cleans_a_crlf_file_and_keeps_its_line_endings(self, tmp_path):
+        """A file with CRLF line ends is cleaned too, and keeps CRLF line ends."""
+        env_file = tmp_path / ".env.localenv"
+        header = (
+            "#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\n"
+            "#/            public-key encryption for .env files          /\n"
+            "#/       [how it works](https://dotenvx.com/encryption)     /\n"
+            "#/----------------------------------------------------------/\n"
+        )
+        content = (
+            f'{header}DOTENV_PUBLIC_KEY_LOCALENV="03abc123"\n\n# .env.localenv\n'
+            f'{header}DOTENV_PUBLIC_KEY_LOCAL="03abc123"\n\n# .env.local\nKEY=value\n'
+        )
+        env_file.write_bytes(content.replace("\n", "\r\n").encode("utf-8"))
+
+        assert DotenvxWrapper._clean_mismatched_headers(env_file) is True
+
+        result = env_file.read_bytes()
+        assert b'DOTENV_PUBLIC_KEY_LOCALENV="03abc123"' in result
+        assert b'DOTENV_PUBLIC_KEY_LOCAL="' not in result
+        assert b"\n" not in result.replace(b"\r\n", b"")
+        assert result.endswith(b"KEY=value\r\n")
+
     def test_no_change_when_headers_match(self, tmp_path):
         """Test no modification when header matches filename."""
         env_file = tmp_path / ".env.localenv"

@@ -34,13 +34,17 @@ from envdrift.install_integrity import (
 from envdrift.integrations.dotenvx_keys import (
     KeyReuseError,
     KeyReusePlan,
+    KeyTarget,
     assignment_values,
     distinct_keys,
     dotenvx_key_names,
+    has_encrypted_values,
     key_outcome_problem,
+    normalize_public_key,
     parse_assignments,
     plan_key_reuse,
     private_key_candidates,
+    value_continuation_lines,
 )
 from envdrift.utils.text import strip_ansi
 
@@ -255,10 +259,13 @@ def _canonical_env_text(
 
     Line-anchored and split on ``\\n`` only, so a value holding another line
     separator, a ``\\r`` line ending or prose that mentions a key name is never
-    touched.
+    touched, nor is a line inside a quoted value that spans lines.
     """
     lines = text.split("\n")
+    in_values = value_continuation_lines(text)
     for index, line in enumerate(lines):
+        if index in in_values:
+            continue
         body = line[:-1] if line.endswith("\r") else line
         ending = line[len(body) :]
         if body.strip() == custom_comment:
@@ -296,6 +303,11 @@ def _generated_key_line(lines: list[str], custom_comment: str) -> tuple[int, int
     return None
 
 
+def _holds_another_key(held: list[str], value: str) -> bool:
+    """Whether ``held`` is two keys, or one that is not ``value``."""
+    return len(held) > 1 or distinct_keys([*held, value]) != held
+
+
 def _canonical_keys_text(
     text: str,
     env_file: Path,
@@ -317,7 +329,7 @@ def _canonical_keys_text(
         lines[comment_index] = f"# .env.{environment}"
         return "\n".join(lines)
     held = distinct_keys(private_key_candidates(parse_assignments(text).get(canonical_private, [])))
-    if held and (len(held) > 1 or distinct_keys([*held, value]) != held):
+    if held and _holds_another_key(held, value):
         raise DotenvxKeyError(
             f"{keys_file} holds two different keys for {env_file.name}: "
             f"{canonical_private} and {name} (written under '# {env_file.name}'). "
@@ -354,9 +366,10 @@ def normalize_dotenvx_metadata(
     Both new contents are computed before anything is written. A key dotenvx
     generated is renamed to the canonical name only when that name is free or
     already holds the same key; a different held key is never overwritten
-    (#938) and :class:`DotenvxKeyError` leaves both files untouched. Files are
-    written as bytes, so Windows newline translation cannot turn ``\\n`` into
-    ``\\r\\n``, and a failed second write puts the first file back.
+    (#938) and :class:`DotenvxKeyError` leaves both files untouched. Each file is
+    replaced whole with its new bytes (a temp file renamed over it), so Windows
+    newline translation cannot turn ``\\n`` into ``\\r\\n`` and an interrupted write
+    leaves the old file; a failed second write puts the first file back.
 
     Raises:
         DotenvxKeyError: ``.env.keys`` holds a different key under the canonical name.
@@ -387,12 +400,22 @@ def normalize_dotenvx_metadata(
     try:
         for path, before, after in planned:
             if after != before:
-                path.write_bytes(after)
+                _replace_file(path, after)
                 written.append((path, before))
     except OSError:
         for path, before in reversed(written):
-            path.write_bytes(before)
+            _replace_file(path, before)
         raise
+
+
+def _replace_file(path: Path, data: bytes) -> None:
+    """Replace ``path`` with ``data`` whole: a temp file renamed over it, its mode kept.
+
+    A write that fails or is interrupted leaves the old file, never half of it.
+    """
+    from envdrift.sync.operations import atomic_write
+
+    atomic_write(path, data)
 
 
 def get_platform_info() -> tuple[str, str]:
@@ -571,13 +594,13 @@ class _EncryptSnapshot:
         """
         try:
             if _read_bytes_or_none(self.env_file) != self.env_bytes:
-                self.env_file.write_bytes(self.env_bytes)
+                _replace_file(self.env_file, self.env_bytes)
             current_keys = _read_bytes_or_none(self.keys_file)
             if self.keys_bytes is None:
                 if current_keys is not None:
                     self.keys_file.unlink()
             elif current_keys != self.keys_bytes:
-                self.keys_file.write_bytes(self.keys_bytes)
+                _replace_file(self.keys_file, self.keys_bytes)
         except OSError as exc:
             raise DotenvxError(
                 f"Could not put {self.env_file} and {self.keys_file} back after a failed "
@@ -1119,7 +1142,7 @@ class DotenvxWrapper:
         r"#/[^\n]+/\n"
         r"#/[^\n]+/\n"
         r"#/---+/\n"
-        r'(DOTENV_PUBLIC_KEY[A-Za-z0-9_.-]*)="[^"\n]*"[^\n]*\n'
+        r'(DOTENV_PUBLIC_KEY[A-Za-z0-9_.-]*)="([^"\n]*)"[^\n]*\n'
         r"\n"
         r"# [^\n]*\n",
     )
@@ -1146,10 +1169,28 @@ class DotenvxWrapper:
         stale = [block for block in blocks if block.group(1) not in own]
         if not stale or len(stale) == len(blocks):
             return text
+        if has_encrypted_values(text):
+            stale = cls._redundant_blocks(blocks, stale, own)
         cleaned = text
         for block in reversed(stale):
             cleaned = cleaned[: block.start()] + cleaned[block.end() :]
         return cleaned.lstrip("\n")
+
+    @staticmethod
+    def _redundant_blocks(
+        blocks: list[re.Match[str]], stale: list[re.Match[str]], own: set[str]
+    ) -> list[re.Match[str]]:
+        """The stale blocks that carry the same public key as the file's own block.
+
+        In a file that already holds ciphertext, a stale block with another
+        public key may be the key its values were encrypted with. It stays, so
+        the key check that follows sees both keys and refuses (#938), instead of
+        the file losing the only sign that its values are another key's.
+        """
+        own_keys = {
+            normalize_public_key(block.group(2)) for block in blocks if block.group(1) in own
+        }
+        return [block for block in stale if normalize_public_key(block.group(2)) in own_keys]
 
     @classmethod
     def _clean_mismatched_headers(cls, file_path: Path, environment: str | None = None) -> bool:
@@ -1158,6 +1199,8 @@ class DotenvxWrapper:
 
         See :meth:`_clean_mismatched_header_text`. The file is rewritten as
         bytes, so Windows newline translation cannot change its line endings.
+        The header patterns read ``\n`` line ends, so a file with CRLF line ends
+        is matched with ``\n`` ones and written back with CRLF.
 
         Parameters:
             file_path (Path): Path to the env file to clean.
@@ -1170,9 +1213,13 @@ class DotenvxWrapper:
             content = file_path.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError):
             return False
-        cleaned = cls._clean_mismatched_header_text(content, file_path.name, environment)
-        if cleaned == content:
+        crlf = "\r\n" in content
+        text = content.replace("\r\n", "\n") if crlf else content
+        cleaned = cls._clean_mismatched_header_text(text, file_path.name, environment)
+        if cleaned == text:
             return False
+        if crlf:
+            cleaned = cleaned.replace("\n", "\r\n")
         file_path.write_bytes(cleaned.encode("utf-8"))
         return True
 
@@ -1295,7 +1342,7 @@ class DotenvxWrapper:
         if staged == snapshot.env_bytes:
             return
         try:
-            env_file.write_bytes(staged)
+            _replace_file(env_file, staged)
         except OSError as exc:
             raise DotenvxError(f"Cannot write {env_file}: {exc.strerror or exc}") from None
 
@@ -1328,11 +1375,7 @@ class DotenvxWrapper:
             key_name = dotenvx_key_names(env_file)[1]
         try:
             return plan_key_reuse(
-                env_text,
-                snapshot.keys_text,
-                env_file=env_file,
-                keys_file=keys_file,
-                key_name=key_name,
+                env_text, snapshot.keys_text, KeyTarget(env_file, keys_file, key_name)
             )
         except KeyReuseError as exc:
             raise DotenvxKeyError(f"{exc} Nothing was changed.") from None
@@ -1341,10 +1384,10 @@ class DotenvxWrapper:
     def _key_outcome_problem(plan: KeyReusePlan, snapshot: _EncryptSnapshot) -> str | None:
         """Re-read both files after dotenvx and describe any broken key promise."""
         env_after = _read_text_for_check(snapshot.env_file)
-        keys_after = (
-            _read_text_for_check(snapshot.keys_file) if snapshot.keys_file.exists() else None
-        )
-        if env_after is None or (snapshot.keys_file.exists() and keys_after is None):
+        keys_exist = snapshot.keys_file.exists()
+        keys_after = _read_text_for_check(snapshot.keys_file) if keys_exist else None
+        unreadable_keys = keys_exist and keys_after is None
+        if env_after is None or unreadable_keys:
             return "the files could not be read back after dotenvx ran"
         return key_outcome_problem(plan, snapshot.keys_text, keys_after, env_after)
 

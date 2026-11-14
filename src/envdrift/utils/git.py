@@ -36,6 +36,14 @@ class GitError(Exception):
     pass
 
 
+class GitignoreOverrideError(OSError):
+    """git still tracks a path after its ignore entry was added: a ``!`` rule re-includes it.
+
+    An ``OSError``, so a caller that stops on an unwritable ``.gitignore``
+    stops on this too instead of writing a file git would commit.
+    """
+
+
 def without_git_location(environ: Mapping[str, str] | None = None) -> dict[str, str]:
     """``environ`` (``os.environ`` when None) without the git location variables.
 
@@ -471,36 +479,92 @@ def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = N
     return new_entries
 
 
+def gitignore_escape(name: str) -> str:
+    """Escape ``name`` so a ``.gitignore`` pattern matches it literally.
+
+    ``*``, ``?``, ``[`` and ``\\`` lose their meaning, as do a leading ``#``
+    or ``!`` and trailing spaces, which git otherwise reads as syntax.
+    """
+    escaped = "".join(f"\\{char}" if char in "*?[\\" else char for char in name)
+    if escaped[:1] in ("#", "!"):
+        escaped = f"\\{escaped}"
+    kept = escaped.rstrip(" ")
+    return kept + "\\ " * (len(escaped) - len(kept))
+
+
 def ensure_gitignore_glob(sample: Path, pattern: str) -> str | None:
     """Ensure files named like ``pattern`` next to ``sample`` are gitignored.
 
     ``sample`` is one concrete path the pattern must cover (it need not exist;
     ``git check-ignore`` works on names). When it is not ignored yet, the
     pattern is appended to the repo's ``.gitignore``, scoped to ``sample``'s
-    folder (``svc/.env.keys.backup.*``). A no-op outside a git repo.
+    folder (``svc/.env.keys.backup.*``, with the folder's names escaped). The
+    pattern is the caller's: escape its literal part with :func:`gitignore_escape`.
+    A no-op outside a git repo.
 
     Returns:
         The entry added, or ``None`` when nothing had to change.
 
     Raises:
-        OSError: ``.gitignore`` could not be read or written.
+        OSError: ``.gitignore`` could not be read or written, or git could not
+            say where the repository of ``sample`` is although it is in one.
+        GitignoreOverrideError: git still does not ignore ``sample`` with the
+            entry in place, because a later ``!`` rule (in a nested
+            ``.gitignore``, say) re-includes it.
     """
     git_root = get_git_root(sample.parent)
-    if git_root is None or _is_path_ignored(sample, git_root):
+    if git_root is None:
+        _require_outside_a_checkout(sample)
+        return None
+    if _is_path_ignored(sample, git_root):
         return None
     try:
         folder = sample.parent.resolve().relative_to(git_root)
     except ValueError:
+        raise OSError(
+            f"{sample.parent} is not under the repository root git reports ({git_root}), "
+            f"so envdrift cannot make sure git ignores {sample.name}"
+        ) from None
+    scope = "/".join(gitignore_escape(part) for part in folder.parts)
+    entry = f"{scope}/{pattern}" if scope else pattern
+    added = _append_gitignore_entry(git_root / ".gitignore", entry)
+    if not _is_path_ignored(sample, git_root):
+        raise GitignoreOverrideError(
+            f"git would still track {sample.name}: a '!' rule in a .gitignore re-includes "
+            f"files that '{entry}' ignores. Remove that rule or make it more specific, "
+            f"and re-run."
+        )
+    return added
+
+
+def _require_outside_a_checkout(sample: Path) -> None:
+    """Raise when git named no repository for ``sample`` but a ``.git`` is above it.
+
+    That is git failing (a timeout, a broken repository), not a folder outside
+    a repository: nothing then makes sure git ignores ``sample``.
+    """
+    folder = sample.parent.resolve()
+    for candidate in (folder, *folder.parents):
+        if (candidate / ".git").exists():
+            raise OSError(
+                f"git did not report the repository at {candidate}, so envdrift cannot "
+                f"make sure git ignores {sample.name}"
+            )
+
+
+def _append_gitignore_entry(gitignore_path: Path, entry: str) -> str | None:
+    """Append ``entry`` to ``gitignore_path`` unless a line already reads so.
+
+    Works on bytes, so a ``.gitignore`` that is not UTF-8 is extended, not refused.
+    """
+    content = gitignore_path.read_bytes() if gitignore_path.exists() else b""
+    line = entry.encode("utf-8")
+    if line in {existing.strip() for existing in content.splitlines()}:
         return None
-    entry = pattern if folder == Path() else f"{folder.as_posix()}/{pattern}"
-    gitignore_path = git_root / ".gitignore"
-    content = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
-    if entry in {line.strip() for line in content.splitlines()}:
-        return None
-    with gitignore_path.open("a", encoding="utf-8", newline="\n") as handle:
-        if content and not content.endswith("\n"):
-            handle.write("\n")
-        handle.write(f"{entry}\n")
+    with gitignore_path.open("ab") as handle:
+        if content and not content.endswith(b"\n"):
+            handle.write(b"\n")
+        handle.write(line + b"\n")
     return entry
 
 

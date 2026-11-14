@@ -70,8 +70,12 @@ that matches the vault does not hide a second, different one.
 Push the local key first with [`vault-push`](vault-push.md), or re-run with `--force` to
 replace it. `--force` first backs up `.env.keys` as `.env.keys.backup.<timestamp>` and makes
 sure git ignores the backup (it adds `<folder>/.env.keys.backup.*` to `.gitignore` when no
-existing rule covers it), then writes the vault's key. If the backup cannot be made, nothing
-is changed. A key that already matches the vault is left as it is.
+existing rule covers it), then writes the vault's key. If the backup cannot be made, or a
+`.gitignore` rule would still let git track it, `.env.keys` is left unchanged (the `.gitignore`
+entry may already have been added). A key that already matches the vault is left as it is.
+A key written as `DOTENV_PRIVATE_KEY_<ENV>:` with the key on the next line, which dotenvx also
+reads, cannot be rewritten in place: the command fails and `.env.keys` is left unchanged.
+Write it as `DOTENV_PRIVATE_KEY_<ENV>=<key>` and re-run.
 
 ## Options
 

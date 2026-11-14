@@ -178,14 +178,15 @@ def test_a_file_that_cannot_be_written_is_a_clean_error(tmp_path: Path, monkeypa
     """The seeded header cannot be written: a DotenvxError, not a raw OSError."""
     env_file, _ = _setup(tmp_path, keys=f"{NAME}={K1}\n")
     before = env_file.read_bytes()
-    real_write = Path.write_bytes
+    real_replace = Path.replace
 
-    def read_only(self: Path, data: bytes) -> int:
-        if self == env_file and data != before:
+    def read_only(self: Path, target):
+        # Files are replaced whole (a temp file renamed over them): fail that rename.
+        if Path(target) == env_file:
             raise PermissionError(13, "Permission denied")
-        return real_write(self, data)
+        return real_replace(self, target)
 
-    monkeypatch.setattr(Path, "write_bytes", read_only)
+    monkeypatch.setattr(Path, "replace", read_only)
     wrapper, seen = _wrapper(_encrypt_values)
 
     with pytest.raises(DotenvxError, match=r"Cannot write .*Permission denied"):
@@ -193,6 +194,43 @@ def test_a_file_that_cannot_be_written_is_a_clean_error(tmp_path: Path, monkeypa
 
     assert seen == []
     assert env_file.read_bytes() == before
+
+
+def _header(name: str, public_key: str, filename: str) -> str:
+    return (
+        "#/-------------------[DOTENV_PUBLIC_KEY]--------------------/\n"
+        "#/            public-key encryption for .env files          /\n"
+        "#/       [how it works](https://dotenvx.com/encryption)     /\n"
+        "#/----------------------------------------------------------/\n"
+        f'{name}="{public_key}"\n\n# {filename}\n'
+    )
+
+
+def test_a_stale_header_with_another_key_is_kept_and_refused(tmp_path: Path):
+    """Ciphertext next to another key's header: that may be the values' key, so refuse."""
+    own = _header("DOTENV_PUBLIC_KEY_PRODUCTION", PUB1, ".env.production")
+    stale = _header("DOTENV_PUBLIC_KEY_STAGING", PUB2, ".env.staging")
+    env_file, keys_file = _setup(
+        tmp_path, env_bytes=(own + stale + "A=encrypted:abc\nB=2\n").encode(), keys=f"{NAME}={K1}\n"
+    )
+    before = (env_file.read_bytes(), keys_file.read_bytes())
+    wrapper, seen = _wrapper(_encrypt_values)
+
+    with pytest.raises(DotenvxKeyError, match="encrypted with another public key"):
+        wrapper.encrypt(env_file)
+
+    assert seen == []
+    assert (env_file.read_bytes(), keys_file.read_bytes()) == before
+
+
+def test_a_stale_header_with_the_same_key_is_dropped(tmp_path: Path):
+    own = _header("DOTENV_PUBLIC_KEY_PRODUCTION", PUB1, ".env.production")
+    stale = _header("DOTENV_PUBLIC_KEY_STAGING", PUB1, ".env.staging")
+    text = own + stale + "A=encrypted:abc\n"
+
+    cleaned = DotenvxWrapper._clean_mismatched_header_text(text, ".env.production")
+
+    assert cleaned == own + "A=encrypted:abc\n"
 
 
 def test_refusals_happen_before_dotenvx_and_change_nothing(tmp_path: Path):
@@ -269,19 +307,22 @@ def test_normalize_puts_the_keys_file_back_when_the_env_write_fails(tmp_path: Pa
     keys_file = tmp_path / ".env.keys"
     keys_file.write_text("# postgresql.env\nDOTENV_PRIVATE_KEY_POSTGRESQLDEVELOPMENT=k\n")
     keys_before = keys_file.read_bytes()
-    real_write = Path.write_bytes
+    env_before = env_file.read_bytes()
+    real_replace = Path.replace
 
-    def failing_write(self: Path, data: bytes) -> int:
-        if self == env_file and data != b"# postgresql.env\nA=1\n":
+    def failing_replace(self: Path, target):
+        if Path(target) == env_file:
             raise OSError("disk full")
-        return real_write(self, data)
+        return real_replace(self, target)
 
-    monkeypatch.setattr(Path, "write_bytes", failing_write)
+    monkeypatch.setattr(Path, "replace", failing_replace)
 
     with pytest.raises(OSError, match="disk full"):
         normalize_dotenvx_metadata(env_file, keys_file, "production")
 
     assert keys_file.read_bytes() == keys_before
+    assert env_file.read_bytes() == env_before
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys", "postgresql.env"]
 
 
 @pytest.mark.parametrize(
@@ -302,6 +343,23 @@ def test_normalize_leaves_keys_alone_without_a_generated_key(tmp_path: Path, key
     normalize_dotenvx_metadata(env_file, keys_file, "production")
 
     assert keys_file.read_text(encoding="utf-8") == keys_text
+
+
+def test_normalize_leaves_the_lines_of_a_quoted_value_alone(tmp_path: Path):
+    """A value read across lines may hold header-like text: it is the value, never renamed."""
+    env_file = tmp_path / "postgresql.env"
+    value = 'NOTE="first\n# postgresql.env\nDOTENV_PUBLIC_KEY_POSTGRESQLDEVELOPMENT=x\nlast"\n'
+    env_file.write_bytes(
+        ('DOTENV_PUBLIC_KEY_POSTGRESQLDEVELOPMENT="03ab"\n\n# postgresql.env\n' + value).encode(
+            "utf-8"
+        )
+    )
+
+    normalize_dotenvx_metadata(env_file, tmp_path / ".env.keys", "production")
+
+    assert env_file.read_bytes().decode("utf-8") == (
+        'DOTENV_PUBLIC_KEY_PRODUCTION="03ab"\n\n# .env.production\n' + value
+    )
 
 
 def test_normalize_only_renames_the_comment_of_an_already_canonical_key(tmp_path: Path):

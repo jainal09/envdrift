@@ -15,6 +15,7 @@ import pytest
 
 from envdrift.integrations.dotenvx_keys import (
     KeyReuseError,
+    KeyTarget,
     assignment_line_pattern,
     assignment_values,
     distinct_keys,
@@ -221,9 +222,7 @@ def _plan(env_text: str, keys_text: str | None, tmp_path: Path, name: str = NAME
     return plan_key_reuse(
         env_text,
         keys_text,
-        env_file=tmp_path / ".env.production",
-        keys_file=tmp_path / ".env.keys",
-        key_name=name,
+        KeyTarget(tmp_path / ".env.production", tmp_path / ".env.keys", name),
     )
 
 
@@ -317,6 +316,15 @@ def test_outcome_flags_any_new_key_name_when_one_was_held(tmp_path: Path):
     assert problem == f"dotenvx created DOTENV_PRIVATE_KEY_PROD instead of using {NAME}"
 
 
+def test_outcome_flags_a_file_left_without_the_held_public_key(tmp_path: Path):
+    """No public key after dotenvx is not proof of the held key: never accept it."""
+    plan = _held_plan(tmp_path)
+    keys = f"{NAME}={K1}\n"
+    problem = key_outcome_problem(plan, keys, keys, "A=encrypted:x\n")
+    assert problem is not None
+    assert "carries no public key" in problem
+
+
 def test_outcome_flags_another_public_key_when_one_was_held(tmp_path: Path):
     plan = _held_plan(tmp_path)
     keys = f"{NAME}={K1}\n"
@@ -359,6 +367,7 @@ def test_held_key_problem_cases():
     header = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB1}"\nA=encrypted:x\n'
     assert held_key_problem(header, f"{NAME}={K1}\n", NAME) is None
     assert held_key_problem(header, None, NAME) is None
-    assert held_key_problem(header, f"{NAME}=dummy\n", NAME) is None
+    # dotenvx skips a value it cannot use as a key, so nothing could decrypt the file.
+    assert "not a valid dotenvx key" in (held_key_problem(header, f"{NAME}=dummy\n", NAME) or "")
     assert "2 different keys" in (held_key_problem(header, f"{NAME}={K1},{K2}\n", NAME) or "")
     assert "another public key" in (held_key_problem(header, f"{NAME}={K2}\n", NAME) or "")

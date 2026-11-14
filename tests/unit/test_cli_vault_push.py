@@ -15,9 +15,11 @@ from envdrift.encryption import EncryptionProvider
 from envdrift.encryption.base import EncryptionBackendError
 from envdrift.sync.config import ServiceMapping, SyncConfig
 from envdrift.vault.base import AuthenticationError, SecretNotFoundError, SecretValue, VaultError
-from tests.helpers import DummyEncryptionBackend
+from tests.helpers import DOTENVX_KEY_PAIRS, DummyEncryptionBackend
 
 runner = CliRunner()
+# vault-push --all publishes only a key dotenvx can use (#938): tests hold real ones.
+KEY, KEY_2, KEY_3 = (pair[0] for pair in DOTENVX_KEY_PAIRS[:3])
 
 
 def _setup_push_all_single_mapping(tmp_path, mocks, *, environment, env_filename):
@@ -56,10 +58,10 @@ def _setup_push_all_single_mapping(tmp_path, mocks, *, environment, env_filename
     service_dir.mkdir()
     env_file = service_dir / env_filename
     env_file.write_text("PLAIN=text")
-    (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_STAGING=secret123")
+    (service_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_STAGING={KEY}")
 
     mock_keys_instance = MagicMock()
-    mock_keys_instance.read_key.return_value = "secret123"
+    mock_keys_instance.read_key.return_value = f"{KEY}"
     mock_keys_file.return_value = mock_keys_instance
 
     mock_client.get_secret.side_effect = SecretNotFoundError("missing")
@@ -96,11 +98,9 @@ class TestVaultPushAll:
                 profile="prod",
             ),
         ]
-        for mapping in mappings:
+        for mapping, key in zip(mappings, (KEY, KEY_2, KEY_3), strict=True):
             mapping.folder_path.mkdir()
-            (mapping.folder_path / ".env.keys").write_text(
-                f"{mapping.env_key_name}={mapping.secret_name}-value\n"
-            )
+            (mapping.folder_path / ".env.keys").write_text(f"{mapping.env_key_name}={key}\n")
 
         mock_client = MagicMock()
         mock_client.get_secret.side_effect = SecretNotFoundError("missing")
@@ -170,11 +170,11 @@ class TestVaultPushAll:
 
         # Create keys file
         keys_file = service_dir / ".env.keys"
-        keys_file.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=secret123")
+        keys_file.write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}")
 
         # Mock EnvKeysFile read_key
         mock_keys_instance = MagicMock()
-        mock_keys_instance.read_key.return_value = "secret123"
+        mock_keys_instance.read_key.return_value = f"{KEY}"
         mock_keys_file.return_value = mock_keys_instance
 
         # Mock client.get_secret to raise SecretNotFoundError (simulating missing secret)
@@ -188,7 +188,7 @@ class TestVaultPushAll:
 
         # Verify set_secret called
         mock_client.set_secret.assert_called_with(
-            "my-secret", "DOTENV_PRIVATE_KEY_PRODUCTION=secret123"
+            "my-secret", f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}"
         )
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
@@ -205,7 +205,7 @@ class TestVaultPushAll:
         service_dir.mkdir()
         env_file = service_dir / "postgresql.env"
         env_file.write_text("POSTGRES_PASSWORD=secret\n")
-        (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=secret123\n")
+        (service_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}\n")
 
         mock_sync_config = SyncConfig(
             mappings=[
@@ -233,7 +233,7 @@ class TestVaultPushAll:
         assert dummy_backend.encrypt_calls == [env_file]
         mock_client.set_secret.assert_called_once_with(
             "postgres-key",
-            "DOTENV_PRIVATE_KEY_PRODUCTION=secret123",
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}",
         )
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
@@ -309,10 +309,10 @@ class TestVaultPushAll:
         service_dir = tmp_path / "service1"
         service_dir.mkdir()
         (service_dir / ".env.production").write_text("encrypted: yes")
-        (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=secret123")
+        (service_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}")
 
         mock_keys_instance = MagicMock()
-        mock_keys_instance.read_key.return_value = "secret123"
+        mock_keys_instance.read_key.return_value = f"{KEY}"
         mock_keys_file.return_value = mock_keys_instance
 
         mock_client.get_secret.return_value = SecretValue(name="existing-secret", value="val")
@@ -322,7 +322,7 @@ class TestVaultPushAll:
         assert result.exit_code == 0
         assert "Pushed existing-secret" in result.output
         mock_client.set_secret.assert_called_with(
-            "existing-secret", "DOTENV_PRIVATE_KEY_PRODUCTION=secret123"
+            "existing-secret", f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}"
         )
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
@@ -364,7 +364,7 @@ class TestVaultPushAll:
         # Create keys file so it allows push processing
         (service_dir / ".env.keys").touch()
         mock_keys_instance = MagicMock()
-        mock_keys_instance.read_key.return_value = "key123"
+        mock_keys_instance.read_key.return_value = KEY
         mock_keys_file.return_value = mock_keys_instance
 
         # Setup mocks for push flow to continue
@@ -497,9 +497,7 @@ class TestVaultPushAll:
         assert result.exit_code == 0
         assert dummy_backend.encrypt_calls == [env_file]
         mock_keys_instance.read_key.assert_called_with("DOTENV_PRIVATE_KEY_STAGING")
-        mock_client.set_secret.assert_called_with(
-            "my-secret", "DOTENV_PRIVATE_KEY_STAGING=secret123"
-        )
+        mock_client.set_secret.assert_called_with("my-secret", f"DOTENV_PRIVATE_KEY_STAGING={KEY}")
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
     @patch("envdrift.cli_commands.sync.load_sync_config_and_client")
@@ -845,7 +843,7 @@ class TestVaultPushAll:
 
         (service_dir / ".env.keys").touch()
         mock_keys_instance = MagicMock()
-        mock_keys_instance.read_key.return_value = "secret123"
+        mock_keys_instance.read_key.return_value = f"{KEY}"
         mock_keys_file.return_value = mock_keys_instance
         mock_client.get_secret.side_effect = SecretNotFoundError("missing")
 
@@ -896,10 +894,10 @@ class TestVaultPushAll:
         service_dir = tmp_path / "service1"
         service_dir.mkdir()
         keys_file = service_dir / ".env.keys"
-        keys_file.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=secret123")
+        keys_file.write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}")
 
         mock_keys_instance = MagicMock()
-        mock_keys_instance.read_key.return_value = "secret123"
+        mock_keys_instance.read_key.return_value = f"{KEY}"
         mock_keys_file.return_value = mock_keys_instance
 
         mock_client.get_secret.side_effect = SecretNotFoundError("missing")
@@ -912,7 +910,7 @@ class TestVaultPushAll:
         # Verify encryption was NOT called
         assert dummy_backend.encrypt_calls == []
         mock_client.set_secret.assert_called_with(
-            "my-secret", "DOTENV_PRIVATE_KEY_PRODUCTION=secret123"
+            "my-secret", f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}"
         )
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
@@ -949,10 +947,10 @@ class TestVaultPushAll:
         service_dir = tmp_path / "service1"
         service_dir.mkdir()
         keys_file = service_dir / ".env.keys"
-        keys_file.write_text("DOTENV_PRIVATE_KEY_STAGING=stagingkey")
+        keys_file.write_text(f"DOTENV_PRIVATE_KEY_STAGING={KEY}")
 
         mock_keys_instance = MagicMock()
-        mock_keys_instance.read_key.return_value = "stagingkey"
+        mock_keys_instance.read_key.return_value = f"{KEY}"
         mock_keys_file.return_value = mock_keys_instance
 
         mock_client.get_secret.side_effect = SecretNotFoundError("missing")
@@ -962,9 +960,7 @@ class TestVaultPushAll:
         assert result.exit_code == 0
         assert "Pushed my-secret" in result.output
         # Without --skip-encrypt, this would have been skipped due to missing .env file
-        mock_client.set_secret.assert_called_with(
-            "my-secret", "DOTENV_PRIVATE_KEY_STAGING=stagingkey"
-        )
+        mock_client.set_secret.assert_called_with("my-secret", f"DOTENV_PRIVATE_KEY_STAGING={KEY}")
 
 
 class TestVaultPushSingleService:
@@ -1342,7 +1338,24 @@ class TestVaultPushAllKeyChecks:
 
         out = " ".join(result.output.split())
         assert result.exit_code == 1, out
-        assert "is not encrypted with this key" in out
+        assert "encrypted with another public key than the one of" in out
+        assert "the vault copy could not decrypt" in out
+        client.set_secret.assert_not_called()
+
+    def test_a_key_dotenvx_cannot_use_is_not_published(self, tmp_path):
+        """dotenvx skips a value it cannot use as a key: pushing it would publish no key."""
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_text("A=encrypted:x\n", encoding="utf-8")
+        (folder / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=not-a-key\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+
+        result, client, _ = self._run(tmp_path, [mapping])
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "Not pushed s" in out
+        assert "DOTENV_PRIVATE_KEY_PRODUCTION in the keys file is not a valid dotenvx key" in out
         client.set_secret.assert_not_called()
 
     def test_a_refused_key_change_is_reported_and_the_rest_still_runs(self, tmp_path):
@@ -1351,14 +1364,16 @@ class TestVaultPushAllKeyChecks:
         bad.mkdir()
         (bad / ".env.prod").write_text("A=encrypted:x\n", encoding="utf-8")
         (bad / ".env.keys").write_text(
-            "DOTENV_PRIVATE_KEY_PRODUCTION=k1\n# .env.prod\nDOTENV_PRIVATE_KEY_PROD=k2\n",
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}\n# .env.prod\nDOTENV_PRIVATE_KEY_PROD={KEY_2}\n",
             encoding="utf-8",
         )
         bad_before = (bad / ".env.keys").read_bytes()
         good = tmp_path / "good"
         good.mkdir()
         (good / ".env.production").write_text("B=encrypted:y\n", encoding="utf-8")
-        (good / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k3\n", encoding="utf-8")
+        (good / ".env.keys").write_text(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY_3}\n", encoding="utf-8"
+        )
         mappings = [
             ServiceMapping(
                 secret_name="bad",
@@ -1377,7 +1392,7 @@ class TestVaultPushAllKeyChecks:
         assert "holds two different keys for .env.prod" in out
         assert "Pushed: 1" in out
         assert "Errors: 1" in out
-        client.set_secret.assert_called_once_with("good", "DOTENV_PRIVATE_KEY_PRODUCTION=k3")
+        client.set_secret.assert_called_once_with("good", f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY_3}")
         assert (bad / ".env.keys").read_bytes() == bad_before
 
 
@@ -1420,7 +1435,9 @@ def test_push_all_encrypts_with_the_configured_keys_file(
     folder = tmp_path / "svc"
     folder.mkdir()
     (folder / ".env.production").write_text("A=1\n", encoding="utf-8")
-    (folder / ".secrets.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n", encoding="utf-8")
+    (folder / ".secrets.keys").write_text(
+        f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}\n", encoding="utf-8"
+    )
     client = MagicMock()
     client.get_secret.side_effect = SecretNotFoundError("missing")
     mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
@@ -1441,7 +1458,7 @@ def test_push_all_encrypts_with_the_configured_keys_file(
     assert backend.encrypt_kwargs == [
         {"keys_file": folder / ".secrets.keys", "environment": "production"}
     ]
-    client.set_secret.assert_called_once_with("s", "DOTENV_PRIVATE_KEY_PRODUCTION=k")
+    client.set_secret.assert_called_once_with("s", f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}")
 
 
 _ASCII_LOCALE_ENV = {

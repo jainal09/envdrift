@@ -186,8 +186,10 @@ mapping's `environment`, so the key held as `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` i
 into the file's header before dotenvx runs. The same rules as
 [`encrypt`](encrypt.md#safety-guarantees) apply: two different keys under that name, a value
 that is not a dotenvx key, or a file already encrypted under another public key is refused
-with both files left as they were, and if dotenvx still creates or replaces a key, both files
-are put back and the file counts as an error.
+with both files left as they were, and if dotenvx still creates or replaces a key, or leaves
+the file without the held key's public key, both files are put back and the file counts as an
+error. An already encrypted file is checked the same way: a held value that is not a dotenvx
+key, or that is not the key of the file's public key, is an error, not "already encrypted".
 
 A custom filename (`env_file = ".env.prod"` for `environment = "production"`) has its key
 renamed to the canonical `DOTENV_PRIVATE_KEY_<ENVIRONMENT>`. A different key that is already
@@ -428,7 +430,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 
 | Warning                                    | Meaning                                                              |
 |:-------------------------------------------|:---------------------------------------------------------------------|
-| `.env.keys not found`                      | No keys file (the configured `env_keys_filename`); a new key will be generated |
+| `no .env.keys file found, new key will be generated` | No keys file (the configured `env_keys_filename`, named in the message) |
 | `holds no key for this file`               | The keys file holds other keys, but none whose public key is the file's |
 | `{KEY} missing from .env.keys`             | The expected private key for this environment isn't in the keys file  |
 | `vault secret is empty`                    | The vault secret exists but has no value                             |
@@ -448,7 +450,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | `encryption failed` | The configured backend (dotenvx or SOPS) failed to encrypt the file |
 | `Key sync failed`   | Could not sync keys from vault                         |
 | `holds N different keys under ...` | The key name holds more than one key; keep the vault key, delete the other |
-| `is not a valid dotenvx key` | The held value is not a key dotenvx can use; nothing was encrypted |
+| `is not a valid dotenvx key` | The held value is not a key dotenvx can use: nothing was encrypted, and an already encrypted file counts as an error |
 | `encrypted with another public key` | The file is not encrypted with the key held for it |
 | `holds two different keys for <file>` | A custom filename's key and the canonical key differ; neither is overwritten |
 | `cannot re-label its key` | The renamed file's key could not be saved under the expected name; nothing changed |
