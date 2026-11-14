@@ -1,0 +1,25 @@
+docs/cli/validate.md
+  s_97204b2b60cb3f::t_a404046ef56dca 39-40
+tests/integration/test_validate_parity_cli.py
+  s_97204b2b60cb3f::t_c8942087bbf523 63-108
+tests/unit/test_schema_loader.py
+  s_97204b2b60cb3f::t_c8942087bbf523 152-181
+src/envdrift/core/schema.py
+  s_97204b2b60cb3f::t_a404046ef56dca 160,370-380
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bce429d1d6d825ef781adeb49fb964574195a7a9",
+  "prompts": {},
+  "sessions": {
+    "s_97204b2b60cb3f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1da88-0142-7cc1-b15c-65d02cc9afac",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
