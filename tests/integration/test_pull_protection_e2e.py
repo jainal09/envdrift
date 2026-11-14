@@ -474,3 +474,45 @@ def test_paths_print_as_they_are(
     assert f"• secrets/{folder}/.env.a (untracked)" in _flat(pull), _flat(pull)
     assert f"Updated .gitignore: secrets/.env.keys, {entry}" in _flat(push), _flat(push)
     assert "🔥" not in push.stdout + pull.stdout
+
+
+class TestPullLeavesAFileItCouldNotDecryptAsItWas:
+    def test_a_custom_env_file_keeps_its_header_when_its_decrypt_fails(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """pull rewrote a custom env_file's dotenvx header to the mapping's environment before the
+        decrypt, then said the file "was left as it was" when the decrypt failed (#962).
+        """
+        dotenvx = shutil.which("dotenvx")
+        assert dotenvx is not None
+        run = _cli(git_repo, integration_pythonpath, envdrift_cmd)
+        other = git_repo / "other"
+        other.mkdir()
+        (git_repo / ".env.production").write_text("API_TOKEN=" + "tok-1\n", encoding="utf-8")
+        (other / ".env.production").write_text("STRIPE=" + "sk-2\n", encoding="utf-8")
+        for folder in (git_repo, other):
+            subprocess.run(
+                [dotenvx, "encrypt", "-f", ".env.production"],
+                cwd=folder,
+                check=True,
+                capture_output=True,
+            )
+        # A value only the other folder's key decrypts, so this folder's decrypt fails
+        other_lines = (other / ".env.production").read_text(encoding="utf-8").splitlines()
+        stripe = next(line for line in other_lines if line.startswith("STRIPE="))
+        text = (git_repo / ".env.production").read_text(encoding="utf-8") + stripe + "\n"
+        text = text.replace("DOTENV_PUBLIC_KEY_PRODUCTION=", "DOTENV_PUBLIC_KEY_CUSTOM=")
+        custom = git_repo / "custom.env"
+        custom.write_text(text.replace("# .env.production", "# custom.env"), encoding="utf-8")
+        (git_repo / ".env.production").unlink()
+        before = custom.read_bytes()
+        mapping = 'environment = "production"\n'
+        config = _VAULT_SYNC.replace(mapping, mapping + 'env_file = "custom.env"\n')
+        (git_repo / "envdrift.toml").write_text(config, encoding="utf-8")
+
+        result = run("pull", "--skip-sync")
+
+        out = _flat(result)
+        assert result.returncode != 0, out
+        assert "custom.env was left as it was" in out, out
+        assert custom.read_bytes() == before

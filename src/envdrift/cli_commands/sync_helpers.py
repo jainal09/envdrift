@@ -75,6 +75,8 @@ class _DecryptTask:
     env_file: Path
     ephemeral_key: str | None = None
     ephemeral_key_name: str | None = None
+    # The file's bytes before pull rewrote its dotenvx header, put back if its decrypt fails
+    original: bytes | None = None
 
 
 @dataclass
@@ -409,6 +411,12 @@ def _queue_pull_mapping(mapping: ServiceMapping, context: _PullDecryptContext) -
     if _skip_pull_partial_file(env_file, context):
         context.state.skipped += 1
         return
+    # Read before the check below rewrites the header to the mapping's environment, so a
+    # failed decrypt leaves the file as it was, not with that header (#962)
+    try:
+        original: bytes | None = env_file.read_bytes()
+    except OSError:
+        original = None  # the check below reports the file it cannot read
     if not _should_queue_decryption(mapping, env_file, environment, context):
         return
     key_name, key_value = context.ephemeral_keys.get(mapping.folder_path.resolve(), (None, None))
@@ -418,6 +426,7 @@ def _queue_pull_mapping(mapping: ServiceMapping, context: _PullDecryptContext) -
             env_file=env_file,
             ephemeral_key=key_value,
             ephemeral_key_name=key_name,
+            original=original,
         )
     )
 
@@ -445,16 +454,25 @@ def _run_pull_decrypt_tasks(context: _PullDecryptContext) -> None:
         _record_pull_decrypt_result(task, result, error, context)
 
 
+def _put_back_original(task: _DecryptTask) -> str:
+    """Write back the bytes the file had before pull rewrote its header; say if that failed."""
+    if task.original is None:
+        return ""
+    try:
+        if task.env_file.read_bytes() != task.original:
+            task.env_file.write_bytes(task.original)
+    except OSError as exc:
+        return f" envdrift could not put back its dotenvx header: {exc}"
+    return ""
+
+
 def _record_pull_decrypt_result(
     task: _DecryptTask, result: Any, error: Any, context: _PullDecryptContext
 ) -> None:
-    if error is not None:
-        console.print(f"  [red]![/red] {task.env_file} [red]- error: {error}[/red]")
-        context.state.errors += 1
-        return
-    if result is None or not result.success:
-        message = result.message if result else "unknown error"
-        console.print(f"  [red]![/red] {task.env_file} [red]- error: {message}[/red]")
+    if error is not None or result is None or not result.success:
+        reason = error if error is not None else (result.message if result else "unknown error")
+        reason = f"{reason}{_put_back_original(task)}"
+        console.print(f"  [red]![/red] {task.env_file} [red]- error: {reason}[/red]")
         context.state.errors += 1
         return
     console.print(f"  [green]+[/green] {task.env_file} [dim]- decrypted[/dim]")
