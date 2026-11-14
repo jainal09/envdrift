@@ -328,7 +328,12 @@ def _insert_hook_block(yaml_mod: Any, content: str, hook_ids: list[str], config_
     # Block-style sequence: append after its last item, before the next key.
     indent = _block_sequence_indent(repos_value)
     block = _render_repo_block(hook_ids, indent)
-    return _insert_lines(content, repos_value.end_mark.line, block)
+    end_mark = repos_value.end_mark
+    insert_line = end_mark.line
+    # Without a final newline, PyYAML's EOF mark is still on the last content line.
+    if end_mark.index == len(content) and end_mark.column:
+        insert_line += 1
+    return _insert_lines(content, insert_line, block)
 
 
 def install_hooks(

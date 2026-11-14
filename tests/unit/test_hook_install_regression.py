@@ -145,6 +145,45 @@ class TestInstallPreservesYaml:
         assert "envdrift-encryption" in hook_ids
         assert "envdrift-guard" in hook_ids
 
+    @pytest.mark.parametrize(
+        "last_lines",
+        [
+            "      - id: black",
+            "      - id: black  # keep this hook in its own repo",
+            "      - id: black\n        args: [--check]",
+            "      - id: black\n        args:\n          - --check",
+            "      - id: black\n    # trailing comment",
+        ],
+        ids=["hook-id", "inline-comment", "flow-args", "block-args", "trailing-comment"],
+    )
+    @pytest.mark.parametrize("final_newline", ["", "\n"], ids=["no-newline", "newline"])
+    def test_install_preserves_existing_repositories_at_eof(
+        self, tmp_path: Path, last_lines: str, final_newline: str
+    ):
+        """An unterminated last line must stay in the original repository (#941)."""
+        original = (
+            "repos:\n"
+            "  - repo: https://github.com/psf/black\n"
+            "    rev: 24.3.0\n"
+            "    hooks:\n" + last_lines + final_newline
+        )
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_text(original, encoding="utf-8")
+        original_repos = yaml.safe_load(original)["repos"]
+
+        assert install_hooks(config_path=config_file) is True
+
+        updated = config_file.read_text(encoding="utf-8")
+        updated_repos = yaml.safe_load(updated)["repos"]
+        assert updated_repos[:-1] == original_repos
+        assert [hook["id"] for hook in updated_repos[-1]["hooks"]] == [
+            "envdrift-encryption",
+            "envdrift-guard",
+        ]
+        assert updated.startswith(original.rstrip("\n") + "\n")
+        assert install_hooks(config_path=config_file) is False
+        assert config_file.read_text(encoding="utf-8") == updated
+
     def test_install_inserts_inside_repos_when_repos_is_not_last(self, tmp_path: Path):
         original = textwrap.dedent(
             """\
