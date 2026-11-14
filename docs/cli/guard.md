@@ -65,6 +65,12 @@ reported under the link has a higher severity, or is verified when the severitie
 line, or the same secret on two lines, stay separate findings, and so do the reports of two scanners, which
 name the rule differently.
 
+The human report shows paths, rule ids, descriptions, previews, scanner errors, skip reasons and
+warnings exactly as the scanner reported them, as `--json` does. Square brackets and `:name:` codes in
+them are not read as terminal styling, so a path such as `cfg[prod]/.env` or a Next.js `[id]/` route
+is shown as it is. envdrift 11.1.6 and earlier crashed on a closing tag such as `cfg[/x]/a.env` and
+dropped a tag Rich knows, such as `[bold]`, so the report could name a file that does not exist.
+
 The path shown is not always the path in a gitleaks or Infisical fingerprint. `envdrift guard` with
 no path and absolute paths are fingerprinted by absolute path; see
 [gitleaks and Infisical ignore files](#gitleaks-and-infisical-ignore-files).

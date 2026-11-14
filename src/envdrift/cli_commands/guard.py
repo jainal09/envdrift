@@ -65,7 +65,7 @@ from envdrift.scanner.output import (
     format_sarif_error,
 )
 from envdrift.utils.git import without_git_location
-from envdrift.utils.text import strip_ansi
+from envdrift.utils.text import strip_ansi, styled_text
 
 # emoji=False so a `:fire:`-like path or finding is printed as it is.
 console = Console(emoji=False)
@@ -845,7 +845,8 @@ def _print_combined_files_warnings(
     if combined_files and not _machine_mode(json_output, sarif):
         security_warnings = engine.check_combined_files_security()
         for warning in security_warnings:
-            diagnostic_console.print(f"[bold red]{warning}[/bold red]")
+            # The warning names a configured path: print it as it is (#957).
+            diagnostic_console.print(Text(warning, style="bold red"))
         if security_warnings:
             diagnostic_console.print()
 
@@ -872,7 +873,8 @@ def _print_scan_header(
                     else "[yellow]not installed[/yellow]"
                 )
                 version = f" (v{info['version']})" if info["version"] else ""
-                output_console.print(f"  - {info['name']}: {status}{version}")
+                # A version is what the tool printed: show it as it is (#957).
+                output_console.print(styled_text("  - {}: " + status + "{}", info["name"], version))
 
 
 def _run_scan_with_progress(

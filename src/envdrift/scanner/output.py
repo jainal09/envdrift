@@ -16,7 +16,6 @@ from urllib.parse import quote_from_bytes
 
 from rich.cells import cell_len
 from rich.console import Console
-from rich.markup import escape
 from rich.measure import Measurement
 from rich.panel import Panel
 from rich.table import Table
@@ -31,7 +30,7 @@ from envdrift.scanner.base import (
     ScanFinding,
 )
 from envdrift.utils.git import get_git_root
-from envdrift.utils.text import strip_ansi
+from envdrift.utils.text import strip_ansi, styled_text
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -150,7 +149,8 @@ def _build_full_findings_table(findings: list[ScanFinding]) -> Table:
     logs (the regression this guards against). Individual values may still
     ellipsize or fold at a narrow CI width — use ``--format json`` for the
     complete values. This is the pre-PR layout, kept verbatim so hook/CI output
-    stays stable.
+    stays stable. Cells hold ``Text``, so a scanner's text is shown as it was
+    reported, never parsed as Rich markup (#957).
     """
     table = Table(show_header=True, header_style="bold", expand=True)
     table.add_column("Sev", width=8, justify="center")
@@ -162,9 +162,9 @@ def _build_full_findings_table(findings: list[ScanFinding]) -> Table:
         table.add_row(
             _severity_cell(f),
             _LocationCell(f),
-            f.rule_id,
-            f.description,
-            f.secret_preview or "-",
+            Text(f.rule_id),
+            Text(f.description),
+            Text(f.secret_preview or "-"),
         )
     return table
 
@@ -204,12 +204,12 @@ def _build_compact_findings_table(findings: list[ScanFinding], *, wide: bool) ->
     if wide:
         table.add_column("Preview", style="dim", no_wrap=True, max_width=14, overflow="ellipsis")
     for f in findings:
-        row: list[str | Text | _LocationCell] = [_severity_cell(f), _LocationCell(f)]
+        row: list[Text | _LocationCell] = [_severity_cell(f), _LocationCell(f)]
         if wide:
-            row.append(f.rule_id)
-        row.append(f.description)
+            row.append(Text(f.rule_id))
+        row.append(Text(f.description))
         if wide:
-            row.append(f.secret_preview or "-")
+            row.append(Text(f.secret_preview or "-"))
         table.add_row(*row)
     return table
 
@@ -230,19 +230,22 @@ def _print_scanner_notices(result: AggregatedScanResult, console: Console) -> No
     A default-set scanner skipped for a missing binary must be visible in human output even
     though it does not fail the run (#641). A scanner's non-fatal warnings mean its findings
     stand but may be less reliable than they look (a detect-secrets that is not the pinned
-    version grades some findings wrongly); they never change the verdict.
+    version grades some findings wrongly); they never change the verdict. Reasons and
+    warnings are shown as the scanner gave them, never parsed as Rich markup (#957).
     """
     skipped = [
-        f"[yellow]{r.scanner_name}[/yellow]: {r.skip_reason}" for r in result.results if r.skipped
+        styled_text("[yellow]{}[/yellow]: {}", r.scanner_name, r.skip_reason)
+        for r in result.results
+        if r.skipped
     ]
     warned = [
-        f"[yellow]{r.scanner_name}[/yellow]: {escape(strip_ansi(message))}"
+        styled_text("[yellow]{}[/yellow]: {}", r.scanner_name, strip_ansi(message))
         for r in result.results
         for message in r.warnings
     ]
     for title, lines in (("Scanners Skipped", skipped), ("Scanner Warnings", warned)):
         if lines:
-            console.print(Panel("\n".join(lines), title=title, border_style="yellow"))
+            console.print(Panel(Text("\n").join(lines), title=title, border_style="yellow"))
             console.print()
 
 
@@ -264,15 +267,16 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
     # still lands in the panel and matches the Scan Incomplete verdict (#478).
     errors = [r for r in result.results if not r.success]
     if errors:
-        error_lines: list[str] = []
+        error_lines: list[Text] = []
         for r in errors:
             msg = strip_ansi(r.error or "").strip()
             if len(msg) > 200:
                 msg = f"{msg[:200]}…"
-            error_lines.append(f"[red]{r.scanner_name}[/red]: {msg}")
+            # The message often names a path or quotes a tool: print it as it is.
+            error_lines.append(styled_text("[red]{}[/red]: {}", r.scanner_name, msg))
         console.print(
             Panel(
-                "\n".join(error_lines),
+                Text("\n").join(error_lines),
                 title="Scanner Errors",
                 border_style="red",
             )
