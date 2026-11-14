@@ -1,0 +1,25 @@
+tests/unit/test_validation_markup.py
+  s_97204b2b60cb3f::t_fb74f1c204f42e 1-94,102-103,111-127,135-136
+  s_97204b2b60cb3f::t_427a4450873417 95-101,104-110,128-134
+src/envdrift/output/rich.py
+  s_97204b2b60cb3f::t_1b74aef7841db5 109-111
+  s_97204b2b60cb3f::t_8790a299880004 75-76,95,102,120,127,139
+docs/cli/validate.md
+  s_97204b2b60cb3f::t_8790a299880004 221-224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "75a74a1825de9858b46d35a76aedf24fbdac9dc4",
+  "prompts": {},
+  "sessions": {
+    "s_97204b2b60cb3f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1da88-0142-7cc1-b15c-65d02cc9afac",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
