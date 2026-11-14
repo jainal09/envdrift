@@ -13,11 +13,8 @@ from __future__ import annotations
 import codecs
 import fnmatch
 import math
-import re
 import time
 from pathlib import Path, PurePosixPath
-
-from envdrift.core.encryption import is_dotenvx_public_key_var
 
 # Structure-aware line/content classification helpers live in a sibling module to
 # keep this file within the single-file LOC budget. They are re-exported from here
@@ -25,18 +22,26 @@ from envdrift.core.encryption import is_dotenvx_public_key_var
 # ``envdrift.scanner.native``.
 from envdrift.scanner._native_filters import (
     _EC_PUBKEY_RE,
+    _assignments,
     _content_has_sops_markers,
     _content_is_encrypted,
-    _is_encrypted_value_line,
     _looks_like_code_member_access,
+    _secret_group,
+    _skipped_value_spans,
+    _Spans,
 )
-from envdrift.scanner._native_io import read_raw_scannable_bytes
+from envdrift.scanner._native_io import (
+    NATIVE_MAX_SCAN_BYTES,
+    FileTooLargeError,
+    read_raw_scannable_bytes,
+)
 from envdrift.scanner.base import (
     FindingSeverity,
     ScanFinding,
     ScannerBackend,
     ScanResult,
 )
+from envdrift.scanner.finding_paths import display_path
 from envdrift.scanner.patterns import (
     ALL_PATTERNS,
     SecretPattern,
@@ -46,6 +51,7 @@ from envdrift.scanner.patterns import (
 )
 from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import is_file_tracked, without_git_location
+from envdrift.utils.text import line_and_column, split_lines
 
 # Encryption markers for dotenvx
 DOTENVX_MARKERS = (
@@ -342,6 +348,40 @@ def _decode_unicode_text(raw: bytes) -> str | None:
     return None
 
 
+def _decode_scannable_text(raw: bytes) -> str | None:
+    """Return ``raw`` as text, or ``None`` for a genuinely-binary blob.
+
+    The native scanner decides it so for a whole file, and for the start of a file too large
+    to scan (#933).
+    """
+    # Decode demonstrably-Unicode text before the binary heuristic can see it
+    # (#477): a UTF-16 env file is ~50% NUL bytes, which the ratio check would
+    # misclassify as a compiled blob and skip wholesale — silently passing a
+    # human-readable file full of plaintext secrets. A BOM or a clean 2-byte
+    # NUL stride identifies the bytes as text, so decode through the right
+    # codec first.
+    content = _decode_unicode_text(raw)
+    if content is not None:
+        return content
+    # Skip genuinely-binary files (compiled blobs etc.) to avoid noise —
+    # but a single stray NUL must NOT hide secrets in an otherwise-text
+    # file. The old "any NUL in the first 8 KiB -> discard ALL findings"
+    # rule let an attacker evade guard by injecting one NUL byte, leaving
+    # a real plaintext key undetected with a clean [OK] (#22).
+    if _looks_binary(raw):
+        return None
+    return raw.decode("utf-8", errors="ignore")
+
+
+def _too_large_warning(file_path: Path, cwd: Path) -> str:
+    """The warning for a text file the native scanner did not read for its size (#933)."""
+    return (
+        f"Not scanned: {display_path(file_path, cwd)} is larger than the native scanner's "
+        f"{NATIVE_MAX_SCAN_BYTES // (1024 * 1024)} MiB limit. Scan it with another scanner, "
+        "or add it to [guard] ignore_paths to skip it on purpose."
+    )
+
+
 class _FileListError(Exception):
     """git could not list some of the files below a directory; ``files`` holds the rest (#910)."""
 
@@ -532,6 +572,7 @@ class NativeScanner(ScannerBackend):
         findings: list[ScanFinding] = []
         files_scanned = 0
         errors: list[str] = []
+        warnings: list[str] = []
         cwd = Path.cwd().resolve()
 
         for path in paths:
@@ -549,8 +590,13 @@ class NativeScanner(ScannerBackend):
                 if self._should_ignore(file_path, path, cwd):
                     continue
 
+                try:
+                    file_findings = self._scan_file(file_path)
+                except FileTooLargeError:
+                    # Not read, so not scanned: say so instead of passing it for clean (#933).
+                    warnings.append(_too_large_warning(file_path, cwd))
+                    continue
                 files_scanned += 1
-                file_findings = self._scan_file(file_path)
                 findings.extend(file_findings)
 
         duration_ms = int((time.time() - start_time) * 1000)
@@ -561,6 +607,7 @@ class NativeScanner(ScannerBackend):
             files_scanned=files_scanned,
             error="; ".join(errors) or None,
             duration_ms=duration_ms,
+            warnings=warnings,
         )
 
     def _collect_files(self, directory: Path) -> list[Path]:
@@ -807,32 +854,26 @@ class NativeScanner(ScannerBackend):
     def _read_scannable_content(file_path: Path) -> str | None:
         """Read ``file_path`` and return its text content, or ``None`` to skip it.
 
-        Rejects oversized files before opening them, then performs a bounded read
-        so a concurrently growing file cannot bypass the cap. Raw bytes let the
-        binary check see the true content (``read_text(errors="ignore")`` would
-        silently drop the bytes that identify a binary file). Returns ``None``
-        for an unreadable/oversized file, a genuine binary blob, or empty content.
+        Reads no more than the cap, so a concurrently growing file cannot bypass it. Raw
+        bytes let the binary check see the true content (``read_text(errors="ignore")``
+        would silently drop the bytes that identify a binary file). Returns ``None`` for
+        an unreadable file, a genuine binary blob, or empty content.
+
+        Raises:
+            FileTooLargeError: A text file over the cap, which it does not read (#933). A binary
+                file over the cap is skipped, as any binary file is.
         """
-        raw = read_raw_scannable_bytes(file_path)
+        try:
+            raw = read_raw_scannable_bytes(file_path)
+        except FileTooLargeError as too_large:
+            if _decode_scannable_text(too_large.head) is None:
+                return None
+            raise
         if raw is None:
             return None
-
-        # Decode demonstrably-Unicode text before the binary heuristic can see it
-        # (#477): a UTF-16 env file is ~50% NUL bytes, which the ratio check would
-        # misclassify as a compiled blob and skip wholesale — silently passing a
-        # human-readable file full of plaintext secrets. A BOM or a clean 2-byte
-        # NUL stride identifies the bytes as text, so decode through the right
-        # codec first.
-        content = _decode_unicode_text(raw)
+        content = _decode_scannable_text(raw)
         if content is None:
-            # Skip genuinely-binary files (compiled blobs etc.) to avoid noise —
-            # but a single stray NUL must NOT hide secrets in an otherwise-text
-            # file. The old "any NUL in the first 8 KiB -> discard ALL findings"
-            # rule let an attacker evade guard by injecting one NUL byte, leaving
-            # a real plaintext key undetected with a clean [OK] (#22).
-            if _looks_binary(raw):
-                return None
-            content = raw.decode("utf-8", errors="ignore")
+            return None
 
         # Neutralize any stray NULs so they can't break pattern matching downstream.
         content = content.replace("\x00", "")
@@ -1089,7 +1130,7 @@ class NativeScanner(ScannerBackend):
             List of pattern-matched findings.
         """
         findings: list[ScanFinding] = []
-        lines = content.splitlines()
+        lines = split_lines(content)
 
         # File-scope keyword gate (#355): a keyword-gated pattern only fires when
         # one of its context keywords appears anywhere in the file. Computed once
@@ -1126,17 +1167,14 @@ class NativeScanner(ScannerBackend):
             if not stripped or stripped.startswith("#"):
                 continue
 
-            # Skip already-encrypted values (dotenvx or SOPS) — handles combined /
-            # mixed-content files.
-            if _is_encrypted_value_line(line):
-                continue
-
-            # Skip dotenvx's public-key artifact. The public key is public by
-            # definition (not a secret) but looks like a high-entropy assignment;
-            # this mirrors how the partial-encryption combine step excludes it from
-            # secret-var counts (see partial_encryption._is_secret_var_line).
-            if is_dotenvx_public_key_var(stripped.split("=", 1)[0].strip()):
-                continue
+            # Leave out already-encrypted values (dotenvx or SOPS) — handles combined /
+            # mixed-content files — and dotenvx's public-key artifact. The public key
+            # is public by definition (not a secret) but looks like a high-entropy
+            # assignment; this mirrors how the partial-encryption combine step excludes
+            # it from secret-var counts (see partial_encryption._is_secret_var_line).
+            # Only those values are left out: a plaintext secret after one on the same
+            # line, past a space or a form feed, is still reported (#937).
+            skipped = _Spans(_skipped_value_spans(line))
 
             for pattern in ALL_PATTERNS:
                 # Multiline patterns (e.g. gcp-service-account JSON) are scanned
@@ -1161,8 +1199,13 @@ class NativeScanner(ScannerBackend):
                 # single delimiter between two adjacent keys is left available as
                 # the leading boundary of the next match — both keys are found.
                 for match in pattern.pattern.finditer(line):
-                    # Extract the secret (first group or full match)
-                    secret = match.group(1) if match.groups() else match.group(0)
+                    # The secret is the first group, or the full match: not the leading
+                    # boundary aws-access-key-id reads, which can be an encrypted value's
+                    # closing quote right before a plaintext key.
+                    group = _secret_group(match)
+                    if skipped.overlaps(*match.span(group)):
+                        continue
+                    secret = match.group(group)
 
                     # Drop dotenvx EC public keys by value shape (#370): public,
                     # not a secret. This IS reachable: the generic-api-key pattern
@@ -1201,8 +1244,8 @@ class NativeScanner(ScannerBackend):
                         if _looks_like_code_member_access(secret):
                             continue
 
-                    # Calculate column number
-                    col_num = match.start() + 1
+                    # The secret's column, which the engine checks against encrypted values
+                    col_num = match.start(group) + 1
 
                     findings.append(_build_finding(pattern, secret, line_num, col_num))
 
@@ -1218,8 +1261,8 @@ class NativeScanner(ScannerBackend):
             # JSON blocks; search() would report only the first.
             for match in pattern.pattern.finditer(content):
                 secret = match.group(1) if match.groups() else match.group(0)
-                line_num = content.count("\n", 0, match.start()) + 1
-                col_num = match.start() - content.rfind("\n", 0, match.start())
+                # Lines as the per-line pass splits them, a lone \r included (#937).
+                line_num, col_num = line_and_column(content, match.start())
                 findings.append(_build_finding(pattern, secret, line_num, col_num))
 
         return findings
@@ -1235,33 +1278,28 @@ class NativeScanner(ScannerBackend):
             List of entropy-based findings.
         """
         findings: list[ScanFinding] = []
-        lines = content.splitlines()
+        lines = split_lines(content)
 
-        # Pattern for assignment-like statements. The LHS allows lower/upper/mixed
-        # case (#369) so lowercase or camelCase var names — api_key=, apiKey:,
+        # Assignment-like statements (``_assignments``). The name may be lower, upper or
+        # mixed case (#369) so lowercase or camelCase var names — api_key=, apiKey:,
         # secretToken = — are not missed. Downstream filters (URL/path skip,
         # alpha-only skip, template-string skip, entropy threshold) contain the
         # added surface to genuine high-entropy assignments.
-        assignment_pattern = re.compile(
-            r"[A-Za-z_][A-Za-z0-9_]*\s*[=:]\s*[\"']?([^\"'\s=]{16,})[\"']?"
-        )
-
         for line_num, line in enumerate(lines, start=1):
             # Skip comments
             stripped = line.strip()
             if stripped.startswith("#") or stripped.startswith("//"):
                 continue
 
-            # Skip already-encrypted values and the public-key artifact. Encrypted
-            # blobs are high-entropy by nature but not leaked secrets, so flagging
-            # them would flood combined partial-encryption files with noise.
-            if _is_encrypted_value_line(line):
-                continue
-            if is_dotenvx_public_key_var(stripped.split("=", 1)[0].strip()):
-                continue
+            # Leave out already-encrypted values and the public-key artifact, but not
+            # the rest of their line (#937). Encrypted blobs are high-entropy by nature
+            # but not leaked secrets, so flagging them would flood combined
+            # partial-encryption files with noise.
+            skipped = _Spans(_skipped_value_spans(line))
 
-            for match in assignment_pattern.finditer(line):
-                value = match.group(1)
+            for start, end, value_start, value in _assignments(line):
+                if skipped.overlaps(start, end):
+                    continue
 
                 # Skip if it looks like a URL or path
                 if value.startswith(("http://", "https://", "/", "./")):
@@ -1283,6 +1321,9 @@ class NativeScanner(ScannerBackend):
                         ScanFinding(
                             file_path=file_path,
                             line_number=line_num,
+                            # The value's column: without one, the engine drops a finding on
+                            # a line that holds an encrypted value anywhere.
+                            column_number=value_start + 1,
                             rule_id="high-entropy-string",
                             rule_description="High Entropy String",
                             description=(
