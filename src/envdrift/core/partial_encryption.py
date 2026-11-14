@@ -11,7 +11,7 @@ import logging
 import re
 import subprocess  # nosec B404
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, TypedDict
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.env_files import _is_excluded_env_file
@@ -252,17 +252,39 @@ class SecretsOnlyPullError(PartialEncryptionError):
 
     The files decrypted before the failure are plaintext on disk, so the error
     carries the tally for callers to report: ``pull-partial`` and ``pull`` count
-    them, and ``pull-partial`` still shows its plaintext notice.
+    them, and both warn about the ones git skip-worktree could not protect.
+    ``protected`` and ``unprotected`` cover only files this pull decrypted (#998).
     """
 
     def __init__(
-        self, message: str, *, decrypted: int, already_decrypted: int, protected: int
+        self,
+        message: str,
+        *,
+        decrypted: int,
+        already_decrypted: int,
+        protected: int,
+        unprotected: list[Path] | None = None,
     ) -> None:
         """Store the message and the counts reached before the failure."""
         super().__init__(message)
         self.decrypted = decrypted
         self.already_decrypted = already_decrypted
         self.protected = protected
+        self.unprotected = list(unprotected or [])
+
+
+class SecretsOnlyPullResult(TypedDict):
+    """Outcome of a secrets-only pull (``pull_secrets_only``).
+
+    ``protected`` counts the files this pull decrypted and marked skip-worktree;
+    ``unprotected`` lists the ones it decrypted but could not mark. A file that
+    was plaintext already is in neither (#998).
+    """
+
+    decrypted: int
+    already_decrypted: int
+    protected: int
+    unprotected: list[Path]
 
 
 def _is_quote_wrapped(v: str) -> bool:
@@ -630,6 +652,32 @@ def _git_unskip_worktree(path: Path) -> bool:
     Best-effort: returns False (and logs) if git is unavailable or the file is not tracked.
     """
     return _run_git_update_index("--no-skip-worktree", path)
+
+
+def unprotected_reason(path: Path) -> str:
+    """Say why ``git update-index --skip-worktree`` could not protect ``path`` (#998).
+
+    Asks git, by exit code rather than by its (translated) messages, whether the
+    file is in the index, from the same working directory the protection ran
+    in: ``untracked`` (exit 1), ``outside a git repository`` (exit 128: no
+    repository here, or the path lies outside it), else ``skip-worktree failed``
+    (a tracked file, for example while another git process holds the index lock).
+    """
+    try:
+        listed = subprocess.run(  # nosec B603, B607
+            ["git", "ls-files", "--error-unmatch", "--", str(path)],
+            capture_output=True,
+            timeout=10,
+        )
+    except FileNotFoundError:
+        return "skip-worktree failed: git is not installed"
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return f"skip-worktree failed: {exc}"
+    if listed.returncode == 1:
+        return "untracked"
+    if listed.returncode != 0:
+        return "outside a git repository"
+    return "skip-worktree failed"
 
 
 class DecryptSnapshot:
@@ -1031,7 +1079,7 @@ def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bo
     return True
 
 
-def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
+def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> SecretsOnlyPullResult:
     """
     Secrets-only pull: decrypt all matching files in secrets_dir in place.
 
@@ -1045,8 +1093,10 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
         env_config: Environment configuration with secrets_only=True
 
     Returns:
-        Dict with counts: {"decrypted": N, "already_decrypted": M, "protected": P}
-        where ``protected`` is the number of files successfully marked skip-worktree.
+        ``{"decrypted": N, "already_decrypted": M, "protected": P, "unprotected": [...]}``.
+        ``protected`` counts the files this pull decrypted and marked skip-worktree,
+        and ``unprotected`` lists the ones it decrypted but could not mark. Files that
+        were plaintext already are still marked, but counted in neither (#998).
 
     Raises:
         PartialEncryptionError: If the secrets_dir does not exist.
@@ -1059,6 +1109,7 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
     decrypted = 0
     already_decrypted = 0
     protected = 0
+    unprotected: list[Path] = []
     dotenvx = DotenvxWrapper()
 
     for file in files:
@@ -1070,8 +1121,9 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
             continue
         if not is_file_encrypted(file):
             # Already plaintext on disk — still protect it from accidental commit.
-            if _git_skip_worktree(file):
-                protected += 1
+            # This pull did not decrypt it, so it does not count as protected:
+            # counting it let the notice call an unprotected set protected (#998).
+            _git_skip_worktree(file)
             already_decrypted += 1
             continue
         try:
@@ -1084,21 +1136,31 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
                 decrypted=decrypted,
                 already_decrypted=already_decrypted,
                 protected=protected,
+                unprotected=unprotected,
             ) from e
         decrypted += 1
         # Prevent accidental commit of the now-plaintext secret file until
         # push_secrets_only re-encrypts it and lifts the protection.
         if _git_skip_worktree(file):
             protected += 1
+        else:
+            unprotected.append(file)
 
-    return {"decrypted": decrypted, "already_decrypted": already_decrypted, "protected": protected}
+    return {
+        "decrypted": decrypted,
+        "already_decrypted": already_decrypted,
+        "protected": protected,
+        "unprotected": unprotected,
+    }
 
 
 class PullPartialResult(NamedTuple):
     """Outcome of a combine-mode pull for a single environment."""
 
     was_decrypted: bool  # True if the file was encrypted before this pull (i.e. got decrypted)
-    protected: bool  # True if the file is now marked skip-worktree
+    # True if the file is now marked skip-worktree. Callers count it only for a
+    # file this pull decrypted: one that was plaintext already proves nothing (#998).
+    protected: bool
 
 
 def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> PullPartialResult:

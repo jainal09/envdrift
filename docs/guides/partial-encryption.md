@@ -279,7 +279,9 @@ git commit -m "Migrate to partial encryption"
 - ✅ **Run `push` before committing** to re-encrypt `.secret` and regenerate the combined file
 - ✅ **Run `pull-partial` + `push` after `git pull`** to regenerate the combined file from updated sources
 - ✅ **Never commit the combined file** — it is a runtime artifact, auto-gitignored by `push`
-- ✅ **The `.secret` file is git-protected while decrypted** — `git add .` won't stage it until `push` re-encrypts it
+- ✅ **The `.secret` file is git-protected while decrypted** — `git add .` won't stage it until `push` re-encrypts it.
+  This needs git to track the file: `pull-partial` names any decrypted file it could not protect (untracked,
+  outside a git repository, or skip-worktree failed) in a red DANGER warning instead of calling it protected
 - ✅ **The pre-commit hook is a hard block** — if a plaintext `.secret` (or
   `.env.keys`) is staged, the commit is refused. The plaintext `.clear` half
   commits normally, and an encrypted `.secret` passes. Install it with

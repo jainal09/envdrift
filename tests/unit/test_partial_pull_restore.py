@@ -139,7 +139,10 @@ class TestPullSecretsOnlyReportsTheTally:
 
         error = excinfo.value
         assert isinstance(error, PartialEncryptionError)  # existing handlers still match
-        assert (error.decrypted, error.already_decrypted, error.protected) == (1, 1, 2)
+        # The already-plaintext .env.a-plain is still marked skip-worktree but is
+        # not counted as protected: only files this pull decrypted are (#998).
+        assert (error.decrypted, error.already_decrypted, error.protected) == (1, 1, 1)
+        assert error.unprotected == []
         assert "could not decrypt STRIPE_API_KEY" in str(error)
         assert f"{db} was left as it was" in str(error)
         # .env.api was decrypted and protected; the failing file was restored

@@ -123,6 +123,27 @@ secrets-only mode.
 The plaintext notice is printed whenever this run decrypted at least one file,
 even when another environment failed and the command exits 1.
 
+git can only mark a file it tracks. The yellow notice ("They are marked
+skip-worktree") appears only when every file this run decrypted was marked. When
+any decrypted file could not be marked, a red DANGER warning names each such file
+with the reason:
+
+- `untracked`: git does not track the file, so `git add .` would stage it.
+- `outside a git repository`: there is no repository to protect it in.
+- `skip-worktree failed`: git tracks the file but could not mark it, for example
+  while another git process holds the index lock.
+
+```text
+Decryption succeeded, but git skip-worktree could not be applied to these decrypted files:
+  • secrets/.env.b (untracked)
+The other 1 decrypted file(s) are marked skip-worktree.
+```
+
+A file that was plaintext already is still marked `skip-worktree`, but it is not
+counted as protected, because this run did not decrypt it. Decrypting succeeded,
+so the command still exits 0 when only the protection failed; re-encrypt with
+`envdrift push` before you commit.
+
 ## When a decrypt fails
 
 dotenvx decrypts value by value. When one value was encrypted under another key
