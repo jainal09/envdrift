@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from envdrift.config import (
     EnvdriftConfig,
@@ -54,7 +54,9 @@ def _ensure_combined_gitignore(envs_to_process) -> None:
     key_files = [key for env_config in envs_to_process for key in dotenvx_key_files(env_config)]
     added_entries = ensure_gitignore_entries([*paths, *key_files])
     if added_entries:
-        console.print(f"[dim]Updated .gitignore: {', '.join(added_entries)}[/dim]")
+        # Text, not markup: the entries are printed exactly as written to .gitignore,
+        # never parsed as tags (a [/x] folder raised MarkupError) or emoji codes.
+        console.print(Text(f"Updated .gitignore: {', '.join(added_entries)}", style="dim"))
     # Fail closed: an entry can still be overridden (by a later `!` rule in a
     # .gitignore), and then `git add .` stages the private key. Ask git, and stop
     # before dotenvx touches a partial-encryption file. (pull --merge gets here
@@ -459,27 +461,32 @@ def _print_unprotected_warning(
     """
     if decrypted_count == 0 or (not unprotected and protected_count >= decrypted_count):
         return False
+    body = Text.from_markup(
+        "[bold red]🚨  SECRET FILES ARE PLAINTEXT WITH NO GIT PROTECTION[/bold red]\n\n"
+        "Decryption succeeded, but [bold]git skip-worktree[/bold] "
+    )
     if unprotected:
-        named = "\n".join(
-            f"  • {escape(str(path))} ({escape(unprotected_reason(path))})" for path in unprotected
-        )
-        files = f"could not be applied to these decrypted files:\n{named}\n"
+        body.append("could not be applied to these decrypted files:\n")
+        for path in unprotected:
+            # Plain text, never markup: escape() let an emoji code in a path such as
+            # secrets/:fire:/.env.a print as an emoji, naming a file that does not exist.
+            body.append(f"  • {path} ({unprotected_reason(path)})\n")
     else:
-        files = "could not be applied to the decrypted files.\n"
-    others = (
-        f"The other {protected_count} decrypted file(s) are marked skip-worktree.\n"
-        if protected_count
-        else ""
+        body.append("could not be applied to the decrypted files.\n")
+    if protected_count:
+        body.append(f"The other {protected_count} decrypted file(s) are marked skip-worktree.\n")
+    body.append_text(
+        Text.from_markup(
+            "\n[bold]Nothing stops a plain [bold cyan]git add .[/bold cyan] from staging "
+            "them.[/bold] Do not run git add until you have re-encrypted.\n\n"
+            "Re-encrypt immediately with:\n"
+            "  [bold cyan]envdrift push[/bold cyan]   ← re-encrypts your secret files"
+        )
     )
     console.print()
     console.print(
         Panel(
-            "[bold red]🚨  SECRET FILES ARE PLAINTEXT WITH NO GIT PROTECTION[/bold red]\n\n"
-            f"Decryption succeeded, but [bold]git skip-worktree[/bold] {files}{others}\n"
-            "[bold]Nothing stops a plain [bold cyan]git add .[/bold cyan] from staging "
-            "them.[/bold] Do not run git add until you have re-encrypted.\n\n"
-            "Re-encrypt immediately with:\n"
-            "  [bold cyan]envdrift push[/bold cyan]   ← re-encrypts your secret files",
+            body,
             title="[bold red]⚠  DANGER: No Git Protection Applied[/bold red]",
             border_style="red",
             expand=False,

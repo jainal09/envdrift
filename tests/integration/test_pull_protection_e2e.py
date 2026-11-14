@@ -437,3 +437,40 @@ class TestSymlinkedSecretFile:
         ) in out, out
         status = _git(git_repo, "status", "--porcelain", "--untracked-files=all")
         assert "?? shared/production.secret" in status, status
+
+
+@pytest.mark.parametrize(
+    ("folder", "entry"),
+    [(":fire:", "secrets/:fire:/.env.keys"), ("[b]", "secrets/\\[b]/.env.keys")],
+    ids=["emoji-code", "markup-tag"],
+)
+def test_paths_print_as_they_are(
+    git_repo: Path,
+    integration_pythonpath: str,
+    envdrift_cmd: list[str],
+    folder: str,
+    entry: str,
+) -> None:
+    """Paths in the DANGER warning and the .gitignore line are text, not Rich markup.
+
+    ``escape()`` stops a tag but not an emoji code, so ``secrets/:fire:/.env.a`` was
+    named ``secrets/🔥/.env.a``. The .gitignore line was markup: it lost the escaping
+    backslash the entry has in .gitignore, and ``[b]`` before that.
+    """
+    if ":" in folder and sys.platform == "win32":
+        pytest.skip("':' is not allowed in a Windows file name")
+    run = _cli(git_repo, integration_pythonpath, envdrift_cmd)
+    (git_repo / "envdrift.toml").write_text(
+        _SECRETS_ONLY + 'pattern = "**/.env*"\n', encoding="utf-8"
+    )
+    (git_repo / "secrets" / folder).mkdir(parents=True)
+    (git_repo / "secrets" / folder / ".env.a").write_text("A=" + "secret-a\n", encoding="utf-8")
+
+    push = run("push")
+    pull = run("pull-partial")  # .env.a is untracked, so it is named
+
+    assert push.returncode == 0, _flat(push)
+    assert pull.returncode == 0, _flat(pull)
+    assert f"• secrets/{folder}/.env.a (untracked)" in _flat(pull), _flat(pull)
+    assert f"Updated .gitignore: secrets/.env.keys, {entry}" in _flat(push), _flat(push)
+    assert "🔥" not in push.stdout + pull.stdout
