@@ -146,6 +146,13 @@ counted as protected, because this run did not decrypt it. Decrypting succeeded,
 so the command still exits 0 when only the protection failed; re-encrypt with
 `envdrift push` before you commit.
 
+A secret file that is a symlink, or sits in a symlinked directory, is decrypted
+into the file the link points to, so that is the file marked `skip-worktree` (and
+the one `push` lifts the mark from). When git does not track that file, the
+warning names the link and where the plaintext is:
+`config/.env.production.secret (untracked; through a symlink, the plaintext is in
+shared/production.secret)`.
+
 ## When a decrypt fails
 
 dotenvx decrypts value by value. When one value was encrypted under another key

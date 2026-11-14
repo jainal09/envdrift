@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -265,3 +266,77 @@ class TestPullPartialNotice:
         assert result.exit_code == 0, output
         assert "SECRET FILES ARE NOW PLAINTEXT" in output
         assert "No Git Protection Applied" not in output
+
+
+def _symlink(link: Path, target: str) -> None:
+    if sys.platform == "win32":
+        pytest.skip("git checks symlinks out as plain files on Windows by default")
+    link.symlink_to(target)
+
+
+def _flags(repo: Path, *paths: str) -> dict[str, str]:
+    """``{path: flag}`` from ``git ls-files -v``: ``S`` skip-worktree, ``H`` tracked."""
+    listed = subprocess.run(
+        ["git", "ls-files", "-v", "--", *paths],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return {line[2:]: line[0] for line in listed.splitlines()}
+
+
+class TestSymlinkedSecretFile:
+    """The bit goes on the file the plaintext lands in, not on the link to it.
+
+    dotenvx writes through a symlinked secret file into its target. Marking the
+    link protected nothing: the tracked target held the plaintext, and
+    ``git add .`` staged it while pull-partial said the files were protected.
+    """
+
+    def test_a_tracked_target_is_marked_and_unmarked(self, repo: Path) -> None:
+        from envdrift.core.partial_encryption import _git_skip_worktree, _git_unskip_worktree
+
+        (repo / "shared").mkdir()
+        (repo / "shared" / "production.secret").write_text("K=v\n", encoding="utf-8")
+        (repo / "config").mkdir()
+        _symlink(repo / "config" / ".env.production.secret", "../shared/production.secret")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "symlinked secret")
+        link = Path("config/.env.production.secret")
+        both = ("config/.env.production.secret", "shared/production.secret")
+
+        assert _git_skip_worktree(link) is True
+        assert _flags(repo, *both) == {both[0]: "H", both[1]: "S"}
+        # push lifts it from the same file, so the re-encrypted target shows up.
+        assert _git_unskip_worktree(link) is True
+        assert _flags(repo, *both) == {both[0]: "H", both[1]: "H"}
+
+    def test_an_untracked_target_is_not_called_protected(self, repo: Path) -> None:
+        from envdrift.core.partial_encryption import _git_skip_worktree
+
+        (repo / "shared").mkdir()
+        (repo / "shared" / "production.secret").write_text("K=v\n", encoding="utf-8")
+        _symlink(repo / ".env.production.secret", "shared/production.secret")
+        _git(repo, "add", ".env.production.secret")  # the link only
+        _git(repo, "commit", "-q", "-m", "link to an untracked file")
+        link = Path(".env.production.secret")
+
+        assert _git_skip_worktree(link) is False
+        assert _flags(repo, ".env.production.secret") == {".env.production.secret": "H"}
+        assert _reason(link) == (
+            "untracked; through a symlink, the plaintext is in shared/production.secret"
+        )
+
+    def test_a_symlinked_directory_on_the_way(self, repo: Path) -> None:
+        from envdrift.core.partial_encryption import _git_skip_worktree
+
+        (repo / "real").mkdir()
+        (repo / "real" / ".env.secret").write_text("K=v\n", encoding="utf-8")
+        _symlink(repo / "config", "real")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "symlinked directory")
+
+        # git refuses a path "beyond a symbolic link"; the real file is marked.
+        assert _git_skip_worktree(Path("config/.env.secret")) is True
+        assert _flags(repo, "real/.env.secret") == {"real/.env.secret": "S"}

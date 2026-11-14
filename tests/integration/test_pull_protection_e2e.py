@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -358,3 +359,81 @@ class TestPullWarnsAboutUnprotectedSecrets:
         assert result.returncode == 0, out
         assert "No Git Protection Applied" not in out, out
         assert _flag(git_repo, "config/.env.production.secret") == "S"
+
+
+def _write_symlinked_secret(repo: Path) -> Path:
+    """``config/.env.production.secret`` is a symlink to ``shared/production.secret``."""
+    if sys.platform == "win32":
+        pytest.skip("git checks symlinks out as plain files on Windows by default")
+    (repo / "envdrift.toml").write_text(
+        "[partial_encryption]\nenabled = true\n\n" + _combine("production", "config"),
+        encoding="utf-8",
+    )
+    (repo / "config").mkdir()
+    (repo / "config" / ".env.production.clear").write_text("DEBUG=false\n", encoding="utf-8")
+    target = repo / "shared" / "production.secret"
+    target.parent.mkdir()
+    target.write_text("JWT_SECRET=" + "super-" + "secret\n", encoding="utf-8")
+    (repo / "config" / ".env.production.secret").symlink_to("../shared/production.secret")
+    return target
+
+
+class TestSymlinkedSecretFile:
+    """dotenvx writes through a symlinked .secret: its target holds the plaintext.
+
+    pull-partial marked the link skip-worktree and called the file protected,
+    while the plaintext sat in the tracked target, which ``git add .`` staged.
+    """
+
+    def test_the_tracked_target_is_protected_and_push_lifts_it(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        run = _cli(git_repo, integration_pythonpath, envdrift_cmd)
+        target = _write_symlinked_secret(git_repo)
+        push = run("push")
+        assert push.returncode == 0, _flat(push)
+        _git(git_repo, "add", "-A")
+        _git(git_repo, "commit", "-q", "-m", "symlinked secret file")
+
+        result = run("pull-partial")
+
+        out = _flat(result)
+        assert result.returncode == 0, out
+        assert "JWT_SECRET=super-secret" in target.read_text(encoding="utf-8")
+        assert "SECRET FILES ARE NOW PLAINTEXT" in out, out
+        assert "No Git Protection Applied" not in out, out
+        assert _flag(git_repo, "shared/production.secret") == "S"
+        _git(git_repo, "add", ".")
+        assert _git(git_repo, "diff", "--cached", "--name-only") == ""
+
+        # push re-encrypts through the link and lifts the bit from the same file,
+        # so git sees the new ciphertext.
+        repush = run("push")
+        assert repush.returncode == 0, _flat(repush)
+        assert "JWT_SECRET=encrypted:" in target.read_text(encoding="utf-8")
+        assert _flag(git_repo, "shared/production.secret") == "H"
+        changed = _git(git_repo, "diff", "--name-only").split()
+        assert "shared/production.secret" in changed, changed
+
+    def test_an_untracked_target_is_named_as_unprotected(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        run = _cli(git_repo, integration_pythonpath, envdrift_cmd)
+        _write_symlinked_secret(git_repo)
+        push = run("push")
+        assert push.returncode == 0, _flat(push)
+        _git(git_repo, "add", "envdrift.toml", ".gitignore", "config")  # not shared/
+        _git(git_repo, "commit", "-q", "-m", "a link to an untracked file")
+
+        result = run("pull-partial")
+
+        out = _flat(result)
+        assert result.returncode == 0, out
+        assert "SECRET FILES ARE NOW PLAINTEXT" not in out, out
+        assert "No Git Protection Applied" in out, out
+        assert (
+            "config/.env.production.secret (untracked; through a symlink, "
+            "the plaintext is in shared/production.secret)"
+        ) in out, out
+        status = _git(git_repo, "status", "--porcelain", "--untracked-files=all")
+        assert "?? shared/production.secret" in status, status

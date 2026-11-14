@@ -597,8 +597,25 @@ def combine_files(
     }
 
 
+def _written_file(path: Path) -> Path:
+    """The file a write to ``path`` lands in: ``path`` with every symlink resolved.
+
+    dotenvx writes through a symlinked secret file into its target. Marking the
+    link skip-worktree protected nothing: the plaintext landed in the tracked
+    target, which `git add .` staged, while pull-partial called it protected. A
+    symlinked directory on the way sends the write elsewhere the same way.
+    """
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):  # a symlink loop: no file to write either
+        return path
+
+
 def _run_git_update_index(flag: str, path: Path) -> bool:
-    """Run ``git update-index <flag> <path>`` and report whether it succeeded.
+    """Run ``git update-index <flag>`` on the file ``path`` writes to; report success.
+
+    That is the target of a symlinked ``path`` (``_written_file``), so the bit is
+    set on, and lifted from, the file that holds the plaintext.
 
     Returns True only when git exits 0. A non-zero exit (e.g. the file is not
     tracked) is logged as a warning rather than failing silently; git being
@@ -607,7 +624,7 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
     """
     try:
         result = subprocess.run(  # nosec B603, B607
-            ["git", "update-index", flag, str(path)],
+            ["git", "update-index", flag, str(_written_file(path))],
             capture_output=True,
             timeout=10,
         )
@@ -658,14 +675,17 @@ def unprotected_reason(path: Path) -> str:
     """Say why ``git update-index --skip-worktree`` could not protect ``path`` (#998).
 
     Asks git, by exit code rather than by its (translated) messages, whether the
-    file is in the index, from the same working directory the protection ran
-    in: ``untracked`` (exit 1), ``outside a git repository`` (exit 128: no
-    repository here, or the path lies outside it), else ``skip-worktree failed``
-    (a tracked file, for example while another git process holds the index lock).
+    file the protection was for (``_written_file``) is in the index, from the
+    same working directory the protection ran in: ``untracked`` (exit 1),
+    ``outside a git repository`` (exit 128: no repository here, or the path lies
+    outside it), else ``skip-worktree failed`` (a tracked file, for example while
+    another git process holds the index lock). When a symlink sends ``path``
+    elsewhere, the reason names the file the plaintext is in.
     """
+    target = _written_file(path)
     try:
         listed = subprocess.run(  # nosec B603, B607
-            ["git", "ls-files", "--error-unmatch", "--", str(path)],
+            ["git", "ls-files", "--error-unmatch", "--", str(target)],
             capture_output=True,
             timeout=10,
         )
@@ -674,10 +694,18 @@ def unprotected_reason(path: Path) -> str:
     except (subprocess.TimeoutExpired, OSError) as exc:
         return f"skip-worktree failed: {exc}"
     if listed.returncode == 1:
-        return "untracked"
-    if listed.returncode != 0:
-        return "outside a git repository"
-    return "skip-worktree failed"
+        reason = "untracked"
+    elif listed.returncode != 0:
+        reason = "outside a git repository"
+    else:
+        reason = "skip-worktree failed"
+    if any(part.is_symlink() for part in (path, *path.parents)):
+        try:
+            shown = target.relative_to(Path.cwd().resolve())
+        except (ValueError, OSError):
+            shown = target
+        reason += f"; through a symlink, the plaintext is in {shown}"
+    return reason
 
 
 class DecryptSnapshot:
