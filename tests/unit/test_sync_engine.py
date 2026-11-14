@@ -1247,11 +1247,12 @@ class TestSyncEngineSchemaValidation:
     """Schema validation behavior tests."""
 
     @pytest.mark.parametrize("alias", ["2FA_ENABLED", "X-FEATURE-ENABLED", "ÉTAT_MODE"])
-    @pytest.mark.parametrize("value,valid", [("true", True), ("maybe", False)])
+    @pytest.mark.parametrize("case", [("true", True), ("maybe", False)])
     def test_sync_validates_non_identifier_aliases(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias: str, value: str, valid: bool
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias: str, case: tuple[str, bool]
     ) -> None:
         """#965: sync and validate must both check values under dotenv alias names."""
+        value, valid = case
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv(alias, raising=False)
         env_file = tmp_path / ".env.production"
