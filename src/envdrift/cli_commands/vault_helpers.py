@@ -427,7 +427,7 @@ def _encrypt_target(
 
     console.print(f"Encrypting {target.env_file} with {context.backend.name}...")
     try:
-        result = context.backend.encrypt(target.env_file, **context.sops_kwargs)
+        result = context.backend.encrypt(target.env_file, **_bulk_encrypt_kwargs(context, target))
     except (EncryptionNotFoundError, EncryptionBackendError) as e:
         print_error(f"Failed to encrypt {target.env_file}: {e}")
         stats.errors += 1
@@ -437,6 +437,25 @@ def _encrypt_target(
         stats.errors += 1
         return False
     return True
+
+
+def _bulk_keys_file(context: _BulkPushContext, mapping: ServiceMapping) -> Path:
+    """The mapping's keys file: ``[vault.sync] env_keys_filename`` in its folder."""
+    return mapping.folder_path / (context.sync_config.env_keys_filename or ".env.keys")
+
+
+def _bulk_encrypt_kwargs(context: _BulkPushContext, target: _PushTarget) -> dict[str, Any]:
+    """Encrypt options: dotenvx gets the mapping's keys file, SOPS its own options.
+
+    dotenvx must write into the keys file that is then read and pushed;
+    without it, the wrapper fell back to ``<folder>/.env.keys`` and the key
+    pushed could not decrypt the file just encrypted (#943).
+    """
+    from envdrift.encryption import EncryptionProvider
+
+    if context.backend_provider == EncryptionProvider.DOTENVX:
+        return {"keys_file": _bulk_keys_file(context, target.mapping)}
+    return context.sops_kwargs
 
 
 def _normalize_mapping_metadata(context: _BulkPushContext, target: _PushTarget) -> None:
@@ -452,9 +471,7 @@ def _normalize_mapping_metadata(context: _BulkPushContext, target: _PushTarget) 
     if not dotenvx_filename_needs_normalization(target.env_file, target.environment):
         return
     normalize_dotenvx_metadata(
-        target.env_file,
-        target.mapping.folder_path / (context.sync_config.env_keys_filename or ".env.keys"),
-        target.environment,
+        target.env_file, _bulk_keys_file(context, target.mapping), target.environment
     )
 
 
@@ -488,11 +505,9 @@ def _mapping_secret_value(
     """Read the canonical private key value for one mapping."""
     from envdrift.sync.operations import EnvKeysFile
 
-    env_keys_path = target.mapping.folder_path / (
-        context.sync_config.env_keys_filename or ".env.keys"
-    )
+    env_keys_path = _bulk_keys_file(context, target.mapping)
     if not env_keys_path.exists():
-        print_error(f"Skipped {target.mapping.folder_path}: .env.keys not found")
+        print_error(f"Skipped {target.mapping.folder_path}: {env_keys_path.name} not found")
         stats.errors += 1
         return None
     key_name = f"DOTENV_PRIVATE_KEY_{target.environment.upper()}"

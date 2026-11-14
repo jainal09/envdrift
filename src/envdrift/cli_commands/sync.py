@@ -519,19 +519,21 @@ def _find_stale_private_key_name(env_keys_file: Path, expected_key_name: str) ->
 def _rekey_dotenvx_file(
     env_file: Path,
     encryption_backend: Any,
-    sops_encrypt_kwargs: dict[str, Any],
+    backend_kwargs: dict[str, Any],
 ) -> tuple[bool, str]:
     """Decrypt + re-encrypt ``env_file`` so dotenvx generates the expected key.
 
-    Returns ``(ok, error_message)``; ``error_message`` is empty on success.
+    ``backend_kwargs`` carries the mapping's keys file for dotenvx (#943), so
+    both runs use the file lock verifies. Returns ``(ok, error_message)``;
+    ``error_message`` is empty on success.
     """
     from envdrift.encryption import EncryptionBackendError, EncryptionNotFoundError
 
     try:
-        decrypt_result = encryption_backend.decrypt(env_file.resolve(), **sops_encrypt_kwargs)
+        decrypt_result = encryption_backend.decrypt(env_file.resolve(), **backend_kwargs)
         if not decrypt_result.success:
             return False, f"decrypt failed: {decrypt_result.message}"
-        result = encryption_backend.encrypt(env_file.resolve(), **sops_encrypt_kwargs)
+        result = encryption_backend.encrypt(env_file.resolve(), **backend_kwargs)
         if not result.success:
             return False, f"re-encrypt failed: {result.message}"
     except (EncryptionNotFoundError, EncryptionBackendError) as e:

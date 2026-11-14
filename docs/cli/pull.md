@@ -20,6 +20,9 @@ The `pull` command is the recommended way to onboard new developers. It combines
 1. **Sync keys from vault** - Fetches `DOTENV_PRIVATE_KEY_*` secrets from cloud vaults and writes them to local `.env.keys` files
 2. **Decrypt env files** - Decrypts all `.env.<environment>` files for each configured service
 
+dotenvx decrypts with the keys file named by `[vault.sync] env_keys_filename` (default `.env.keys`) in each mapping's folder, the same file the sync
+step writes.
+
 Just run `envdrift pull` and all encrypted environment files are ready to use.
 
 Configuration is auto-discovered from:

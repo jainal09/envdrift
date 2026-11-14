@@ -1269,3 +1269,34 @@ class TestVaultPushKeysFileReadErrors:
         assert "Cannot read" in out, out
         assert ".env.keys" in out, out
         assert not isinstance(result.exception, ValueError), result.exception
+
+
+@patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+@patch("envdrift.cli_commands.sync.load_sync_config_and_client")
+def test_push_all_encrypts_with_the_configured_keys_file(
+    mock_loader, mock_resolve_backend, tmp_path
+):
+    """#943: dotenvx writes into the keys file whose key is then pushed."""
+    folder = tmp_path / "svc"
+    folder.mkdir()
+    (folder / ".env.production").write_text("A=1\n", encoding="utf-8")
+    (folder / ".secrets.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n", encoding="utf-8")
+    client = MagicMock()
+    client.get_secret.side_effect = SecretNotFoundError("missing")
+    mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+    mock_loader.return_value = (
+        SyncConfig(mappings=[mapping], env_keys_filename=".secrets.keys"),
+        client,
+        "azure",
+        None,
+        None,
+        None,
+    )
+    backend = DummyEncryptionBackend()
+    mock_resolve_backend.return_value = (backend, EncryptionProvider.DOTENVX, None)
+
+    result = runner.invoke(app, ["vault-push", "--all"])
+
+    assert result.exit_code == 0, result.output
+    assert backend.encrypt_kwargs == [{"keys_file": folder / ".secrets.keys"}]
+    client.set_secret.assert_called_once_with("s", "DOTENV_PRIVATE_KEY_PRODUCTION=k")

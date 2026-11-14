@@ -212,6 +212,20 @@ def _read_lock_content(
         return None
 
 
+def _lock_encrypt_kwargs(context: _LockEncryptContext, keys_file: Path) -> dict[str, Any]:
+    """Per-file backend options: dotenvx gets the mapping's keys file, SOPS its own.
+
+    dotenvx is pointed at the configured ``[vault.sync] env_keys_filename``,
+    the file lock verifies and vault-push reads, instead of falling back to
+    ``<folder>/.env.keys`` (#943).
+    """
+    from envdrift.encryption import EncryptionProvider
+
+    if context.encryption.provider == EncryptionProvider.DOTENVX:
+        return {"keys_file": keys_file}
+    return context.sops_kwargs
+
+
 def _handle_lock_provider_mismatch(
     env_file: Path,
     context: _LockEncryptContext,
@@ -286,7 +300,9 @@ def _handle_dotenvx_rekey(
         f"{file.env_file}: key name mismatch, re-encrypting to generate {expected}"
     )
     ok, error = context.runtime.rekey_file(
-        file.env_file, context.encryption.backend, context.sops_kwargs
+        file.env_file,
+        context.encryption.backend,
+        _lock_encrypt_kwargs(context, file.keys_file),
     )
     if not ok:
         console.print(f"  [red]![/red] {file.env_file} [red]- {error}[/red]")
@@ -366,7 +382,9 @@ def _encrypt_interactive_file(
     from envdrift.encryption import EncryptionBackendError, EncryptionNotFoundError
 
     try:
-        result = context.encryption.backend.encrypt(file.env_file.resolve(), **context.sops_kwargs)
+        result = context.encryption.backend.encrypt(
+            file.env_file.resolve(), **_lock_encrypt_kwargs(context, file.keys_file)
+        )
         if not result.success:
             console.print(f"  [red]![/red] {file.env_file} [red]- error: {result.message}[/red]")
             state.errors.append(f"{file.env_file}: encryption failed - {result.message}")
@@ -475,9 +493,11 @@ def _lock_keys_file(
     if context.encryption.provider == EncryptionProvider.DOTENVX and not keys_file.exists():
         console.print(
             f"  [yellow]![/yellow] {env_file} "
-            f"[yellow]- warning: no .env.keys file, will generate new key[/yellow]"
+            f"[yellow]- warning: no {keys_file.name} file, will generate new key[/yellow]"
         )
-        state.warnings.append(f"{env_file}: no .env.keys file found, new key will be generated")
+        state.warnings.append(
+            f"{env_file}: no {keys_file.name} file found, new key will be generated"
+        )
     return keys_file
 
 
@@ -498,22 +518,17 @@ def _encrypt_one(task: _EncryptTask, context: _LockEncryptContext, state: _LockS
         EncryptionProvider,
     )
 
+    kwargs = _lock_encrypt_kwargs(context, task.env_keys_file)
     try:
         if context.encryption.provider == EncryptionProvider.DOTENVX:
             lock = state.dotenvx_locks.get(task.env_keys_file.resolve())
             if lock:
                 with lock:
-                    result = context.encryption.backend.encrypt(
-                        task.env_file.resolve(), **context.sops_kwargs
-                    )
+                    result = context.encryption.backend.encrypt(task.env_file.resolve(), **kwargs)
             else:
-                result = context.encryption.backend.encrypt(
-                    task.env_file.resolve(), **context.sops_kwargs
-                )
+                result = context.encryption.backend.encrypt(task.env_file.resolve(), **kwargs)
         else:
-            result = context.encryption.backend.encrypt(
-                task.env_file.resolve(), **context.sops_kwargs
-            )
+            result = context.encryption.backend.encrypt(task.env_file.resolve(), **kwargs)
         return task, result, None
     except (EncryptionNotFoundError, EncryptionBackendError) as exc:
         return task, None, exc

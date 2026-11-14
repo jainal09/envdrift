@@ -1932,3 +1932,98 @@ class TestLockSopsRecipientCheck:
         assert result.exit_code == 0, result.output
         normalized = " ".join(result.output.split())
         assert "skipped (already encrypted)" in normalized
+
+
+# --------------------------------------------------------------------------
+# lock and pull hand dotenvx the mapping's keys file (#943)
+# --------------------------------------------------------------------------
+class TestConfiguredKeysFile:
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_passes_the_configured_keys_file(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """dotenvx must write into the keys file lock verifies and vault-push reads."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text("SECRET=plain\n")
+        (tmp_path / ".secrets.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(
+            SyncConfig(mappings=[mapping], env_keys_filename=".secrets.keys", max_workers=1)
+        )
+
+        result = runner.invoke(app, ["lock", "--force"])
+
+        assert result.exit_code == 0, result.output
+        assert backend.encrypt_kwargs == [{"keys_file": tmp_path / ".secrets.keys"}]
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_interactive_encrypt_passes_the_keys_file(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook, monkeypatch
+    ):
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text("SECRET=plain\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(
+            SyncConfig(mappings=[mapping], env_keys_filename=".secrets.keys", max_workers=1)
+        )
+        monkeypatch.setattr("envdrift.cli_commands.sync_lock_helpers.console.input", lambda *_: "y")
+
+        result = runner.invoke(app, ["lock"])
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0, out
+        assert "no .secrets.keys file, will generate new key" in out
+        assert backend.encrypt_kwargs == [{"keys_file": tmp_path / ".secrets.keys"}]
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_rekey_decrypts_and_encrypts_with_the_keys_file(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """S1: the re-key's decrypt and encrypt both get the configured keys file."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text("SECRET=encrypted:abc\n")
+        (tmp_path / ".secrets.keys").write_text("DOTENV_PRIVATE_KEY_STAGING=oldkey\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(
+            SyncConfig(mappings=[mapping], env_keys_filename=".secrets.keys", max_workers=1)
+        )
+
+        runner.invoke(app, ["lock", "--force"])
+
+        assert backend.decrypt_kwargs == [{"keys_file": tmp_path / ".secrets.keys"}]
+        assert backend.encrypt_kwargs == [{"keys_file": tmp_path / ".secrets.keys"}]
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_decrypts_with_the_configured_keys_file(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """pull decrypts with the keys file sync wrote; SOPS would get none."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text("SECRET=encrypted:abc\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(
+            SyncConfig(mappings=[mapping], env_keys_filename=".secrets.keys", max_workers=1)
+        )
+
+        result = runner.invoke(app, ["pull", "--skip-sync"])
+
+        assert result.exit_code == 0, result.output
+        assert backend.decrypt_kwargs == [
+            {"env": None, "keys_file": (tmp_path / ".secrets.keys").resolve()}
+        ]
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_pull_gives_sops_no_keys_file(self, mock_resolve, tmp_path, loaded_config, no_git_hook):
+        backend = DummyEncryptionBackend(name="sops")
+        mock_resolve.return_value = (backend, EncryptionProvider.SOPS, None)
+        (tmp_path / ".env.production").write_text("SECRET=ENC[AES256_GCM,data:x]\nsops_mac=y\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        runner.invoke(app, ["pull", "--skip-sync"])
+
+        assert all("keys_file" not in kwargs for kwargs in backend.decrypt_kwargs)

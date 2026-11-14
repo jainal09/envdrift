@@ -81,6 +81,9 @@ To overwrite existing secrets instead of skipping them, add `--force`:
 envdrift vault-push --all --force
 ```
 
+`--all` encrypts with the keys file named by `[vault.sync] env_keys_filename` (default `.env.keys`), so the key that is pushed comes from the file
+dotenvx wrote it to.
+
 When the local files are already encrypted, add `--skip-encrypt` to bypass the encryption step and only push keys:
 
 ```bash
