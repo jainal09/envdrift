@@ -1,0 +1,26 @@
+src/envdrift/integrations/precommit.py
+  s_97204b2b60cb3f::t_aadcd62622ac6c 331-336
+tests/unit/test_hook_install_regression.py
+  s_97204b2b60cb3f::t_a6617a2d19ef67 148-186
+tests/integration/test_hook_generated_config.py
+  s_97204b2b60cb3f::t_a6617a2d19ef67 25,253-281
+  s_97204b2b60cb3f::t_1bd1b20515371e 282
+docs/cli/hook.md
+  s_97204b2b60cb3f::t_aadcd62622ac6c 121-123
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "88ebb40c29ba244ddb1b4e5fdb7cb0b778e36833",
+  "prompts": {},
+  "sessions": {
+    "s_97204b2b60cb3f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1da88-0142-7cc1-b15c-65d02cc9afac",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Jainal Gosaliya <jainal09gosalia@gmail.com>"
+    }
+  }
+}
