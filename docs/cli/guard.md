@@ -556,6 +556,12 @@ stderr. This holds for a base holding `*`, `?` or `[` too, such as `release/*`: 
 earlier let git read such a base as a path pattern, and reported "No changed files" with exit 0. A
 revision expression that git resolves, such as `HEAD^{/fix [abc]}`, is scanned, and shown as written.
 
+A base that starts with `-` is a revision too, never a git option. envdrift 11.1.6 and earlier passed
+`--pr-base=-S` or `--pr-base=--output=<file>` to `git diff` as an option, which found nothing or wrote
+the diff to that file, and reported "No changed files" with exit 0; `--pr-base=--upload-pack=<command>`
+(or `origin/--upload-pack=<command>`) reached `git fetch` as an option, and git ran the command.
+`--pr-base` needs git 2.24 or later, which reads such a base as a ref.
+
 ```bash
 envdrift guard --pr-base origin/main
 ```

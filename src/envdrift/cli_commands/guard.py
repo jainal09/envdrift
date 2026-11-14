@@ -462,8 +462,12 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
         base_ref = pr_base.removeprefix("origin/")
         if not base_ref:
             base_ref = pr_base
+        # ``--end-of-options`` (git 2.24+) keeps the base a refspec when it
+        # starts with ``-``: ``git fetch origin --upload-pack=<command>`` runs
+        # the command, and ``origin/--upload-pack=...`` reaches the fetch
+        # without its ``origin/``.
         fetch_result = subprocess.run(  # nosec B603, B607
-            ["git", "fetch", "origin", base_ref],
+            ["git", "fetch", "origin", "--end-of-options", base_ref],
             capture_output=True,
             timeout=30,
         )
@@ -472,13 +476,23 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
             # verbose-gated and swallowed in machine modes, hiding the usual
             # root cause of an unresolvable base ref.
             _warn_stderr(f"could not fetch '{base_ref}' from origin; using local refs")
-        # Get all files changed between base and HEAD. The ``--`` makes git
+        # Get all files changed between base and HEAD. ``--end-of-options``
+        # keeps a base that starts with ``-`` a revision: ``-S`` or
+        # ``--output=<file>`` was an option of the diff. The ``--`` makes git
         # read the range as revisions only: without it a base holding ``*``,
-        # ``?`` or ``[`` that is not a revision is taken as a path pattern, and
-        # the diff "succeeds" empty, so the gate passed on a base it never
-        # resolved.
+        # ``?`` or ``[`` that is not a revision is taken as a path pattern.
+        # Either way the diff "succeeded" empty, so the gate passed on a base
+        # git never resolved.
         result = subprocess.run(  # nosec B603, B607
-            ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD", "--"],
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=ACMR",
+                "--end-of-options",
+                f"{pr_base}...HEAD",
+                "--",
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -493,12 +507,15 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
             stderr_lines = (result.stderr or "").strip().splitlines()
             reason = stderr_lines[0] if stderr_lines else "unknown git error"
             # git ends some messages with a full stop and not others (``bad
-            # revision 'x...HEAD'``): end the reason with exactly one.
+            # revision 'x...HEAD'``): end the reason with exactly one. The
+            # suggested fetch keeps a base that starts with ``-`` a ref, as
+            # the fetch above does.
+            end_of_options = "--end-of-options " if base_ref.startswith("-") else ""
             _emit_error(
                 json_output,
                 sarif,
                 f"--pr-base '{pr_base}' could not be diffed against: {reason.rstrip('.')}. "
-                f"Fetch or fix the base ref (e.g. 'git fetch origin {base_ref}').",
+                f"Fetch or fix the base ref (e.g. 'git fetch origin {end_of_options}{base_ref}').",
             )
             # An unresolvable base ref is an operational failure, not a
             # critical finding: exit 6, never 1 (#526 contract).
