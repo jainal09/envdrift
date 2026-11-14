@@ -9,7 +9,9 @@ from textwrap import dedent
 from unittest.mock import MagicMock
 
 import pytest
+from typer.testing import CliRunner
 
+from envdrift.cli import app
 from envdrift.sync.config import ServiceMapping, SyncConfig
 from envdrift.sync.engine import SyncEngine, SyncMode, normalize_vault_key_value
 from envdrift.sync.result import DecryptionTestResult, SyncAction
@@ -1243,6 +1245,54 @@ class TestSyncEngineEphemeralKeys:
 
 class TestSyncEngineSchemaValidation:
     """Schema validation behavior tests."""
+
+    @pytest.mark.parametrize("alias", ["2FA_ENABLED", "X-FEATURE-ENABLED", "ÉTAT_MODE"])
+    @pytest.mark.parametrize("value,valid", [("true", True), ("maybe", False)])
+    def test_sync_validates_non_identifier_aliases(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, alias: str, value: str, valid: bool
+    ) -> None:
+        """#965: sync and validate must both check values under dotenv alias names."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv(alias, raising=False)
+        env_file = tmp_path / ".env.production"
+        env_file.write_text(f"{alias}={value}\n", encoding="utf-8")
+        (tmp_path / "sync_alias_settings.py").write_text(
+            dedent(
+                f"""
+                from pydantic import Field
+                from pydantic_settings import BaseSettings
+
+                class Settings(BaseSettings):
+                    enabled: bool = Field(default=False, alias={alias!r})
+                """
+            ).lstrip(),
+            encoding="utf-8",
+        )
+        mapping = ServiceMapping(secret_name="test-key", folder_path=tmp_path)
+        engine = SyncEngine(
+            config=SyncConfig(mappings=[mapping]),
+            vault_client=_StoredVaultClient({"test-key": "test-private-key"}),
+            mode=SyncMode(validate_schema=True, schema_path="sync_alias_settings:Settings"),
+        )
+
+        cli_result = CliRunner().invoke(
+            app,
+            [
+                "validate",
+                str(env_file),
+                "-s",
+                "sync_alias_settings:Settings",
+                "-d",
+                str(tmp_path),
+                "--ci",
+            ],
+        )
+        assert cli_result.exit_code == (0 if valid else 1), cli_result.output
+
+        result = engine.sync_all()
+
+        assert result.services[0].action == SyncAction.CREATED
+        assert result.services[0].schema_valid is valid
 
     def test_validate_schema_uses_detected_env_file(
         self, mock_vault_client: MagicMock, tmp_path: Path
