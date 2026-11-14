@@ -56,13 +56,19 @@ def _write(path: Path, text: str) -> Path:
     return path
 
 
-def _guard(repo: Path, target: str) -> tuple[int, list[tuple[str, int]]]:
+def _commit(repo: Path, message: str) -> None:
+    git = ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com"]
+    subprocess.run([*git, "add", "-A"], check=True, capture_output=True)
+    subprocess.run([*git, "commit", "-qm", message], check=True, capture_output=True)
+
+
+def _guard(repo: Path, target: str, *options: str) -> tuple[int, list[tuple[str, int]]]:
     """Run ``guard`` with native and gitleaks; return its exit code and (scanner, line) pairs."""
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{REPO_ROOT / 'src'}{os.pathsep}{env.get('PYTHONPATH', '')}"
     result = subprocess.run(
         [sys.executable, "-m", "envdrift.cli", "guard", "--gitleaks", "--no-trufflehog"]
-        + ["--json", target],
+        + ["--json", *options, target],
         cwd=str(repo),
         env=env,
         capture_output=True,
@@ -144,6 +150,28 @@ def test_a_native_key_after_a_nul_in_an_encrypted_value_is_found(repo: Path):
 
     assert exit_code == 1
     assert ("native", 1) in located
+
+
+@requires_gitleaks
+@pytest.mark.xfail(
+    strict=False, reason="a history finding is judged by the working-tree line (#1014)"
+)
+def test_a_secret_in_history_is_kept_when_its_line_is_encrypted_now(repo: Path):
+    """A key committed in plaintext stays in history after its file is encrypted. The engine
+    judged gitleaks' finding of it by line 10 of today's file, which holds an encrypted value, and
+    dropped it, so guard reported a clean scan.
+    """
+    lines = [f"SETTING_{index}=value{index}" for index in range(1, 15)]
+    lines[9] = f"AWS_ACCESS_KEY_ID={AWS_KEY}"
+    _write(repo / ".env.production", "\n".join(lines) + "\n")
+    _commit(repo, "plaintext")
+    lines[9] = f'SETTING_3="{DOTENVX_CIPHERTEXT}"'
+    _write(repo / ".env.production", "\n".join(lines) + "\n")
+    _commit(repo, "encrypted")
+
+    _, located = _guard(repo, ".", "--history")
+
+    assert ("gitleaks", 10) in located
 
 
 @requires_trivy
