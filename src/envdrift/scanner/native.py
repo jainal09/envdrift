@@ -28,7 +28,7 @@ from envdrift.scanner._native_filters import (
     _looks_like_code_member_access,
     _secret_group,
     _skipped_value_spans,
-    _within_spans,
+    _Spans,
 )
 from envdrift.scanner._native_io import (
     NATIVE_MAX_SCAN_BYTES,
@@ -1174,7 +1174,7 @@ class NativeScanner(ScannerBackend):
             # it from secret-var counts (see partial_encryption._is_secret_var_line).
             # Only those values are left out: a plaintext secret after one on the same
             # line, past a space or a form feed, is still reported (#937).
-            skipped = _skipped_value_spans(line)
+            skipped = _Spans(_skipped_value_spans(line))
 
             for pattern in ALL_PATTERNS:
                 # Multiline patterns (e.g. gcp-service-account JSON) are scanned
@@ -1203,7 +1203,7 @@ class NativeScanner(ScannerBackend):
                     # boundary aws-access-key-id reads, which can be an encrypted value's
                     # closing quote right before a plaintext key.
                     group = _secret_group(match)
-                    if _within_spans(skipped, *match.span(group)):
+                    if skipped.overlaps(*match.span(group)):
                         continue
                     secret = match.group(group)
 
@@ -1295,10 +1295,10 @@ class NativeScanner(ScannerBackend):
             # the rest of their line (#937). Encrypted blobs are high-entropy by nature
             # but not leaked secrets, so flagging them would flood combined
             # partial-encryption files with noise.
-            skipped = _skipped_value_spans(line)
+            skipped = _Spans(_skipped_value_spans(line))
 
             for start, end, value_start, value in _assignments(line):
-                if _within_spans(skipped, start, end):
+                if skipped.overlaps(start, end):
                     continue
 
                 # Skip if it looks like a URL or path

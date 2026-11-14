@@ -9,7 +9,9 @@ they take a line or file content and answer a yes/no structural question.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from bisect import bisect_left
+from collections.abc import Iterable, Iterator
+from itertools import accumulate
 
 from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.encryption.sops import SOPSEncryptionBackend
@@ -260,21 +262,39 @@ def _skipped_value_spans(line: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _within_spans(spans: list[tuple[int, int]], start: int, end: int) -> bool:
-    """True if ``[start, end)`` overlaps one of ``spans``."""
-    return any(start < span_end and span_start < end for span_start, span_end in spans)
+class _Spans:
+    """Spans of a line, sorted once so that each overlap test is a binary search.
 
-
-def _outside_encrypted_values(line: str, column_number: int | None) -> bool:
-    """True if a finding at 1-based ``column_number`` of ``line`` is in none of its encrypted values.
-
-    Without a column, only a line that holds no encrypted value qualifies. With one, a
-    plaintext secret after an encrypted value on the same line does (#937).
+    A long line can hold thousands of encrypted values and thousands of candidates: testing each
+    candidate against every span took time quadratic in the line's length (reported by
+    CodeRabbit on #936).
     """
-    spans = _encrypted_value_spans(line)
+
+    def __init__(self, spans: Iterable[tuple[int, int]]) -> None:
+        ordered = sorted(spans)
+        self._starts = [start for start, _ in ordered]
+        # The furthest end of the spans up to each one, in order of their starts
+        self._reach = list(accumulate((end for _, end in ordered), max))
+
+    def __bool__(self) -> bool:
+        return bool(self._starts)
+
+    def overlaps(self, start: int, end: int) -> bool:
+        """True if ``[start, end)`` overlaps a span: ``start < span_end and span_start < end``."""
+        before = bisect_left(self._starts, end)  # the spans that start before ``end``
+        return before > 0 and self._reach[before - 1] > start
+
+
+def _outside_encrypted_values(values: _Spans, column_number: int | None) -> bool:
+    """True if a finding at 1-based ``column_number`` is in none of its line's encrypted ``values``.
+
+    ``values`` holds the line's ``_encrypted_value_spans``. Without a column, only a line that
+    holds no encrypted value qualifies. With one, a plaintext secret after an encrypted value on
+    the same line does (#937).
+    """
     if column_number is None:
-        return not spans
-    return not _within_spans(spans, column_number - 1, column_number)
+        return not values
+    return not values.overlaps(column_number - 1, column_number)
 
 
 def _content_has_sops_markers(content: str) -> bool:

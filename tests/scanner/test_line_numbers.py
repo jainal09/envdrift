@@ -22,6 +22,7 @@ from envdrift.scanner._native_filters import (
     _assignments,
     _skipped_value_spans,
     _sops_value_spans,
+    _Spans,
 )
 from envdrift.scanner.base import FindingSeverity, ScanFinding
 from envdrift.scanner.engine import GuardConfig, ScanEngine
@@ -64,6 +65,12 @@ def _key_after(tmp_path: Path, separator: str, trailer: str = "") -> Path:
     return _write(
         tmp_path / "app.py", f'import os\n{separator}\nAWS_ACCESS_KEY_ID = "{AWS_KEY}"{trailer}\n'
     )
+
+
+def _many_assignments(count: int) -> str:
+    """A line of a SOPS value, then ``count`` high-entropy assignments."""
+    values = " ".join(f"K{index}={ENTROPY_TOKEN}{index:06d}" for index in range(count))
+    return f"{SOPS_VALUE} {values}"
 
 
 def _external_finding(
@@ -421,6 +428,95 @@ class TestEntropyAssignments:
         line = "a" * 30_000 + "_TOKEN=" + ENTROPY_TOKEN
 
         assert [value for *_, value in _assignments(line)] == [ENTROPY_TOKEN]
+
+
+class TestALongLineOfFindings:
+    """A line of many values and findings is read in time linear in its length.
+
+    Each candidate secret was tested against every encrypted value on its line. Each finding made
+    the engine find its line's encrypted values again, and the ignore filter look for its line's
+    comment again. On one long line each of these took time quadratic in its length, and the
+    filters run after the scanners' deadlines (reported by CodeRabbit on #936).
+    """
+
+    @staticmethod
+    def _random_span(rng: random.Random) -> tuple[int, int]:
+        start = rng.randint(0, 30)
+        return start, rng.randint(start, 30)
+
+    def test_an_overlap_is_found_as_by_testing_every_span(self):
+        rng = random.Random(1936)  # noqa: S311 - a fixed sample of spans, not a secret
+        for _ in range(20_000):
+            spans = [self._random_span(rng) for _ in range(rng.randint(0, 6))]
+            start, end = self._random_span(rng)
+            expected = any(start < span_end and span_start < end for span_start, span_end in spans)
+            assert _Spans(spans).overlaps(start, end) == expected, (spans, start, end)
+        assert not _Spans([])
+        assert _Spans([(3, 4)])
+
+    @pytest.mark.parametrize(
+        ("piece", "repeat", "check_entropy", "count"),
+        [
+            # A SOPS file is not pattern-scanned, so its values reach the entropy check only
+            ("a=ENC[AES256_GCM,x] ", 50_000, True, 0),
+            # A dotenvx value is looked for at the start of each piece split at a form feed
+            (f'A="{DOTENVX_CIPHERTEXT}" {AWS_KEY}\f', 20_000, False, 20_000),
+        ],
+        ids=["sops-values-entropy-check", "dotenvx-values-patterns"],
+    )
+    def test_the_native_scanner_reads_many_encrypted_values_quickly(
+        self, tmp_path: Path, piece: str, repeat: int, check_entropy: bool, count: int
+    ):
+        path = _write(tmp_path / ".env", piece * repeat + "\n")
+        started = time.perf_counter()
+
+        result = NativeScanner(check_entropy=check_entropy).scan([path])
+
+        assert time.perf_counter() - started < 5.0
+        assert result.files_scanned == 1
+        assert len(result.findings) == count
+
+    def test_the_engine_filters_many_findings_on_a_line_quickly(self, tmp_path: Path):
+        path = _write(tmp_path / ".env", _many_assignments(10_000) + "\n")
+        findings = NativeScanner(check_entropy=True).scan([path]).findings
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        started = time.perf_counter()
+
+        kept = engine._filter_encrypted_files(findings)
+
+        assert time.perf_counter() - started < 3.0
+        assert len(findings) == 10_000
+        assert kept == findings
+
+    def test_the_engine_finds_the_values_of_each_files_line(self, tmp_path: Path):
+        """The values found for a line are not used for the same line of another file."""
+        column = SOPS_VALUE.index("data:") + 1
+        encrypted = _write(tmp_path / "a.env", f"{SOPS_VALUE}\n")
+        plaintext = _write(tmp_path / "b.env", f"{'K' * column}={ENTROPY_TOKEN}\n{SOPS_VALUE}\n")
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        in_the_value = _external_finding(encrypted, 1, column=column)
+        past_it = _external_finding(plaintext, 1, column=column)
+
+        kept = engine._filter_encrypted_files([in_the_value, past_it, in_the_value, past_it])
+
+        assert kept == [past_it, past_it]
+
+    def test_the_ignore_filter_reads_many_findings_on_a_line_quickly(self, tmp_path: Path):
+        path = _write(tmp_path / ".env", _many_assignments(10_000) + "\n")
+        findings = NativeScanner(check_entropy=True).scan([path]).findings
+        started = time.perf_counter()
+
+        kept = IgnoreFilter().filter(findings)
+
+        assert time.perf_counter() - started < 3.0
+        assert kept == findings
+
+    def test_each_finding_is_matched_against_the_rule_its_line_ignores(self, tmp_path: Path):
+        """The comment is looked for once per line, and still ignores only the rule it names."""
+        path = _key_after(tmp_path, "", trailer="  # envdrift:ignore:gitleaks-aws-access-token")
+        ignored, other_rule = _external_finding(path, 3), _external_finding(path, 3, "trufflehog")
+
+        assert IgnoreFilter().filter([ignored, other_rule, ignored]) == [other_rule]
 
 
 class TestTrivyValueRecovery:
