@@ -20,6 +20,9 @@ It can also **verify** that a key stored in your vault can decrypt the file with
 - Viewing encrypted values
 - Migrating to a different encryption system
 
+The target must be a regular file. Directories are refused with `Not a file: <path>`
+and exit code 1 before hook setup, backend selection, or vault access.
+
 ### Honest no-op on non-encrypted files (dotenvx backend)
 
 With the **dotenvx** backend, if the target file has no encrypted values

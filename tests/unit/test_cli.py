@@ -943,6 +943,35 @@ class TestEncryptCommand:
 class TestDecryptCommand:
     """Tests for the decrypt CLI command."""
 
+    @pytest.mark.parametrize("backend", [None, "dotenvx", "sops"])
+    @pytest.mark.parametrize("verify_vault", [False, True])
+    def test_decrypt_directory_refused_before_setup(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        backend: str | None,
+        verify_vault: bool,
+    ) -> None:
+        """#960: reject directories before backend or vault setup, without a traceback."""
+        monkeypatch.chdir(tmp_path)
+        env_dir = tmp_path / "somedir"
+        env_dir.mkdir()
+        contents = env_dir / "untouched.txt"
+        contents.write_text("leave this alone\n", encoding="utf-8")
+        args = ["decrypt", "somedir"]
+        if backend is not None:
+            args.extend(["--backend", backend])
+        if verify_vault:
+            # Even required vault-option validation must follow target validation.
+            args.append("--verify-vault")
+
+        result = runner.invoke(app, args)
+
+        assert result.exit_code == 1
+        assert "[ERROR] Not a file: somedir" in " ".join(result.output.split())
+        assert isinstance(result.exception, SystemExit)
+        assert contents.read_text(encoding="utf-8") == "leave this alone\n"
+
     def test_decrypt_missing_file(self, tmp_path: Path):
         """Test decrypt with missing file."""
         result = runner.invoke(app, ["decrypt", str(tmp_path / "missing.env")])
