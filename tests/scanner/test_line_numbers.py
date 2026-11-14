@@ -21,12 +21,15 @@ import pytest
 
 from envdrift.scanner._native_filters import (
     _assignments,
+    _line_values,
+    _outside_encrypted_values,
     _skipped_value_spans,
     _sops_value_spans,
     _Spans,
 )
 from envdrift.scanner.base import FindingSeverity, ScanFinding
 from envdrift.scanner.engine import GuardConfig, ScanEngine
+from envdrift.scanner.gitleaks import GitleaksScanner
 from envdrift.scanner.ignores import IgnoreFilter
 from envdrift.scanner.native import NativeScanner
 from envdrift.scanner.patterns import hash_secret
@@ -72,6 +75,11 @@ def _many_assignments(count: int) -> str:
     """A line of a SOPS value, then ``count`` high-entropy assignments."""
     values = " ".join(f"K{index}={ENTROPY_TOKEN}{index:06d}" for index in range(count))
     return f"{SOPS_VALUE} {values}"
+
+
+def _byte_column(line: str, text: str) -> int:
+    """The 1-based column of ``text`` in ``line`` as gitleaks reports it, which counts bytes."""
+    return len(line[: line.index(text)].encode("utf-8")) + 1
 
 
 def _external_finding(
@@ -320,7 +328,7 @@ class TestAnEncryptedValueAfterASeparator:
         line = f'CLEAR=ok{separator}API_TOKEN="{DOTENVX_CIPHERTEXT}"'
         path = _write(tmp_path / ".env", f"{line}\n")
         engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
-        in_the_value = _external_finding(path, 1, column=line.index("encrypted:") + 1)
+        in_the_value = _external_finding(path, 1, column=_byte_column(line, "encrypted:"))
         before_it = _external_finding(path, 1, column=1)
 
         assert engine._filter_encrypted_files([in_the_value, before_it]) == [before_it]
@@ -562,6 +570,99 @@ class TestALongLineOfFindings:
         ignored, other_rule = _external_finding(path, 3), _external_finding(path, 3, "trufflehog")
 
         assert IgnoreFilter().filter([ignored, other_rule, ignored]) == [other_rule]
+
+
+class TestColumnsPastAPlainStart:
+    """A column after a NUL or a non-ASCII character is not compared with the encrypted values.
+
+    Scanners count such a column differently. The native scanner drops NULs before it counts, and
+    gitleaks counts bytes, but the values are found in the line as the engine reads it. So the
+    column of a plaintext key named a place inside an encrypted value, and the engine dropped the
+    key (reported by CodeRabbit on #936).
+    """
+
+    @pytest.mark.parametrize(
+        ("line", "plain"),
+        [("A=1", 3), ("A=\x00", 2), ("é", 0), ("A\tB\fC", 5), ("", 0)],
+        ids=["ascii", "nul", "non-ascii", "tab-and-form-feed", "empty"],
+    )
+    def test_the_plain_start_ends_at_a_nul_or_a_non_ascii_character(self, line: str, plain: int):
+        assert _line_values(line).plain == plain
+
+    def test_a_column_up_to_the_plain_start_is_checked_and_one_past_it_is_not(self):
+        line = 'API_TOKEN="encrypted:abc"é'
+        values = _line_values(line)
+        in_the_value = line.index("abc") + 1
+
+        assert values.plain == line.index("é")
+        assert not _outside_encrypted_values(values, in_the_value)
+        assert _outside_encrypted_values(values, values.plain + 2)
+
+    def test_a_byte_column_is_turned_into_the_character_it_starts(self):
+        line = 'é="x" API_TOKEN=ENC[AES256_GCM,data:abc]'
+        values = _line_values(line)
+
+        assert values.byte_starts is not None
+        assert values.byte_starts[:3] == [0, 2, 3]
+        assert not _outside_encrypted_values(values, _byte_column(line, "abc"), in_bytes=True)
+        assert _outside_encrypted_values(values, _byte_column(line, '"x"'), in_bytes=True)
+
+    def test_the_engine_keeps_a_native_key_after_a_nul_in_an_encrypted_value(self, tmp_path: Path):
+        """The native scanner drops the NUL, so its column of the key named the closing quote."""
+        value = DOTENVX_CIPHERTEXT[:20] + "\x00" + DOTENVX_CIPHERTEXT[20:]
+        path = _write(tmp_path / ".env", f'API_TOKEN="{value}"{AWS_KEY}\n')
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        native = NativeScanner().scan([path]).findings
+
+        kept = [f.rule_id for f in engine._filter_encrypted_files(native)]
+
+        assert [f.rule_id for f in native] == ["aws-access-key-id"]
+        assert kept == ["aws-access-key-id"]
+
+    def test_the_engine_keeps_a_gitleaks_key_after_non_ascii_text(self, tmp_path: Path):
+        """gitleaks' byte column of the key fell in the SOPS value after it on the line."""
+        line = "NOTE=" + "é" * 80 + f" {AWS_KEY} API_TOKEN=ENC[AES256_GCM,data:" + "A" * 200 + "]"
+        path = _write(tmp_path / "app.env", f"{line}\n")
+        byte_column = len(line[: line.index(AWS_KEY)].encode("utf-8")) + 1
+        # The finding as gitleaks reports it and its adapter reads it
+        report = {"File": str(path), "RuleID": "aws-access-token", "Secret": AWS_KEY}
+        report |= {"StartLine": 1, "StartColumn": byte_column}
+        finding = GitleaksScanner(auto_install=False)._parse_finding(report, tmp_path)
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+
+        assert finding is not None
+        assert engine._filter_encrypted_files([finding]) == [finding]
+
+    def test_a_gitleaks_finding_in_an_encrypted_value_after_non_ascii_text_is_dropped(
+        self, tmp_path: Path
+    ):
+        line = f"NOTE=é {SOPS_VALUE}"
+        path = _write(tmp_path / ".env", f"{line}\n")
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        in_the_value = _external_finding(path, 1, column=_byte_column(line, "data:"))
+
+        assert engine._filter_encrypted_files([in_the_value]) == []
+
+    def test_a_gitleaks_column_after_bytes_that_are_not_utf8_is_placed(self, tmp_path: Path):
+        """Each byte that is not UTF-8 keeps its place, so the key is not put in the SOPS value."""
+        prefix = b"NOTE=" + b"\xff" * 30 + b" "
+        sops = b" API_TOKEN=ENC[AES256_GCM,data:" + b"A" * 200 + b"]"
+        path = tmp_path / "app.env"
+        path.write_bytes(prefix + AWS_KEY.encode() + sops + b"\n")
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        key = _external_finding(path, 1, column=len(prefix) + 1)
+
+        assert engine._filter_encrypted_files([key]) == [key]
+
+    def test_a_column_in_an_unknown_unit_after_non_ascii_text_is_kept(self, tmp_path: Path):
+        """The cost of the rule: a column that cannot be placed is reported, not dropped."""
+        line = f"NOTE=é {SOPS_VALUE}"
+        path = _write(tmp_path / ".env", f"{line}\n")
+        engine = ScanEngine(GuardConfig(use_native=True, use_gitleaks=False))
+        column = line.index("data:") + 1
+        in_the_value = _external_finding(path, 1, scanner="kingfisher", column=column)
+
+        assert engine._filter_encrypted_files([in_the_value]) == [in_the_value]
 
 
 class TestTrivyValueRecovery:

@@ -117,6 +117,35 @@ def test_a_plaintext_key_after_an_encrypted_value_is_found(repo: Path, separator
     assert located == [("gitleaks", 1), ("native", 1)]
 
 
+@requires_gitleaks
+def test_gitleaks_byte_column_after_non_ascii_text_keeps_the_key(repo: Path):
+    """gitleaks counts a column in bytes. After non-ASCII text, its column of a plaintext key fell
+    in a SOPS value later on the line, and the engine dropped the key (reported by CodeRabbit on
+    #936). The native scanner does not pattern-scan a SOPS file, so gitleaks' was the only finding.
+    """
+    line = "NOTE=" + "é" * 80 + f" {AWS_KEY} API_TOKEN=ENC[AES256_GCM,data:" + "A" * 200 + "]"
+    _write(repo / "app.env", f"{line}\n")
+
+    exit_code, located = _guard(repo, "app.env")
+
+    assert exit_code == 1
+    assert located == [("gitleaks", 1)]
+
+
+@requires_gitleaks
+def test_a_native_key_after_a_nul_in_an_encrypted_value_is_found(repo: Path):
+    """The native scanner drops the NUL before it counts columns, so its column of the key named
+    the encrypted value's closing quote, and the engine dropped the key (CodeRabbit on #936).
+    """
+    value = DOTENVX_CIPHERTEXT[:20] + "\x00" + DOTENVX_CIPHERTEXT[20:]
+    _write(repo / ".env", f'API_TOKEN="{value}"{AWS_KEY}\n')
+
+    exit_code, located = _guard(repo, ".env")
+
+    assert exit_code == 1
+    assert ("native", 1) in located
+
+
 @requires_trivy
 def test_the_value_trivy_redacts_is_read_back_after_a_form_feed(tmp_path: Path):
     path = _write(tmp_path / "app.py", f'import os\n\f\nAWS_ACCESS_KEY_ID = "{AWS_KEY}"\n')

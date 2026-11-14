@@ -9,9 +9,10 @@ they take a line or file content and answer a yes/no structural question.
 from __future__ import annotations
 
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Iterator
 from itertools import accumulate
+from typing import NamedTuple
 
 from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.encryption.sops import SOPSEncryptionBackend
@@ -146,6 +147,9 @@ _VALUE_TOKEN_RE = re.compile(r"\s*[\"']?[^\s\"']*[\"']?")
 # Where str.splitlines() breaks a line and git does not. A line counts to its line break (#937),
 # but an assignment can start after one of these, as at the start of the line.
 _NON_GIT_LINE_BREAK_RE = re.compile("[\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
+# Where a line stops meaning the same columns to every scanner: at a NUL, which the native scanner
+# drops before it counts columns, or at a character outside ASCII, which gitleaks counts in bytes.
+_NOT_PLAIN_RE = re.compile("[^\x01-\x7f]")
 
 
 def _segments(line: str) -> list[tuple[int, str]]:
@@ -285,16 +289,49 @@ class _Spans:
         return before > 0 and self._reach[before - 1] > start
 
 
-def _outside_encrypted_values(values: _Spans, column_number: int | None) -> bool:
+class _LineValues(NamedTuple):
+    """A line's encrypted values, the length of its plain-ASCII start, and its UTF-8 offsets."""
+
+    spans: _Spans
+    plain: int
+    # The UTF-8 offset of each character, for a line that is not all plain; None for one that is
+    byte_starts: list[int] | None
+
+
+def _line_values(line: str) -> _LineValues:
+    """The encrypted values of ``line``, as :func:`_outside_encrypted_values` checks a column.
+
+    ``line`` is decoded with ``surrogateescape``, so its UTF-8 encoding is the file's bytes.
+    """
+    spans = _Spans(_encrypted_value_spans(line))
+    not_plain = _NOT_PLAIN_RE.search(line)
+    if not_plain is None:
+        return _LineValues(spans, len(line), None)
+    sizes = (len(char.encode("utf-8", "surrogateescape")) for char in line)
+    return _LineValues(spans, not_plain.start(), [0, *accumulate(sizes)][:-1])
+
+
+def _outside_encrypted_values(
+    values: _LineValues, column_number: int | None, *, in_bytes: bool = False
+) -> bool:
     """True if a finding at 1-based ``column_number`` is in none of its line's encrypted ``values``.
 
-    ``values`` holds the line's ``_encrypted_value_spans``. Without a column, only a line that
-    holds no encrypted value qualifies. With one, a plaintext secret after an encrypted value on
-    the same line does (#937).
+    Without a column, only a line that holds no encrypted value qualifies. With one, a plaintext
+    secret after an encrypted value on the same line does (#937).
+
+    Past a NUL or a non-ASCII character, scanners count a column differently (#936). A column
+    ``in_bytes``, as gitleaks counts it, is turned into the character it starts. Any other column
+    there qualifies unchecked, so a plaintext secret is never dropped on a guess: the native
+    scanner counts without the NULs it drops, and leaves out its own findings in encrypted values.
     """
     if column_number is None:
-        return not values
-    return not values.overlaps(column_number - 1, column_number)
+        return not values.spans
+    start = column_number - 1
+    if start > values.plain:
+        if not in_bytes or values.byte_starts is None:
+            return True
+        start = bisect_right(values.byte_starts, start) - 1
+    return not values.spans.overlaps(start, start + 1)
 
 
 def _content_has_sops_markers(content: str) -> bool:

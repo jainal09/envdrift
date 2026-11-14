@@ -395,6 +395,10 @@ even one on the line of an encrypted value, after it. A finding from a scanner t
 reports no column, such as trufflehog, trivy or detect-secrets, is skipped when its line
 holds an encrypted value.
 
+A finding after a NUL or a non-ASCII character on its line is reported even if its column
+falls in an encrypted value: scanners count such columns differently (gitleaks counts
+bytes, and the native scanner leaves NULs out), so the column could name the wrong place.
+
 ```bash
 # Skip findings from encrypted files (default behavior)
 envdrift guard --skip-encrypted

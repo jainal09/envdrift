@@ -28,11 +28,7 @@ from envdrift.config import (
     normalize_ignore_rules,
 )
 from envdrift.env_files import resolve_custom_env_file
-from envdrift.scanner._native_filters import (
-    _encrypted_value_spans,
-    _outside_encrypted_values,
-    _Spans,
-)
+from envdrift.scanner._native_filters import _line_values, _LineValues, _outside_encrypted_values
 from envdrift.scanner.base import (
     AggregatedScanResult,
     FindingSeverity,
@@ -96,6 +92,11 @@ def _place_of(display: FindingPathDisplay | None) -> Callable[[Path], Path]:
 
 def _as_reported(path: Path) -> Path:
     return path
+
+
+# Scanners whose columns count bytes, not characters, as their real output shows: gitleaks
+# 8.30.1 puts a key after 80 "é" at column 167, not 87 (#936).
+_BYTE_COLUMN_SCANNERS = frozenset({"gitleaks"})
 
 
 @dataclass
@@ -995,7 +996,9 @@ class ScanEngine:
         def line_at(file_path: str, line_number: int) -> str:
             if file_path not in lines_cache:
                 try:
-                    with open(file_path, encoding="utf-8", errors="ignore") as f:
+                    # surrogateescape keeps each byte that is not UTF-8 in its place, so a column
+                    # that a scanner counts in bytes can be placed exactly (#936)
+                    with open(file_path, encoding="utf-8", errors="surrogateescape") as f:
                         lines_cache[file_path] = split_lines(f.read())
                 except OSError:
                     lines_cache[file_path] = []
@@ -1005,9 +1008,9 @@ class ScanEngine:
             return ""
 
         @lru_cache(maxsize=LINE_CACHE_SIZE)
-        def encrypted_values(file_path: str, line_number: int) -> _Spans:
+        def encrypted_values(file_path: str, line_number: int) -> _LineValues:
             # Found once for a line's findings, not once for each: a long line can hold thousands
-            return _Spans(_encrypted_value_spans(line_at(file_path, line_number)))
+            return _line_values(line_at(file_path, line_number))
 
         def keep(finding: ScanFinding) -> bool:
             file_path = str(finding.file_path)
@@ -1018,7 +1021,9 @@ class ScanEngine:
             if finding.line_number is None:
                 return False
             return _outside_encrypted_values(
-                encrypted_values(file_path, finding.line_number), finding.column_number
+                encrypted_values(file_path, finding.line_number),
+                finding.column_number,
+                in_bytes=finding.scanner in _BYTE_COLUMN_SCANNERS,
             )
 
         return [finding for finding in findings if keep(finding)]
