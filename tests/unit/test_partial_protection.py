@@ -374,3 +374,28 @@ def test_a_secret_file_in_a_submodule_is_marked_in_the_submodule(
     assert _flags(repo / "sub", ".env.secret") == {".env.secret": "S"}
     assert _git_unskip_worktree(Path("sub/.env.secret")) is True
     assert _flags(repo / "sub", ".env.secret") == {".env.secret": "H"}
+
+
+def test_a_symlink_out_of_the_working_directory_is_named_in_full(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    elsewhere = tmp_path_factory.mktemp("elsewhere") / "production.secret"
+    elsewhere.write_text("K=v\n", encoding="utf-8")
+    _symlink(repo / ".env.production.secret", str(elsewhere))
+    _git(repo, "add", ".env.production.secret")
+    _git(repo, "commit", "-q", "-m", "a link out of the repository")
+
+    assert _reason(Path(".env.production.secret")) == (
+        f"outside a git repository; through a symlink, the plaintext is in {elsewhere.resolve()}"
+    )
+
+
+def test_a_symlink_loop_is_not_protected_and_does_not_crash(repo: Path) -> None:
+    """Python 3.11 and 3.12 raise RuntimeError when they resolve a loop; 3.13 does not."""
+    from envdrift.core.partial_encryption import _git_skip_worktree
+
+    _symlink(repo / "a.secret", "b.secret")
+    _symlink(repo / "b.secret", "a.secret")
+
+    assert _git_skip_worktree(Path("a.secret")) is False
+    assert _reason(Path("a.secret")).startswith("untracked")

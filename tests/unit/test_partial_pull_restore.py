@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -231,6 +231,72 @@ class TestPullSecretsOnlyReportsTheTally:
             f"Failed to decrypt {db}: dotenvx binary not found\n{db} was left as it was."
         )
         assert skip_worktree_calls == [api]
+
+    def test_a_directory_the_pattern_matches_is_skipped(
+        self, tmp_path: Path, skip_worktree_calls: list[Path]
+    ) -> None:
+        secrets = tmp_path / "secrets"
+        (secrets / ".env.d").mkdir(parents=True)  # matches .env*, but is not a file
+        api = secrets / ".env.api"
+        api.write_text(_encrypted("API_KEY"), encoding="utf-8")
+        config = PartialEncryptionEnvironmentConfig(
+            name="production", secrets_only=True, secrets_dir=str(secrets), pattern=".env*"
+        )
+
+        with patch("envdrift.core.partial_encryption.DotenvxWrapper") as wrapper_cls:
+            wrapper_cls.return_value.decrypt.side_effect = _dotenvx_stand_in
+            result = pull_secrets_only(config)
+
+        assert (result["decrypted"], result["already_decrypted"]) == (1, 0)
+        assert skip_worktree_calls == [api]
+
+    def test_an_unexpected_failure_carries_the_counts(self, tmp_path: Path) -> None:
+        """Whatever stops the pull keeps the tally, an exception of any type."""
+        from envdrift.core.partial_encryption import SecretsOnlyPullError
+
+        secrets = tmp_path / "secrets"
+        secrets.mkdir()
+        api = secrets / ".env.api"  # sorted first: decrypts
+        api.write_text(_encrypted("API_KEY"), encoding="utf-8")
+        plain = secrets / ".env.b"  # sorted second: plaintext already, and git fails
+        plain.write_text("B=plain\n", encoding="utf-8")
+        config = PartialEncryptionEnvironmentConfig(
+            name="production", secrets_only=True, secrets_dir=str(secrets), pattern=".env*"
+        )
+
+        def _skip_worktree(path: Path) -> bool:
+            if path == plain:
+                raise RuntimeError("git exploded")
+            return True
+
+        with (
+            patch("envdrift.core.partial_encryption._git_skip_worktree", _skip_worktree),
+            patch("envdrift.core.partial_encryption.DotenvxWrapper") as wrapper_cls,
+        ):
+            wrapper_cls.return_value.decrypt.side_effect = _dotenvx_stand_in
+            with pytest.raises(SecretsOnlyPullError) as excinfo:
+                pull_secrets_only(config)
+
+        error = excinfo.value
+        assert (error.decrypted, error.already_decrypted, error.protected) == (1, 0, 1)
+        assert str(error) == f"Failed to decrypt {plain}: git exploded"
+
+
+def test_decrypt_in_place_refuses_a_file_it_cannot_read(searchable_tmp_path: Path) -> None:
+    """Readable at the encrypted check, unreadable by the snapshot: dotenvx never runs."""
+    from envdrift.core.partial_encryption import _decrypt_in_place
+
+    secret = searchable_tmp_path / ".env.production.secret"
+    secret.write_text(_encrypted("JWT_SECRET"), encoding="utf-8")
+    wrapper = MagicMock()
+
+    with unreadable_file(secret), pytest.raises(PartialEncryptionError) as excinfo:
+        _decrypt_in_place(wrapper, secret)
+
+    wrapper.decrypt.assert_not_called()
+    message = str(excinfo.value)
+    assert message.startswith(f"Failed to decrypt {secret}: [Errno 13]"), message
+    assert message.endswith(f"{secret} was left as it was."), message
 
 
 # ---------------------------------------------------------------------------

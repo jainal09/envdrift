@@ -191,6 +191,26 @@ class TestDecryptSnapshotRestore:
         )
         assert checkout.returncode != 0
 
+    def test_failed_restore_of_a_tracked_file_git_could_not_mark_says_git_checkout(
+        self, tracked_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tracked, but not marked while another git process holds the index lock."""
+        snapshot = _snapshot(tracked_file)
+        tracked_file.write_bytes(_PARTLY_DECRYPTED)
+        _fail_writes(monkeypatch, tracked_file)
+        lock = tracked_file.parent / ".git" / "index.lock"
+        lock.write_text("", encoding="utf-8")
+
+        flat = " ".join(snapshot.restore().split())
+
+        assert "could not be marked skip-worktree" in flat, flat
+        assert "a plain `git add .` WILL stage it" in flat, flat
+        assert f"`git checkout -- {tracked_file}`" in flat, flat
+        # The advice works once the other git process is done.
+        lock.unlink()
+        _git(tracked_file.parent, "checkout", "--", str(tracked_file))
+        assert tracked_file.read_bytes() == _ENCRYPTED
+
     def test_restore_that_does_not_stick_is_reported(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

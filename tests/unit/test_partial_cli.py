@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from envdrift.cli import app
@@ -871,6 +874,67 @@ def test_sync_pull_secrets_only_error(monkeypatch, tmp_path: Path):
 
     assert result.exit_code == 1, result.output
     assert "secrets_dir not found" in result.output
+
+
+def test_push_stops_before_any_environment_when_git_still_sees_a_key_file(
+    monkeypatch, tmp_path: Path
+):
+    """A `!` rule after envdrift's entry: exit 1 naming the key file, nothing pushed."""
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / ".gitignore").write_text("!.env.keys\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    env_config = SimpleNamespace(
+        name="production",
+        clear_file="config/.env.production.clear",
+        secret_file="config/.env.production.secret",
+        combined_file="config/.env.production",
+        secrets_only=False,
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[env_config])
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    pushed: list[object] = []
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.push_partial_encryption",
+        lambda env, check=False: pushed.append(env),
+    )
+
+    result = runner.invoke(app, ["push"])
+
+    output = " ".join(result.output.split())
+    assert result.exit_code == 1, output
+    assert "git does not ignore config/.env.keys" in output, output
+    assert pushed == []
+
+
+def test_sync_pull_reports_any_combine_mode_failure_for_that_environment(
+    monkeypatch, tmp_path: Path
+):
+    """`pull` caught only PartialEncryptionError, so anything else was a traceback."""
+    secret = tmp_path / ".env.production.secret"
+    secret.write_text("K=v\n", encoding="utf-8")
+    env = SimpleNamespace(
+        name="production",
+        secrets_only=False,
+        clear_file=str(tmp_path / ".env.production.clear"),
+        secret_file=str(secret),
+        combined_file=str(tmp_path / ".env.production"),
+    )
+
+    def _raise(_env):
+        raise RuntimeError("dotenvx vanished")
+
+    monkeypatch.setattr("envdrift.core.partial_encryption.pull_partial_encryption", _raise)
+
+    result, output = _sync_pull(monkeypatch, tmp_path, [env])
+
+    assert result.exit_code == 1, output
+    assert not isinstance(result.exception, RuntimeError), result.exception
+    assert "• production: dotenvx vanished" in output, output
 
 
 # ---------------------------------------------------------------------------

@@ -457,6 +457,16 @@ class TestUnignoredPaths:
 
         assert unignored_paths([tmp_path / "elsewhere" / ".env.keys"], git_root=repo) == []
 
+    def test_nothing_is_listed_when_git_cannot_run(self, tmp_path: Path) -> None:
+        """No git to ask: nothing is listed, and the entry is still written."""
+        key_file = tmp_path / "config" / ".env.keys"
+
+        with patch("subprocess.run", side_effect=FileNotFoundError("git")):
+            assert unignored_paths([key_file], git_root=tmp_path.resolve()) == []
+            assert ensure_gitignore_entries([key_file], git_root=tmp_path.resolve()) == [
+                "config/.env.keys"
+            ]
+
     def test_nothing_is_listed_outside_a_repository(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
