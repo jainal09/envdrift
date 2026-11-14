@@ -393,11 +393,15 @@ detecting high-entropy strings.
 Only the encrypted values are skipped. A finding elsewhere in such a file is reported,
 even one on the line of an encrypted value, after it. A finding from a scanner that
 reports no column, such as trufflehog, trivy or detect-secrets, is skipped when its line
-holds an encrypted value.
+holds an encrypted value. The native scanner does not run its pattern rules on a file
+with SOPS markers, so it reports a key elsewhere in such a file only through its entropy
+check.
 
-A finding after a NUL or a non-ASCII character on its line is reported even if its column
-falls in an encrypted value: scanners count such columns differently (gitleaks counts
-bytes, and the native scanner leaves NULs out), so the column could name the wrong place.
+A gitleaks column counts bytes, so it is turned into the character it names before it is
+checked. A finding from any other scanner whose column comes after a NUL or a non-ASCII
+character on its line is reported even if the column falls in an encrypted value: scanners
+count such columns differently (the native scanner leaves NULs out), so the column could
+name the wrong place.
 
 ```bash
 # Skip findings from encrypted files (default behavior)
