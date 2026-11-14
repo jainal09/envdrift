@@ -105,6 +105,9 @@ class _PullPartialState:
     merged: int = 0
     skipped: int = 0
     errors: list[str] = field(default_factory=list)
+    # Skip-worktree protection of the secret files this pull decrypted (#999).
+    protected: int = 0
+    unprotected: list[Path] = field(default_factory=list)
 
 
 def _load_command_context(request: Any, runtime: Any) -> SyncCommandContext:
@@ -543,9 +546,11 @@ def _pull_secrets_only_environment(env_config: Any, state: _PullPartialState) ->
     except PartialEncryptionError as exc:
         if isinstance(exc, SecretsOnlyPullError):
             # The files decrypted before the failing one are plaintext on
-            # disk: count them in the summary (#948).
+            # disk: count them in the summary (#948) and warn if unprotected.
             state.decrypted += exc.decrypted
             state.skipped += exc.already_decrypted
+            state.protected += exc.protected
+            state.unprotected.extend(exc.unprotected)
         console.print(f"  [red]![/red] {env_config.secrets_dir} [red]- error: {exc}[/red]")
         state.errors.append(f"{env_config.name}: {exc}")
         return
@@ -560,6 +565,8 @@ def _pull_secrets_only_environment(env_config: Any, state: _PullPartialState) ->
             f"  [dim]=[/dim] {env_config.secrets_dir} [dim]- skipped (already decrypted)[/dim]"
         )
     state.skipped += result["already_decrypted"]
+    state.protected += result.get("protected", 0)
+    state.unprotected.extend(result.get("unprotected", []))
 
 
 def _merge_pull_environment(
@@ -593,7 +600,7 @@ def _pull_combined_environment(
         state.skipped += 1
         return
     try:
-        was_decrypted, _ = pull_partial_encryption(env_config)
+        was_decrypted, protected = pull_partial_encryption(env_config)
     except PartialEncryptionError as exc:
         console.print(f"  [red]![/red] {secret_file} [red]- error: {exc}[/red]")
         state.errors.append(f"{env_config.name}: {exc}")
@@ -601,6 +608,12 @@ def _pull_combined_environment(
     if was_decrypted:
         console.print(f"  [green]+[/green] {secret_file} [dim]- decrypted[/dim]")
         state.decrypted += 1
+        # The result used to be dropped, so an unprotected plaintext secret
+        # file got no warning at all (#999).
+        if protected:
+            state.protected += 1
+        else:
+            state.unprotected.append(secret_file)
     else:
         console.print(f"  [dim]=[/dim] {secret_file} [dim]- skipped (already decrypted)[/dim]")
         state.skipped += 1
@@ -620,13 +633,30 @@ def _print_partial_pull_summary(state: _PullPartialState, merge: bool) -> None:
         print_warning("Some partial encryption files had errors")
         for error in state.errors:
             console.print(f"  • {error}")
+        # Files decrypted before an error are plaintext too.
+        _warn_unprotected(state)
         raise typer.Exit(code=1)
 
 
-def _process_pull_partial_encryption(request: PullRequest, runtime: PullRuntime) -> None:
+def _warn_unprotected(state: _PullPartialState | None) -> None:
+    """Give pull-partial's DANGER warning for decrypted files left unprotected (#999).
+
+    Decrypting succeeded, so the exit code stays as it is; the warning names
+    each file and why git skip-worktree could not protect it.
+    """
+    if state is None:
+        return
+    from envdrift.cli_commands.partial import _print_unprotected_warning
+
+    _print_unprotected_warning(state.decrypted, state.protected, state.unprotected)
+
+
+def _process_pull_partial_encryption(
+    request: PullRequest, runtime: PullRuntime
+) -> _PullPartialState | None:
     partial_config = _load_partial_config(request.config_file, runtime)
     if not partial_config or not partial_config.partial_encryption.enabled:
-        return
+        return None
     console.print()
     console.print("[bold cyan]Step 3:[/bold cyan] Processing partial encryption files...")
     console.print()
@@ -635,6 +665,7 @@ def _process_pull_partial_encryption(request: PullRequest, runtime: PullRuntime)
     for env_config in partial_config.partial_encryption.environments:
         _pull_partial_environment(env_config, request.merge, state, runtime)
     _print_partial_pull_summary(state, request.merge)
+    return state
 
 
 def _prepare_pull_partial_merge(partial_config: Any, merge: bool) -> None:
@@ -662,6 +693,8 @@ def execute_pull(request: PullRequest, runtime: PullRuntime) -> None:
     _print_pull_header(request, context)
     ephemeral_keys = _sync_pull_keys(request, context, engine)
     _decrypt_pull_files(request, context, ephemeral_keys, runtime)
-    _process_pull_partial_encryption(request, runtime)
+    partial_state = _process_pull_partial_encryption(request, runtime)
     console.print()
     print_success("Setup complete! Your environment files are ready to use.")
+    # Last, where it is seen: the same warning pull-partial gives (#999).
+    _warn_unprotected(partial_state)

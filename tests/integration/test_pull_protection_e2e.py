@@ -9,6 +9,10 @@ binary and real git, and checks git's own view of the files.
   already, while an untracked decrypted file (which cannot be marked) sat in
   ``git status`` ready to be added. The notice must name each decrypted file it
   could not protect, with the reason, and never call the set protected.
+- #999: ``envdrift pull`` decrypts the same secret files and marks them the same
+  way, but dropped the result: it printed "Setup complete!" with no warning
+  while a decrypted secret file was untracked plaintext. It must give the same
+  warning ``pull-partial`` gives. Decrypting succeeded, so it still exits 0.
 """
 
 from __future__ import annotations
@@ -231,3 +235,126 @@ class TestPullPartialNeverCallsAnUnprotectedSetProtected:
         assert result.returncode == 0, out
         assert ".env.production.secret (skip-worktree failed)" in out, out
         assert "SECRET FILES ARE NOW PLAINTEXT" not in out, out
+
+
+# `pull` belongs to the vault-sync family, so it needs a [vault.sync] section.
+# With --skip-sync it never contacts the (dummy) vault; the mapping's plaintext
+# .env.production is skipped, and Step 3 decrypts the partial-encryption files.
+_VAULT_SYNC = (
+    "[vault]\n"
+    'provider = "azure"\n\n'
+    "[vault.azure]\n"
+    'vault_url = "https://dummy.vault.azure.net/"\n\n'
+    "[vault.sync]\n"
+    'default_vault_name = "dummy"\n\n'
+    "[[vault.sync.mappings]]\n"
+    'secret_name = "unused"\n'
+    'folder_path = "."\n'
+    'environment = "production"\n\n'
+)
+
+
+def _pull_repo(repo: Path, partial: str) -> None:
+    (repo / "envdrift.toml").write_text(_VAULT_SYNC + partial, encoding="utf-8")
+    (repo / ".env.production").write_text("DEBUG=false\n", encoding="utf-8")
+
+
+class TestPullWarnsAboutUnprotectedSecrets:
+    def test_combine_mode_untracked_secret_file(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """The #999 report: an encrypted, untracked .secret decrypted by pull."""
+        run = _cli(git_repo, integration_pythonpath, envdrift_cmd)
+        _pull_repo(
+            git_repo,
+            "[partial_encryption]\nenabled = true\n\n" + _combine("production", "config"),
+        )
+        _write_combine_files(git_repo / "config", "production")
+        push = run("push")
+        assert push.returncode == 0, _flat(push)
+
+        result = run("pull", "--skip-sync")
+
+        out = _flat(result)
+        assert result.returncode == 0, out  # decrypting succeeded
+        assert "Setup complete!" in out, out
+        assert "No Git Protection Applied" in out, out
+        assert "config/.env.production.secret (untracked)" in out, out
+        # The warning comes last, after the success line, where it is seen.
+        assert out.index("Setup complete!") < out.index("No Git Protection Applied"), out
+        status = _git(git_repo, "status", "--porcelain", "--untracked-files=all")
+        assert "?? config/.env.production.secret" in status, status
+
+    def test_secrets_only_untracked_files(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        run = _cli(git_repo, integration_pythonpath, envdrift_cmd)
+        _pull_repo(git_repo, _SECRETS_ONLY)
+        secrets = git_repo / "secrets"
+        secrets.mkdir()
+        (secrets / ".env.a").write_text("A=" + "secret-a\n", encoding="utf-8")
+        (secrets / ".env.b").write_text("B=" + "secret-b\n", encoding="utf-8")
+        push = run("push")
+        assert push.returncode == 0, _flat(push)
+        _git(git_repo, "add", "secrets/.env.a")
+        _git(git_repo, "commit", "-q", "-m", "one encrypted secret")
+
+        result = run("pull", "--skip-sync")
+
+        out = _flat(result)
+        assert result.returncode == 0, out
+        assert "secrets/.env.b (untracked)" in out, out
+        assert "secrets/.env.a (" not in out, out
+        assert "The other 1 decrypted file(s) are marked skip-worktree." in out, out
+        assert _flag(git_repo, "secrets/.env.a") == "S"
+
+    def test_warns_before_exiting_on_an_error(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """Files decrypted before a secrets-only failure are plaintext too."""
+        run = _cli(git_repo, integration_pythonpath, envdrift_cmd)
+        _pull_repo(git_repo, _SECRETS_ONLY)
+        secrets = git_repo / "secrets"
+        secrets.mkdir()
+        (secrets / ".env.a").write_text("A=" + "secret-a\n", encoding="utf-8")  # untracked
+        db = secrets / ".env.db"
+        db.write_text("DB=" + "secret-db\n", encoding="utf-8")
+        push = run("push")
+        assert push.returncode == 0, _flat(push)
+        # One value of .env.db under another folder's key: its decrypt fails.
+        other = git_repo / "other" / ".env.db"
+        other.parent.mkdir()
+        other.write_text("STRIPE_API_KEY=" + "sk_other\n", encoding="utf-8")
+        enc = run("encrypt", "other/.env.db")
+        assert enc.returncode == 0, _flat(enc)
+        foreign = next(line for line in other.read_text().splitlines() if line.startswith("STRIPE"))
+        db.write_text(db.read_text() + foreign + "\n", encoding="utf-8")
+
+        result = run("pull", "--skip-sync")
+
+        out = _flat(result)
+        assert result.returncode == 1, out  # the failed decrypt is an error
+        assert "secrets/.env.a (untracked)" in out, out
+        assert "No Git Protection Applied" in out, out
+
+    def test_no_warning_when_every_secret_file_is_protected(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """Non-regression: a tracked secret file is marked and nothing is claimed."""
+        run = _cli(git_repo, integration_pythonpath, envdrift_cmd)
+        _pull_repo(
+            git_repo,
+            "[partial_encryption]\nenabled = true\n\n" + _combine("production", "config"),
+        )
+        _write_combine_files(git_repo / "config", "production")
+        push = run("push")
+        assert push.returncode == 0, _flat(push)
+        _git(git_repo, "add", "config")
+        _git(git_repo, "commit", "-q", "-m", "encrypted secret")
+
+        result = run("pull", "--skip-sync")
+
+        out = _flat(result)
+        assert result.returncode == 0, out
+        assert "No Git Protection Applied" not in out, out
+        assert _flag(git_repo, "config/.env.production.secret") == "S"

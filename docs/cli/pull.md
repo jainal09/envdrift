@@ -216,6 +216,15 @@ does: a file that fails to decrypt is left as it was, and in secrets-only mode t
 files decrypted before the failing one are still counted under `Decrypted:` in
 the Partial Encryption Summary.
 
+Like `pull-partial`, `pull` marks each decrypted secret file `skip-worktree` so a
+plain `git add .` does not stage its plaintext. git can only mark a file it tracks.
+When a decrypted file could not be marked, `pull` gives the same red DANGER
+warning as `pull-partial`, after `Setup complete!` (or before it exits 1 on an
+error). The warning names each such file with the reason (`untracked`, `outside a
+git repository`, or `skip-worktree failed`); see
+[pull-partial](pull-partial.md#plaintext-protection). Decrypting succeeded, so the
+exit code does not change; re-encrypt with `envdrift push` before you commit.
+
 ## Configuration File Format
 
 Same as `envdrift sync`. See [sync documentation](sync.md#configuration-file-format) for details.

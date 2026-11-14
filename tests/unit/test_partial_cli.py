@@ -1020,3 +1020,109 @@ def test_pull_partial_first_secrets_only_file_failing_reports_nothing_decrypted(
     assert "Decrypted: 0" in output and "Errors: 1" in output
     assert "before the error" not in output
     assert "SECRET FILES ARE" not in output
+
+
+# ---------------------------------------------------------------------------
+# #999: `pull` gives pull-partial's warning for decrypted secret files it could
+# not protect, instead of dropping the result.
+# ---------------------------------------------------------------------------
+
+
+def _sync_pull(monkeypatch, tmp_path: Path, environments):
+    partial_config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=environments)
+    )
+    _patch_sync_command_seams(monkeypatch, tmp_path, partial_config)
+    monkeypatch.setenv("COLUMNS", "1000")  # no tmp_path folded inside the panel
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.unprotected_reason",
+        lambda path: f"why-{path.name}",
+        raising=False,
+    )
+    result = runner.invoke(app, ["pull", "--skip-sync", "--force"])
+    return result, " ".join(result.output.replace("│", " ").split())
+
+
+def test_sync_pull_warns_about_an_unprotected_decrypted_secret_file(monkeypatch, tmp_path: Path):
+    secret = tmp_path / ".env.production.secret"
+    secret.write_text("K=v\n", encoding="utf-8")
+    env = SimpleNamespace(
+        name="production",
+        secrets_only=False,
+        clear_file=str(tmp_path / ".env.production.clear"),
+        secret_file=str(secret),
+        combined_file=str(tmp_path / ".env.production"),
+    )
+    monkeypatch.setattr(
+        "envdrift.core.partial_encryption.pull_partial_encryption", lambda _env: (True, False)
+    )
+
+    result, output = _sync_pull(monkeypatch, tmp_path, [env])
+
+    assert result.exit_code == 0, output  # decrypting succeeded
+    assert f"{secret} (why-.env.production.secret)" in output
+    assert output.index("Setup complete!") < output.index("No Git Protection Applied")
+
+
+def test_sync_pull_warns_about_unprotected_secrets_only_files(monkeypatch, tmp_path: Path):
+    unprotected = [tmp_path / "secrets" / ".env.b"]
+    monkeypatch.setattr(
+        "envdrift.core.partial_encryption.pull_secrets_only",
+        lambda _env: {
+            "decrypted": 2,
+            "already_decrypted": 0,
+            "protected": 1,
+            "unprotected": unprotected,
+        },
+    )
+
+    result, output = _sync_pull(monkeypatch, tmp_path, [_secrets_only_env(tmp_path)])
+
+    assert result.exit_code == 0, output
+    assert f"{unprotected[0]} (why-.env.b)" in output
+    assert "The other 1 decrypted file(s) are marked skip-worktree." in output
+
+
+def test_sync_pull_warns_before_exiting_on_a_secrets_only_error(monkeypatch, tmp_path: Path):
+    from envdrift.core.partial_encryption import SecretsOnlyPullError
+
+    unprotected = [tmp_path / "secrets" / ".env.a"]
+
+    def _fail(_env):
+        raise SecretsOnlyPullError(
+            "Failed to decrypt secrets/.env.db",
+            decrypted=1,
+            already_decrypted=0,
+            protected=0,
+            unprotected=unprotected,
+        )
+
+    monkeypatch.setattr("envdrift.core.partial_encryption.pull_secrets_only", _fail)
+
+    result, output = _sync_pull(monkeypatch, tmp_path, [_secrets_only_env(tmp_path)])
+
+    assert result.exit_code == 1, output
+    assert f"{unprotected[0]} (why-.env.a)" in output
+    assert "Setup complete!" not in output
+
+
+def test_sync_pull_gives_no_warning_when_every_secret_file_is_protected(
+    monkeypatch, tmp_path: Path
+):
+    secret = tmp_path / ".env.production.secret"
+    secret.write_text("K=v\n", encoding="utf-8")
+    env = SimpleNamespace(
+        name="production",
+        secrets_only=False,
+        clear_file=str(tmp_path / ".env.production.clear"),
+        secret_file=str(secret),
+        combined_file=str(tmp_path / ".env.production"),
+    )
+    monkeypatch.setattr(
+        "envdrift.core.partial_encryption.pull_partial_encryption", lambda _env: (True, True)
+    )
+
+    result, output = _sync_pull(monkeypatch, tmp_path, [env])
+
+    assert result.exit_code == 0, output
+    assert "No Git Protection Applied" not in output
