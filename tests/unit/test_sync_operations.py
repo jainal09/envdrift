@@ -770,3 +770,36 @@ def test_find_stale_private_key_name_reads_utf8_under_ascii_locale(tmp_path: Pat
     result = _run_under_ascii_locale(body)
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# #938 (S2): EnvKeysFile reads and rewrites key lines the way dotenvx reads them
+# ---------------------------------------------------------------------------
+
+
+def test_read_values_returns_every_value_as_dotenvx_reads_it(tmp_path: Path) -> None:
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text(
+        chr(0xFEFF) + "DOTENV_PRIVATE_KEY_PRODUCTION=first # comment\n"
+        "export DOTENV_PRIVATE_KEY_PRODUCTION = 'second'\n",
+        encoding="utf-8",
+    )
+    keys = EnvKeysFile(keys_path)
+
+    assert keys.read_values("DOTENV_PRIVATE_KEY_PRODUCTION") == ["first", "second"]
+    assert keys.read_key("DOTENV_PRIVATE_KEY_PRODUCTION") == "first"
+    assert EnvKeysFile(tmp_path / "missing").read_values("X") == []
+
+
+def test_write_key_rewrites_every_line_a_reader_would_load(tmp_path: Path) -> None:
+    """An ``export`` or spaced line is the same key: rewrite it, never append a second."""
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text(
+        "# .env.production\nexport DOTENV_PRIVATE_KEY_PRODUCTION = old\n", encoding="utf-8"
+    )
+
+    EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new")
+
+    assert keys_path.read_text(encoding="utf-8") == (
+        "# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION=new\n"
+    )
