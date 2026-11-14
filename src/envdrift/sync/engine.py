@@ -599,7 +599,7 @@ class SyncEngine:
 
             # Parse env file and validate
             parser = EnvParser()
-            env_file = parser.parse(env_file_path)
+            env_file = parser.parse(env_file_path, lenient=True)
             validator = Validator()
             result = validator.validate(env_file, schema)
 

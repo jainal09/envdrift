@@ -121,7 +121,9 @@ instead of silently succeeding.
 
 ### `--validate-schema`
 
-Run schema validation after sync.
+Run schema validation after sync. Like `envdrift validate`, this accepts dotenv keys
+such as `2FA_ENABLED`, `X-FEATURE-ENABLED`, and non-ASCII names and validates their
+values against the schema's aliases instead of silently skipping them.
 
 ### `--schema`, `-s`
 
