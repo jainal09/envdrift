@@ -15,6 +15,7 @@ from envdrift.config import (
 )
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
+    SecretsOnlyPullError,
     pull_partial_encryption,
     pull_secrets_only,
     push_partial_encryption,
@@ -346,6 +347,19 @@ def pull_cmd(
                     )
                     skipped_count += 1
 
+        except SecretsOnlyPullError as e:
+            # The files decrypted before the failing one are plaintext on disk:
+            # count them rather than report the environment as untouched (#948).
+            if e.decrypted:
+                console.print(
+                    f"  [green]✓[/green] Decrypted {e.decrypted} file(s) in "
+                    f"{env_config.secrets_dir} before the error"
+                )
+            decrypted_count += e.decrypted
+            skipped_count += e.already_decrypted
+            protected_any = protected_any or e.protected > 0
+            console.print(f"  [red]✗[/red] {e}")
+            errors.append(f"{env_config.name}: {e}")
         except PartialEncryptionError as e:
             console.print(f"  [red]✗[/red] {e}")
             errors.append(f"{env_config.name}: {e}")
@@ -364,16 +378,24 @@ def pull_cmd(
 
     console.print(Panel("\n".join(summary_lines), title="Pull Summary", expand=False))
 
+    console.print()
     if errors:
-        console.print()
         print_warning("Some environments had errors:")
         for error in errors:
             console.print(f"  • {error}")
+    else:
+        print_success("Pull complete! Secret files are now decrypted for editing.")
+
+    # The files this run decrypted are plaintext on disk even when another
+    # environment failed, so the notice is shown either way (#948).
+    _print_plaintext_notice(decrypted_count, protected_any)
+
+    if errors:
         raise typer.Exit(code=1)
 
-    console.print()
-    print_success("Pull complete! Secret files are now decrypted for editing.")
 
+def _print_plaintext_notice(decrypted_count: int, protected_any: bool) -> None:
+    """Warn that decrypted secret files are plaintext, and how they are protected."""
     if decrypted_count > 0 and protected_any:
         console.print()
         console.print(

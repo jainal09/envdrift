@@ -148,6 +148,16 @@ envdrift pull-partial --env production
 1. Decrypts `.env.{env}.secret` in-place
 2. Makes it available for editing
 
+**When a decrypt fails** (see [pull-partial](../cli/pull-partial.md#when-a-decrypt-fails)):
+
+- If dotenvx can decrypt only some values (one value was encrypted under another
+  key, for example after a merge), the `.secret` file is put back byte for byte, so
+  it stays encrypted and nothing is left half decrypted in a tracked file. The error
+  names the value dotenvx could not decrypt.
+- In secrets-only mode the pull stops at that file. The files decrypted before it
+  are counted under `Decrypted:`, marked `skip-worktree`, and announced by the
+  plaintext notice, which is shown even when the command exits 1.
+
 ## Git Setup
 
 `envdrift push` automatically adds the combined file **and** the dotenvx

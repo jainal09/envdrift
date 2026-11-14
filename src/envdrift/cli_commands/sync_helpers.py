@@ -532,11 +532,20 @@ def _load_partial_config(config_file: Path | None, runtime: PullRuntime):
 
 
 def _pull_secrets_only_environment(env_config: Any, state: _PullPartialState) -> None:
-    from envdrift.core.partial_encryption import PartialEncryptionError, pull_secrets_only
+    from envdrift.core.partial_encryption import (
+        PartialEncryptionError,
+        SecretsOnlyPullError,
+        pull_secrets_only,
+    )
 
     try:
         result = pull_secrets_only(env_config)
     except PartialEncryptionError as exc:
+        if isinstance(exc, SecretsOnlyPullError):
+            # The files decrypted before the failing one are plaintext on
+            # disk: count them in the summary (#948).
+            state.decrypted += exc.decrypted
+            state.skipped += exc.already_decrypted
         console.print(f"  [red]![/red] {env_config.secrets_dir} [red]- error: {exc}[/red]")
         state.errors.append(f"{env_config.name}: {exc}")
         return

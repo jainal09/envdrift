@@ -1,0 +1,149 @@
+"""pull-partial leaves a failed secret file as it was and reports the true tally.
+
+#948: dotenvx decrypts value by value. With one value under another key it
+writes the values it could decrypt and exits 1; ``decrypt_secret_file`` /
+``pull_secrets_only`` then raised before marking the file skip-worktree, so the
+plaintext stayed in a tracked file under ``Decrypted: 0``.
+
+The real-binary proof is ``tests/integration/test_pull_partial_failure_e2e.py``.
+Here only the dotenvx subprocess seam (``DotenvxWrapper``) is replaced, by a
+stand-in that writes what the real binary writes; the restore, the read-back
+and the counting run for real.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from envdrift.config import PartialEncryptionEnvironmentConfig
+from envdrift.core.partial_encryption import (
+    PartialEncryptionError,
+    decrypt_secret_file,
+    pull_secrets_only,
+)
+from envdrift.integrations.dotenvx import DotenvxError
+
+_FOREIGN = "STRIPE_API_KEY=encrypted:BFOREIGN\n"
+_FAILURE = "dotenvx decryption failed: [DECRYPTION_FAILED] could not decrypt STRIPE_API_KEY"
+
+
+def _encrypted(key: str) -> str:
+    return f'DOTENV_PUBLIC_KEY_X="03abc"\n{key}=encrypted:BAAA\n'
+
+
+def _dotenvx_stand_in(path: Path) -> None:
+    """Decrypt every value it can; on a foreign value, write the rest and fail.
+
+    This is what dotenvx 2.x does: the values under the file's own key are
+    written back as plaintext, then it exits 1 naming the value it could not
+    decrypt.
+    """
+    lines = []
+    foreign = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("STRIPE_API_KEY="):
+            foreign = True
+            lines.append(line)
+        elif "=encrypted:" in line:
+            lines.append(line.split("=", 1)[0] + "=plain-" + "value")
+        else:
+            lines.append(line)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if foreign:
+        raise DotenvxError(_FAILURE)
+
+
+@pytest.fixture
+def skip_worktree_calls():
+    """Record ``git update-index --skip-worktree`` calls (git always succeeds)."""
+    calls: list[Path] = []
+
+    def _record(path: Path) -> bool:
+        calls.append(path)
+        return True
+
+    with patch("envdrift.core.partial_encryption._git_skip_worktree", side_effect=_record):
+        yield calls
+
+
+class TestDecryptSecretFileRestores:
+    def test_failed_decrypt_restores_and_does_not_mark_skip_worktree(
+        self, tmp_path: Path, skip_worktree_calls: list[Path]
+    ) -> None:
+        secret = tmp_path / ".env.production.secret"
+        original = _encrypted("JWT_SECRET") + _FOREIGN
+        secret.write_text(original, encoding="utf-8")
+        config = PartialEncryptionEnvironmentConfig(
+            name="production", clear_file="", secret_file=str(secret), combined_file=""
+        )
+
+        with patch("envdrift.core.partial_encryption.DotenvxWrapper") as wrapper_cls:
+            wrapper_cls.return_value.decrypt.side_effect = _dotenvx_stand_in
+            with pytest.raises(PartialEncryptionError) as excinfo:
+                decrypt_secret_file(config)
+
+        assert secret.read_text(encoding="utf-8") == original
+        message = str(excinfo.value)
+        assert message.startswith(f"Failed to decrypt {secret}: ")
+        assert "could not decrypt STRIPE_API_KEY" in message
+        assert f"{secret} was left as it was: envdrift restored" in message
+        assert skip_worktree_calls == []  # restored, so nothing to protect
+
+    def test_unreadable_secret_file_is_refused_before_dotenvx_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        secret = tmp_path / ".env.production.secret"
+        secret.write_text(_encrypted("JWT_SECRET"), encoding="utf-8")
+        config = PartialEncryptionEnvironmentConfig(
+            name="production", clear_file="", secret_file=str(secret), combined_file=""
+        )
+
+        def _unreadable(self: Path) -> bytes:
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "read_bytes", _unreadable)
+        with patch("envdrift.core.partial_encryption.DotenvxWrapper") as wrapper_cls:
+            with pytest.raises(PartialEncryptionError, match="Nothing was decrypted"):
+                decrypt_secret_file(config)
+            wrapper_cls.return_value.decrypt.assert_not_called()
+
+
+class TestPullSecretsOnlyReportsTheTally:
+    def test_failure_carries_the_counts_reached_before_it(
+        self, tmp_path: Path, skip_worktree_calls: list[Path]
+    ) -> None:
+        from envdrift.core.partial_encryption import SecretsOnlyPullError
+
+        secrets = tmp_path / "secrets"
+        secrets.mkdir()
+        (secrets / ".env.a-plain").write_text("PLAIN=value\n", encoding="utf-8")
+        api = secrets / ".env.api"
+        api.write_text(_encrypted("API_KEY"), encoding="utf-8")
+        db = secrets / ".env.db"
+        db_original = _encrypted("DB_PASS") + _FOREIGN
+        db.write_text(db_original, encoding="utf-8")
+        later = secrets / ".env.zz"
+        later.write_text(_encrypted("LATER"), encoding="utf-8")
+        config = PartialEncryptionEnvironmentConfig(
+            name="production", secrets_only=True, secrets_dir=str(secrets), pattern=".env*"
+        )
+
+        with patch("envdrift.core.partial_encryption.DotenvxWrapper") as wrapper_cls:
+            wrapper_cls.return_value.decrypt.side_effect = _dotenvx_stand_in
+            with pytest.raises(SecretsOnlyPullError) as excinfo:
+                pull_secrets_only(config)
+
+        error = excinfo.value
+        assert isinstance(error, PartialEncryptionError)  # existing handlers still match
+        assert (error.decrypted, error.already_decrypted, error.protected) == (1, 1, 2)
+        assert "could not decrypt STRIPE_API_KEY" in str(error)
+        assert f"{db} was left as it was" in str(error)
+        # .env.api was decrypted and protected; the failing file was restored
+        # and not protected; the pull stopped before the later file.
+        assert "API_KEY=plain-value" in api.read_text(encoding="utf-8")
+        assert db.read_text(encoding="utf-8") == db_original
+        assert db not in skip_worktree_calls and api in skip_worktree_calls
+        assert later.read_text(encoding="utf-8") == _encrypted("LATER")

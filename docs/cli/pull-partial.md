@@ -24,7 +24,9 @@ but no `secrets_dir` is rejected at config-load time.
 
 The summary panel reports `Decrypted: N` (files actually decrypted on this run)
 and `Skipped: M` (files that were already decrypted, including those skipped in
-environments where some other files were decrypted).
+environments where some other files were decrypted). In secrets-only mode a pull
+stops at the first file it cannot decrypt; the files decrypted before it are
+still counted in `Decrypted: N`.
 
 This command requires partial encryption to be configured in `envdrift.toml`.
 
@@ -111,6 +113,27 @@ protection once the file is re-encrypted. This is a local guardrail only — it 
 shared with teammates and can be bypassed with `git add -f`, so never force-add a
 decrypted secret file. The same protection applies to every file decrypted in
 secrets-only mode.
+
+The plaintext notice is printed whenever this run decrypted at least one file,
+even when another environment failed and the command exits 1.
+
+## When a decrypt fails
+
+dotenvx decrypts value by value. When one value was encrypted under another key
+(for example after a merge, or through key drift), dotenvx writes the values it
+could decrypt and then fails. `pull-partial` takes a byte-for-byte copy of each
+secret file before dotenvx runs and writes it back on failure, so the file is left
+as it was (still encrypted, CRLF line endings included) instead of half decrypted
+and unprotected. The error names the value dotenvx could not decrypt:
+
+```text
+✗ Failed to decrypt .env.production.secret: dotenvx decryption failed: ☠ [DECRYPTION_FAILED] could not decrypt STRIPE_API_KEY. ...
+.env.production.secret was left as it was: envdrift restored the bytes it had before the decrypt.
+```
+
+If envdrift cannot write the file back, the message says the file may now hold
+decrypted plaintext, marks it `skip-worktree`, and says whether that protection
+worked.
 
 ## Exit Codes
 

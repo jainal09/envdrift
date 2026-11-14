@@ -173,9 +173,13 @@ class PartialEncryptionError(Exception):
         return cls(f"Failed to encrypt {path}: {cause}")
 
     @classmethod
-    def decrypt_failed(cls, path: Path, cause: Exception) -> PartialEncryptionError:
-        """Create error for decryption failure."""
-        return cls(f"Failed to decrypt {path}: {cause}")
+    def decrypt_failed(cls, path: Path, cause: Exception, note: str = "") -> PartialEncryptionError:
+        """Create error for decryption failure.
+
+        ``note`` says what happened to the file (``DecryptSnapshot.restore``).
+        """
+        message = f"Failed to decrypt {path}: {cause}"
+        return cls(f"{message}\n{note}" if note else message)
 
     @classmethod
     def file_not_found(cls, path: Path) -> PartialEncryptionError:
@@ -222,6 +226,24 @@ class PartialEncryptionError(Exception):
             "scaffold. Restore the source files or fix the paths in "
             "envdrift.toml."
         )
+
+
+class SecretsOnlyPullError(PartialEncryptionError):
+    """A secrets-only pull stopped at a file it could not decrypt (#948).
+
+    The files decrypted before the failure are plaintext on disk, so the error
+    carries the tally for callers to report: ``pull-partial`` and ``pull`` count
+    them, and ``pull-partial`` still shows its plaintext notice.
+    """
+
+    def __init__(
+        self, message: str, *, decrypted: int, already_decrypted: int, protected: int
+    ) -> None:
+        """Store the message and the counts reached before the failure."""
+        super().__init__(message)
+        self.decrypted = decrypted
+        self.already_decrypted = already_decrypted
+        self.protected = protected
 
 
 def _is_quote_wrapped(v: str) -> bool:
@@ -668,6 +690,25 @@ class DecryptSnapshot:
         )
 
 
+def _decrypt_in_place(dotenvx: DotenvxWrapper, file: Path) -> None:
+    """Decrypt ``file`` in place, leaving it as it was if the decrypt fails.
+
+    A value under another key makes dotenvx write the values it could decrypt
+    and exit 1; without the snapshot that plaintext stayed in the tracked file,
+    unprotected, because the caller raised before marking it skip-worktree
+    (#948). The error keeps dotenvx's reason, which names the value.
+    """
+    try:
+        snapshot = DecryptSnapshot(file)
+    except OSError as e:
+        raise PartialEncryptionError.decrypt_failed(file, e, "Nothing was decrypted.") from e
+    try:
+        with snapshot:
+            dotenvx.decrypt(file)
+    except DotenvxError as e:
+        raise PartialEncryptionError.decrypt_failed(file, e, snapshot.note) from e
+
+
 def _encrypt_and_verify(dotenvx: DotenvxWrapper, file: Path) -> None:
     """Encrypt ``file`` in place and verify ciphertext actually landed.
 
@@ -742,7 +783,7 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> bool:
         True if the file was successfully marked skip-worktree, False otherwise.
 
     Raises:
-        PartialEncryptionError: If decryption fails
+        PartialEncryptionError: If decryption fails. The file is left as it was.
     """
     secret_file = Path(env_config.secret_file)
 
@@ -754,12 +795,8 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> bool:
         # Already plaintext on disk — still protect it from accidental commit.
         return _git_skip_worktree(secret_file)
 
-    # Decrypt using dotenvx
-    dotenvx = DotenvxWrapper()
-    try:
-        dotenvx.decrypt(secret_file)
-    except DotenvxError as e:
-        raise PartialEncryptionError.decrypt_failed(secret_file, e) from e
+    # Decrypt using dotenvx; a failed decrypt leaves the file as it was (#948).
+    _decrypt_in_place(DotenvxWrapper(), secret_file)
 
     # Prevent accidental commit of the now-plaintext secret file.
     # git update-index --skip-worktree hides local changes from git add / git status
@@ -939,7 +976,9 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
         where ``protected`` is the number of files successfully marked skip-worktree.
 
     Raises:
-        PartialEncryptionError: If the secrets_dir does not exist or decryption fails
+        PartialEncryptionError: If the secrets_dir does not exist.
+        SecretsOnlyPullError: If a file fails to decrypt. That file is left as it
+            was; the error carries the counts for the files handled before it.
     """
     secrets_dir = _resolve_secrets_dir(env_config)
 
@@ -963,10 +1002,17 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
             already_decrypted += 1
             continue
         try:
-            dotenvx.decrypt(file)
-            decrypted += 1
-        except DotenvxError as e:
-            raise PartialEncryptionError.decrypt_failed(file, e) from e
+            _decrypt_in_place(dotenvx, file)
+        except PartialEncryptionError as e:
+            # The files decrypted before this one are plaintext now: report
+            # them instead of an environment that looks untouched (#948).
+            raise SecretsOnlyPullError(
+                str(e),
+                decrypted=decrypted,
+                already_decrypted=already_decrypted,
+                protected=protected,
+            ) from e
+        decrypted += 1
         # Prevent accidental commit of the now-plaintext secret file until
         # push_secrets_only re-encrypts it and lifts the protection.
         if _git_skip_worktree(file):

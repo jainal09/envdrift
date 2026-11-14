@@ -868,3 +868,152 @@ def test_sync_pull_secrets_only_error(monkeypatch, tmp_path: Path):
 
     assert result.exit_code == 1, result.output
     assert "secrets_dir not found" in result.output
+
+
+# ---------------------------------------------------------------------------
+# #948: a pull that fails part way reports the true tally and still warns about
+# the files it left decrypted.
+# ---------------------------------------------------------------------------
+
+
+def _secrets_only_env(tmp_path: Path, name: str = "production") -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        secrets_only=True,
+        secrets_dir=str(tmp_path / "secrets"),
+        pattern=".env*",
+        combined_file="",
+        clear_file="",
+        secret_file="",
+    )
+
+
+def _raise_after(decrypted: int, already_decrypted: int, protected: int):
+    """A pull_secrets_only stand-in that fails after decrypting some files."""
+    from envdrift.core.partial_encryption import SecretsOnlyPullError
+
+    def _pull(_env):
+        raise SecretsOnlyPullError(
+            "Failed to decrypt secrets/.env.db: could not decrypt STRIPE_API_KEY",
+            decrypted=decrypted,
+            already_decrypted=already_decrypted,
+            protected=protected,
+        )
+
+    return _pull
+
+
+def test_pull_partial_counts_files_decrypted_before_a_secrets_only_error(
+    monkeypatch, tmp_path: Path
+):
+    """#948: the files decrypted before the failure are counted and announced."""
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[_secrets_only_env(tmp_path)])
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr("envdrift.cli_commands.partial.pull_secrets_only", _raise_after(2, 1, 2))
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
+
+    result = runner.invoke(app, ["pull-partial"])
+
+    output = " ".join(result.output.split())
+    assert result.exit_code == 1, output
+    assert "Decrypted 2 file(s) in" in output and "before the error" in output
+    assert "Decrypted: 2" in output and "Skipped: 1" in output and "Errors: 1" in output
+    assert "could not decrypt STRIPE_API_KEY" in output
+    # The two plaintext files are protected, so the yellow notice is shown.
+    assert "SECRET FILES ARE NOW PLAINTEXT" in output
+    assert "Pull complete!" not in output
+
+
+def test_pull_partial_danger_notice_for_unprotected_files_decrypted_before_an_error(
+    monkeypatch, tmp_path: Path
+):
+    """#948: with no skip-worktree protection the DANGER notice is shown."""
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[_secrets_only_env(tmp_path)])
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr("envdrift.cli_commands.partial.pull_secrets_only", _raise_after(1, 0, 0))
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
+
+    result = runner.invoke(app, ["pull-partial"])
+
+    output = " ".join(result.output.split())
+    assert result.exit_code == 1, output
+    assert "Decrypted: 1" in output
+    assert "No Git Protection Applied" in output
+    assert "Security Notice" not in output
+
+
+def test_pull_partial_shows_notice_when_another_environment_failed(monkeypatch, tmp_path: Path):
+    """#948: a decrypted file is plaintext even if a later environment fails."""
+    from envdrift.core.partial_encryption import PartialEncryptionError
+
+    combine_env = SimpleNamespace(
+        name="production",
+        secrets_only=False,
+        clear_file=str(tmp_path / ".env.clear"),
+        secret_file=str(tmp_path / ".env.secret"),
+        combined_file=str(tmp_path / ".env"),
+    )
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(
+            enabled=True, environments=[combine_env, _secrets_only_env(tmp_path, "staging")]
+        )
+    )
+
+    def _fail(_env):
+        raise PartialEncryptionError("secrets_dir not found")
+
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.pull_partial_encryption", lambda _: (True, True)
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.pull_secrets_only", _fail)
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
+
+    result = runner.invoke(app, ["pull-partial"])
+
+    output = " ".join(result.output.split())
+    assert result.exit_code == 1, output
+    assert "Decrypted: 1" in output and "Errors: 1" in output
+    assert "secrets_dir not found" in output
+    assert "SECRET FILES ARE NOW PLAINTEXT" in output
+
+
+def test_sync_pull_counts_secrets_only_files_decrypted_before_an_error(monkeypatch, tmp_path: Path):
+    """#948: `pull` reports the files decrypted before a secrets-only failure."""
+    partial_config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[_secrets_only_env(tmp_path)])
+    )
+    _patch_sync_command_seams(monkeypatch, tmp_path, partial_config)
+    monkeypatch.setattr("envdrift.core.partial_encryption.pull_secrets_only", _raise_after(2, 3, 2))
+
+    result = runner.invoke(app, ["pull", "--skip-sync", "--force"])
+
+    output = " ".join(result.output.split())
+    assert result.exit_code == 1, output
+    summary = output.split("Partial Encryption Summary", 1)[1]
+    assert "Decrypted: 2" in summary and "Skipped: 3" in summary and "Errors: 1" in summary
+    assert "could not decrypt STRIPE_API_KEY" in output
+
+
+def test_pull_partial_first_secrets_only_file_failing_reports_nothing_decrypted(
+    monkeypatch, tmp_path: Path
+):
+    """#948: when the first file fails, nothing is claimed and no notice is shown."""
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=[_secrets_only_env(tmp_path)])
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    monkeypatch.setattr("envdrift.cli_commands.partial.pull_secrets_only", _raise_after(0, 0, 0))
+    monkeypatch.setattr("envdrift.cli_commands.partial.ensure_gitignore_entries", lambda _: [])
+
+    result = runner.invoke(app, ["pull-partial"])
+
+    output = " ".join(result.output.split())
+    assert result.exit_code == 1, output
+    assert "Decrypted: 0" in output and "Errors: 1" in output
+    assert "before the error" not in output
+    assert "SECRET FILES ARE" not in output

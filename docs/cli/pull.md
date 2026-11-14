@@ -207,6 +207,14 @@ under another key) is counted as an error, and the file is left byte for byte as
 it was instead of half decrypted. The error names the value dotenvx could not
 decrypt; see [decrypt](decrypt.md#a-value-encrypted-under-another-key).
 
+### Step 3: Partial Encryption Files
+
+When partial encryption is enabled, `pull` then decrypts each `.secret` file and
+each secrets-only directory the way [`pull-partial`](pull-partial.md#when-a-decrypt-fails)
+does: a file that fails to decrypt is left as it was, and in secrets-only mode the
+files decrypted before the failing one are still counted under `Decrypted:` in
+the Partial Encryption Summary.
+
 ## Configuration File Format
 
 Same as `envdrift sync`. See [sync documentation](sync.md#configuration-file-format) for details.
