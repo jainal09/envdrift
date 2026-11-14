@@ -23,6 +23,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from envdrift.agent.registry import (
     RegistryLockError,
@@ -33,6 +34,7 @@ from envdrift.agent.registry import (
 )
 from envdrift.cli_commands.agent_utils import parse_agent_running_status, warn_registry_corruption
 from envdrift.config import EnvdriftConfig, find_config, load_config
+from envdrift.utils.text import styled_text
 
 # emoji=False so a `:fire:`-like project path is printed as it is.
 console = Console(emoji=False)
@@ -174,8 +176,8 @@ def _report_guardian_status(config: EnvdriftConfig) -> None:
         config.guardian.idle_timeout = config.guardian.validate()
     except ValueError as exc:
         # Escape the literal "[guardian]" so Rich doesn't treat it as a style
-        # tag and swallow it.
-        console.print(f"\n[red]✗[/red] Invalid \\[guardian] config: {exc}")
+        # tag and swallow it; the error itself is printed as it is.
+        console.print(styled_text("\n[red]✗[/red] Invalid \\[guardian] config: {}", exc))
 
 
 def _report_post_register_guidance(config_path: Path | None, auto_enable: bool) -> None:
@@ -193,8 +195,8 @@ def _report_post_register_guidance(config_path: Path | None, auto_enable: bool) 
     try:
         config = load_config(config_path)
     except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
-        console.print(f"\n[red]✗[/red] Failed to load envdrift config: {config_path}")
-        console.print(f"  {exc}")
+        console.print(styled_text("\n[red]✗[/red] Failed to load envdrift config: {}", config_path))
+        console.print(Text(f"  {exc}"))
     else:
         _report_guardian_status(config)
 
@@ -229,19 +231,20 @@ def register(
     try:
         success, message = register_project(project_path)
     except RegistryLockError as exc:
-        console.print(f"[red]✗[/red] Could not lock the agent registry: {exc}")
+        console.print(styled_text("[red]✗[/red] Could not lock the agent registry: {}", exc))
         raise typer.Exit(1) from exc
 
     warn_registry_corruption(get_registry(), console)
 
+    # The message names the project path: print it as it is.
     if not success:
         if "already registered" in message.lower():
-            console.print(f"[yellow]⚠[/yellow] {message}")
+            console.print(styled_text("[yellow]⚠[/yellow] {}", message))
             return
-        console.print(f"[red]✗[/red] {message}")
+        console.print(styled_text("[red]✗[/red] {}", message))
         raise typer.Exit(1)
 
-    console.print(f"[green]✓[/green] {message}")
+    console.print(styled_text("[green]✓[/green] {}", message))
     _report_post_register_guidance(config_path, auto_enable)
 
 
@@ -263,15 +266,15 @@ def unregister(
     try:
         success, message = unregister_project(project_path)
     except RegistryLockError as exc:
-        console.print(f"[red]✗[/red] Could not lock the agent registry: {exc}")
+        console.print(styled_text("[red]✗[/red] Could not lock the agent registry: {}", exc))
         raise typer.Exit(1) from exc
 
     warn_registry_corruption(get_registry(), console)
 
     if success:
-        console.print(f"[green]✓[/green] {message}")
+        console.print(styled_text("[green]✓[/green] {}", message))
     else:
-        console.print(f"[yellow]⚠[/yellow] {message}")
+        console.print(styled_text("[yellow]⚠[/yellow] {}", message))
 
 
 @agent_app.command("list")
@@ -311,14 +314,15 @@ def list_registered() -> None:
             if not exists:
                 status = "[red]✗ (missing)[/red]"
 
+            # Paths and timestamps come from the registry file: Text cells.
             table.add_row(
-                project.path,
-                _format_timestamp(project.added),
+                Text(project.path),
+                Text(_format_timestamp(project.added)),
                 status,
             )
 
     console.print(table)
-    console.print(f"\n[dim]Registry: {get_registry().path}[/dim]")
+    console.print(styled_text("\n[dim]Registry: {}[/dim]", get_registry().path))
 
 
 def _report_agent_state(agent_status: str, version: str | None, detail: str | None) -> None:
@@ -330,7 +334,7 @@ def _report_agent_state(agent_status: str, version: str | None, detail: str | No
     if agent_status == "running":
         console.print("[green]⚡ Agent is running[/green]")
         if version:
-            console.print(f"   Version: {version}")
+            console.print(Text(f"   Version: {version}"))
     elif agent_status == "stopped":
         console.print("[red]⭕ Agent is stopped[/red]")
         console.print("   Run [bold]envdrift-agent start[/bold] to start it")
@@ -340,7 +344,7 @@ def _report_agent_state(agent_status: str, version: str | None, detail: str | No
     elif agent_status == "broken":
         console.print("[red]✗ Agent binary is installed but cannot run[/red]")
         if detail:
-            console.print(f"   {detail}")
+            console.print(Text(f"   {detail}"))
         console.print("   Run [bold]envdrift install agent --force[/bold] to reinstall it")
     elif agent_status == "error":
         console.print("[yellow]⚠ Agent status check failed[/yellow]")
@@ -364,11 +368,11 @@ def status() -> None:
     console.print(f"[bold]Registered Projects:[/bold] {len(projects)}")
     if projects:
         for project in projects[:5]:  # Show first 5
-            console.print(f"   • {project.path}")
+            console.print(Text(f"   • {project.path}"))
         if len(projects) > 5:
             console.print(f"   [dim]... and {len(projects) - 5} more[/dim]")
 
-    console.print(f"\n[dim]Registry: {registry.path}[/dim]")
+    console.print(styled_text("\n[dim]Registry: {}[/dim]", registry.path))
 
 
 # Export the app
