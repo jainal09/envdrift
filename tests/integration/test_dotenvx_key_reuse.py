@@ -16,14 +16,14 @@ with the vault key has.
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from tests.integration.kv2_standin import TOKEN, KV2StandIn
+from tests.integration.dotenvx_cli import Cli, child_env, dotenvx_command
+from tests.integration.kv2_standin import KV2StandIn
 
 from envdrift.integrations.dotenvx_keys import (
     assignment_values,
@@ -43,45 +43,6 @@ PRODUCTION = "DOTENV_PRIVATE_KEY_PRODUCTION"
 # --- helpers ------------------------------------------------------------------
 
 
-def _venv_root() -> Path | None:
-    """The virtualenv this process looks for dotenvx in, or None when it finds none."""
-    from envdrift.integrations.dotenvx import get_venv_bin_dir
-
-    try:
-        return get_venv_bin_dir().parent
-    except RuntimeError:
-        return None
-
-
-def _child_env(pythonpath: str, no_venv: Path) -> dict[str, str]:
-    """The CLI's environment: this checkout's code, the stand-in token, no stray keys.
-
-    ``VIRTUAL_ENV`` is the folder ``_dotenvx_command`` looks in. The CLI checks
-    it first, so both run the same dotenvx whatever their working directory.
-    When this process finds no virtualenv, the CLI gets ``no_venv``, an empty
-    folder, so it too runs the dotenvx on PATH.
-    """
-    env = {key: value for key, value in os.environ.items() if not key.startswith("DOTENV_")}
-    env.pop("FORCE_COLOR", None)
-    env["NO_COLOR"] = "1"
-    env["PYTHONPATH"] = pythonpath
-    env["VAULT_TOKEN"] = TOKEN
-    env["VIRTUAL_ENV"] = str(_venv_root() or no_venv)
-    for name in ("NO_PROXY", "no_proxy"):
-        env[name] = ",".join(filter(None, [env.get(name, ""), "127.0.0.1", "localhost"]))
-    return env
-
-
-def _dotenvx_command() -> str:
-    """The dotenvx the CLI under test runs: the virtualenv's, else the one on PATH."""
-    from envdrift.integrations.dotenvx import get_dotenvx_path
-
-    if _venv_root() is None:
-        return "dotenvx"
-    venv_binary = get_dotenvx_path()
-    return str(venv_binary) if venv_binary.exists() else "dotenvx"
-
-
 def test_with_no_virtualenv_found_the_cli_also_runs_the_dotenvx_on_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, integration_pythonpath: str
 ) -> None:
@@ -93,15 +54,17 @@ def test_with_no_virtualenv_found_the_cli_also_runs_the_dotenvx_on_path(
     import platform
     import sys
 
+    from tests.integration import dotenvx_cli
+
     windows = platform.system() == "Windows"
     decoy_bin = tmp_path / "decoy" / ("Scripts" if windows else "bin")
     decoy_bin.mkdir(parents=True)
     (decoy_bin / ("dotenvx.exe" if windows else "dotenvx")).write_text("", encoding="utf-8")
     monkeypatch.setenv("VIRTUAL_ENV", str(decoy_bin.parent))
-    monkeypatch.setattr(sys.modules[__name__], "_venv_root", lambda: None)
+    monkeypatch.setattr(dotenvx_cli, "venv_root", lambda: None)
     no_venv = tmp_path / "no-virtualenv"
     no_venv.mkdir()
-    env = _child_env(integration_pythonpath, no_venv)
+    env = child_env(integration_pythonpath, no_venv)
     probe = "from envdrift.integrations.dotenvx import DotenvxWrapper as W; print(W().binary_path)"
 
     chosen = subprocess.run(
@@ -109,50 +72,17 @@ def test_with_no_virtualenv_found_the_cli_also_runs_the_dotenvx_on_path(
     )
 
     assert chosen.returncode == 0, chosen.stderr
-    assert _dotenvx_command() == "dotenvx"
+    assert dotenvx_command() == "dotenvx"
     on_path = shutil.which("dotenvx", path=env["PATH"])
     assert on_path is not None
     assert Path(chosen.stdout.strip()).resolve() == Path(on_path).resolve()
 
 
-class _Cli:
-    """Run the real envdrift CLI (and dotenvx) in one work directory."""
-
-    def __init__(self, cwd: Path, envdrift_cmd: list[str], pythonpath: str) -> None:
-        self.cwd = cwd
-        self.envdrift_cmd = envdrift_cmd
-        no_venv = cwd.parent / "no-virtualenv"
-        no_venv.mkdir(exist_ok=True)
-        self.env = _child_env(pythonpath, no_venv)
-
-    def run(self, *args: str) -> tuple[int, str]:
-        result = subprocess.run(
-            [*self.envdrift_cmd, *args],
-            cwd=self.cwd,
-            env=self.env,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        # Width-independent: Rich soft-wraps long tmp paths at CI's width.
-        return result.returncode, " ".join((result.stdout + result.stderr).split())
-
-    def dotenvx(self, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [_dotenvx_command(), *args],
-            cwd=cwd or self.cwd,
-            env=self.env,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-
-
 @pytest.fixture
-def cli(tmp_path: Path, envdrift_cmd: list[str], integration_pythonpath: str) -> _Cli:
+def cli(tmp_path: Path, envdrift_cmd: list[str], integration_pythonpath: str) -> Cli:
     work = tmp_path / "work"
     work.mkdir()
-    return _Cli(work, envdrift_cmd, integration_pythonpath)
+    return Cli(work, envdrift_cmd, integration_pythonpath)
 
 
 @pytest.fixture
@@ -162,7 +92,7 @@ def vault() -> Iterator[KV2StandIn]:
         yield standin
 
 
-def _mint_key(cli: _Cli, scratch: Path) -> str:
+def _mint_key(cli: Cli, scratch: Path) -> str:
     """Return a fresh private key minted by the real dotenvx binary."""
     scratch.mkdir(parents=True, exist_ok=True)
     (scratch / ".env").write_text("SEED=1\n", encoding="utf-8")
@@ -177,7 +107,7 @@ def _held(keys_file: Path, name: str = PRODUCTION) -> list[str]:
     return assignment_values(keys_file.read_text(encoding="utf-8"), name)
 
 
-def _decrypt_with_only(cli: _Cli, env_file: Path, key: str, scratch: Path) -> dict[str, str]:
+def _decrypt_with_only(cli: Cli, env_file: Path, key: str, scratch: Path) -> dict[str, str]:
     """Decrypt a copy of ``env_file`` with a keys file holding nothing but ``key``.
 
     Returns every decrypted value, or fails the test when dotenvx cannot.
@@ -205,7 +135,7 @@ def _parse(text: str) -> dict[str, list[str]]:
     return parse_assignments(text)
 
 
-def _write_config(cli: _Cli, vault_url: str, mappings: str, sync_options: str = "") -> None:
+def _write_config(cli: Cli, vault_url: str, mappings: str, sync_options: str = "") -> None:
     (cli.cwd / "envdrift.toml").write_text(
         '[vault]\nprovider = "hashicorp"\n'
         f'[vault.hashicorp]\nurl = "{vault_url}"\n'
@@ -228,7 +158,7 @@ def _snapshot(*paths: Path) -> dict[Path, bytes | None]:
 # --- the arithmetic agrees with the pinned binary -------------------------------
 
 
-def test_public_key_for_matches_a_pair_minted_by_the_pinned_dotenvx(cli: _Cli, tmp_path: Path):
+def test_public_key_for_matches_a_pair_minted_by_the_pinned_dotenvx(cli: Cli, tmp_path: Path):
     scratch = tmp_path / "pair"
     key = _mint_key(cli, scratch)
     header = public_key_values((scratch / ".env").read_text(encoding="utf-8"))
@@ -238,9 +168,7 @@ def test_public_key_for_matches_a_pair_minted_by_the_pinned_dotenvx(cli: _Cli, t
 # --- #938: lock and encrypt reuse the folder's key ------------------------------
 
 
-def test_lock_verify_vault_reuses_the_synced_vault_key(
-    cli: _Cli, vault: KV2StandIn, tmp_path: Path
-):
+def test_lock_verify_vault_reuses_the_synced_vault_key(cli: Cli, vault: KV2StandIn, tmp_path: Path):
     """#938 case 1: a new file is encrypted with the vault key, not a fresh one."""
     k1 = _mint_key(cli, tmp_path / "k1")
     vault.put("app-key", {"value": f"{PRODUCTION}={k1}"})
@@ -264,7 +192,7 @@ def test_lock_verify_vault_reuses_the_synced_vault_key(
 
 
 def test_checks_fail_a_file_encrypted_with_a_second_minted_key(
-    cli: _Cli, vault: KV2StandIn, tmp_path: Path
+    cli: Cli, vault: KV2StandIn, tmp_path: Path
 ):
     """#938: K1 then a minted K2 under one name must fail every check.
 
@@ -296,7 +224,7 @@ def test_checks_fail_a_file_encrypted_with_a_second_minted_key(
     assert _snapshot(svc / ".env.keys", svc / ".env.production") == before
 
 
-def test_second_lock_of_a_mapped_env_file_keeps_the_first_key(cli: _Cli, tmp_path: Path):
+def test_second_lock_of_a_mapped_env_file_keeps_the_first_key(cli: Cli, tmp_path: Path):
     """#938 case 2: the canonical header is kept, so the second lock reuses K1."""
     _write_config(cli, "http://127.0.0.1:1", _mapping("svc-key", extra='env_file = ".env.prod"\n'))
     svc = cli.cwd / "svc"
@@ -318,7 +246,7 @@ def test_second_lock_of_a_mapped_env_file_keeps_the_first_key(cli: _Cli, tmp_pat
     }
 
 
-def test_encrypt_after_a_rename_keeps_the_files_key(cli: _Cli, tmp_path: Path):
+def test_encrypt_after_a_rename_keeps_the_files_key(cli: Cli, tmp_path: Path):
     """#938: a renamed file keeps its lone header, so old and new values share a key.
 
     The old header cleanup stripped a header whose name no longer matched the
@@ -352,7 +280,7 @@ def test_encrypt_after_a_rename_keeps_the_files_key(cli: _Cli, tmp_path: Path):
         pytest.param("{name}: {key}", id="colon-form"),
     ],
 )
-def test_encrypt_reads_the_key_line_the_way_dotenvx_does(cli: _Cli, tmp_path: Path, line_form: str):
+def test_encrypt_reads_the_key_line_the_way_dotenvx_does(cli: Cli, tmp_path: Path, line_form: str):
     """S2: a key line dotenvx loads is the key envdrift seeds (no second key)."""
     key = _mint_key(cli, tmp_path / "k")
     keys_file = cli.cwd / ".env.keys"
@@ -367,7 +295,7 @@ def test_encrypt_reads_the_key_line_the_way_dotenvx_does(cli: _Cli, tmp_path: Pa
     assert _decrypt_with_only(cli, cli.cwd / ".env.production", key, tmp_path / "d") == {"A": "one"}
 
 
-def test_encrypt_names_a_multi_part_file_like_dotenvx(cli: _Cli, tmp_path: Path):
+def test_encrypt_names_a_multi_part_file_like_dotenvx(cli: Cli, tmp_path: Path):
     """N1: .env.prod.eu.west's key is DOTENV_PRIVATE_KEY_PROD_EU, as dotenvx names it."""
     key = _mint_key(cli, tmp_path / "k")
     keys_file = cli.cwd / ".env.keys"
@@ -383,7 +311,7 @@ def test_encrypt_names_a_multi_part_file_like_dotenvx(cli: _Cli, tmp_path: Path)
     assert _decrypt_with_only(cli, env_file, key, tmp_path / "d") == {"A": "one"}
 
 
-def test_encrypt_refuses_a_garbage_key_with_an_accurate_message(cli: _Cli):
+def test_encrypt_refuses_a_garbage_key_with_an_accurate_message(cli: Cli):
     """B2: fail closed and say the key is invalid; nothing is changed."""
     (cli.cwd / ".env").write_text("API_KEY=" + "super" + "secret123\n", encoding="utf-8")
     (cli.cwd / ".env.keys").write_text(
@@ -400,7 +328,7 @@ def test_encrypt_refuses_a_garbage_key_with_an_accurate_message(cli: _Cli):
     assert _snapshot(cli.cwd / ".env", cli.cwd / ".env.keys") == before
 
 
-def test_encrypt_refuses_two_keys_and_restores_crlf_byte_for_byte(cli: _Cli, tmp_path: Path):
+def test_encrypt_refuses_two_keys_and_restores_crlf_byte_for_byte(cli: Cli, tmp_path: Path):
     """#938 + N3: refused before dotenvx; the CRLF file is left exactly as it was."""
     k1 = _mint_key(cli, tmp_path / "k1")
     k2 = _mint_key(cli, tmp_path / "k2")
@@ -418,7 +346,7 @@ def test_encrypt_refuses_two_keys_and_restores_crlf_byte_for_byte(cli: _Cli, tmp
 
 
 def test_encrypt_corrects_another_keys_header_before_anything_is_encrypted(
-    cli: _Cli, tmp_path: Path
+    cli: Cli, tmp_path: Path
 ):
     """B4: no encrypted values yet, so the header is rewritten to the held key."""
     k1 = _mint_key(cli, tmp_path / "k1")
@@ -436,7 +364,7 @@ def test_encrypt_corrects_another_keys_header_before_anything_is_encrypted(
     assert _decrypt_with_only(cli, env_file, k1, tmp_path / "d") == {"A": "one"}
 
 
-def test_encrypt_refuses_a_file_already_encrypted_under_another_key(cli: _Cli, tmp_path: Path):
+def test_encrypt_refuses_a_file_already_encrypted_under_another_key(cli: Cli, tmp_path: Path):
     """B4: values encrypted under K2 and a held K1 must not be mixed in one file."""
     k1 = _mint_key(cli, tmp_path / "k1")
     k2 = _mint_key(cli, tmp_path / "k2")
@@ -471,7 +399,7 @@ def _conflicting_keys(svc: Path, k1: str, k2: str) -> Path:
     return keys_file
 
 
-def test_lock_refuses_a_key_conflict_before_touching_either_file(cli: _Cli, tmp_path: Path):
+def test_lock_refuses_a_key_conflict_before_touching_either_file(cli: Cli, tmp_path: Path):
     """B3: checked before the env file's header is rewritten; both files unchanged."""
     k1 = _mint_key(cli, tmp_path / "k1")
     k2 = _mint_key(cli, tmp_path / "k2")
@@ -494,7 +422,7 @@ def test_lock_refuses_a_key_conflict_before_touching_either_file(cli: _Cli, tmp_
     assert _snapshot(env_file, keys_file) == before
 
 
-def test_pull_reports_a_key_conflict_without_claiming_to_encrypt(cli: _Cli, tmp_path: Path):
+def test_pull_reports_a_key_conflict_without_claiming_to_encrypt(cli: Cli, tmp_path: Path):
     """B3: pull encrypts nothing, so its error says the file was not decrypted."""
     k1 = _mint_key(cli, tmp_path / "k1")
     k2 = _mint_key(cli, tmp_path / "k2")
@@ -517,7 +445,7 @@ def test_pull_reports_a_key_conflict_without_claiming_to_encrypt(cli: _Cli, tmp_
 
 
 def test_vault_push_all_reports_each_mapping_and_continues(
-    cli: _Cli, vault: KV2StandIn, tmp_path: Path
+    cli: Cli, vault: KV2StandIn, tmp_path: Path
 ):
     """B3: one mapping's refused key change does not abort the others; exit 1."""
     k1 = _mint_key(cli, tmp_path / "k1")
@@ -553,7 +481,7 @@ def test_vault_push_all_reports_each_mapping_and_continues(
 # --- B5: a renamed file's key is re-labeled, not re-encrypted -------------------
 
 
-def test_lock_relabels_a_renamed_files_key(cli: _Cli, tmp_path: Path):
+def test_lock_relabels_a_renamed_files_key(cli: Cli, tmp_path: Path):
     """B5: the same key under the expected name and header; ciphertext unchanged."""
     _write_config(cli, "http://127.0.0.1:1", _mapping("s", env="localenv"))
     svc = cli.cwd / "svc"
@@ -609,7 +537,7 @@ def _pull_args(vault: KV2StandIn, *extra: str) -> list[str]:
     ]
 
 
-def _local_only_key_setup(cli: _Cli, vault: KV2StandIn, tmp_path: Path) -> tuple[str, Path]:
+def _local_only_key_setup(cli: Cli, vault: KV2StandIn, tmp_path: Path) -> tuple[str, Path]:
     """The vault holds K1; svc/.env.production is encrypted with a local K2."""
     k1 = _mint_key(cli, tmp_path / "k1")
     vault.put("app-key", {"value": f"{PRODUCTION}={k1}"})
@@ -624,7 +552,7 @@ def _local_only_key_setup(cli: _Cli, vault: KV2StandIn, tmp_path: Path) -> tuple
 
 @pytest.mark.parametrize("extra", [(), ("--no-decrypt",)], ids=["decrypt", "no-decrypt"])
 def test_vault_pull_refuses_to_replace_a_different_local_key(
-    cli: _Cli, vault: KV2StandIn, tmp_path: Path, extra: tuple[str, ...]
+    cli: Cli, vault: KV2StandIn, tmp_path: Path, extra: tuple[str, ...]
 ):
     """#939: refuse, change nothing, make no backup."""
     _, svc = _local_only_key_setup(cli, vault, tmp_path)
@@ -639,7 +567,7 @@ def test_vault_pull_refuses_to_replace_a_different_local_key(
     assert sorted(path.name for path in svc.iterdir()) == [".env.keys", ".env.production"]
 
 
-def test_vault_pull_compares_every_held_value(cli: _Cli, vault: KV2StandIn, tmp_path: Path):
+def test_vault_pull_compares_every_held_value(cli: Cli, vault: KV2StandIn, tmp_path: Path):
     """B1: a first line equal to the vault key must not hide a second, different one."""
     k1, svc = _local_only_key_setup(cli, vault, tmp_path)
     keys_file = svc / ".env.keys"
@@ -656,7 +584,7 @@ def test_vault_pull_compares_every_held_value(cli: _Cli, vault: KV2StandIn, tmp_
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 def test_vault_pull_force_backs_up_a_gitignored_copy_first(
-    cli: _Cli, vault: KV2StandIn, tmp_path: Path
+    cli: Cli, vault: KV2StandIn, tmp_path: Path
 ):
     """#939 + N2: --force backs up .env.keys, and git ignores the backup."""
     subprocess.run(["git", "init", "-q"], cwd=cli.cwd, check=True)
@@ -677,7 +605,7 @@ def test_vault_pull_force_backs_up_a_gitignored_copy_first(
     assert ignored.returncode == 0, (cli.cwd / ".gitignore").read_text(encoding="utf-8")
 
 
-def test_vault_pull_leaves_a_matching_key_alone(cli: _Cli, vault: KV2StandIn, tmp_path: Path):
+def test_vault_pull_leaves_a_matching_key_alone(cli: Cli, vault: KV2StandIn, tmp_path: Path):
     k1 = _mint_key(cli, tmp_path / "k1")
     vault.put("app-key", {"value": f"{PRODUCTION}={k1}"})
     svc = cli.cwd / "svc"
@@ -693,7 +621,7 @@ def test_vault_pull_leaves_a_matching_key_alone(cli: _Cli, vault: KV2StandIn, tm
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
-def test_sync_backup_is_gitignored(cli: _Cli, vault: KV2StandIn, tmp_path: Path):
+def test_sync_backup_is_gitignored(cli: Cli, vault: KV2StandIn, tmp_path: Path):
     """N2: sync's .env.keys backups hold the same keys, so git must ignore them."""
     subprocess.run(["git", "init", "-q"], cwd=cli.cwd, check=True)
     (cli.cwd / ".gitignore").write_text(".env.keys\n", encoding="utf-8")
@@ -720,7 +648,7 @@ def test_sync_backup_is_gitignored(cli: _Cli, vault: KV2StandIn, tmp_path: Path)
 # --- #943: [vault.sync] env_keys_filename reaches every dotenvx call ------------
 
 
-def _custom_keys_config(cli: _Cli, vault_url: str) -> Path:
+def _custom_keys_config(cli: Cli, vault_url: str) -> Path:
     _write_config(
         cli, vault_url, _mapping("app-key"), sync_options='env_keys_filename = ".secrets.keys"\n'
     )
@@ -729,7 +657,7 @@ def _custom_keys_config(cli: _Cli, vault_url: str) -> Path:
     return svc
 
 
-def test_pull_decrypts_with_the_configured_keys_file(cli: _Cli):
+def test_pull_decrypts_with_the_configured_keys_file(cli: Cli):
     svc = _custom_keys_config(cli, "http://127.0.0.1:1")
     (svc / ".env.production").write_text("API_TOKEN=" + "s3" + "cret\n", encoding="utf-8")
     assert (
@@ -746,7 +674,7 @@ def test_pull_decrypts_with_the_configured_keys_file(cli: _Cli):
     assert not (svc / ".env.keys").exists()
 
 
-def test_lock_writes_the_key_into_the_configured_keys_file(cli: _Cli, tmp_path: Path):
+def test_lock_writes_the_key_into_the_configured_keys_file(cli: Cli, tmp_path: Path):
     svc = _custom_keys_config(cli, "http://127.0.0.1:1")
     (svc / ".env.production").write_text("API_TOKEN=new\n", encoding="utf-8")
 
@@ -761,7 +689,7 @@ def test_lock_writes_the_key_into_the_configured_keys_file(cli: _Cli, tmp_path: 
 
 
 def test_vault_push_all_writes_and_pushes_the_configured_keys_file(
-    cli: _Cli, vault: KV2StandIn, tmp_path: Path
+    cli: Cli, vault: KV2StandIn, tmp_path: Path
 ):
     """#943: the key dotenvx creates lands in env_keys_filename, and that key is pushed."""
     svc = _custom_keys_config(cli, vault.url)
@@ -779,7 +707,7 @@ def test_vault_push_all_writes_and_pushes_the_configured_keys_file(
 
 
 def test_vault_push_all_pushes_the_held_key_that_decrypts_the_file(
-    cli: _Cli, vault: KV2StandIn, tmp_path: Path
+    cli: Cli, vault: KV2StandIn, tmp_path: Path
 ):
     """#938 + #943: the key already in env_keys_filename encrypts the file and is pushed."""
     svc = _custom_keys_config(cli, vault.url)
@@ -807,7 +735,7 @@ def test_vault_push_all_pushes_the_held_key_that_decrypts_the_file(
     reason="a plain .env mapping's bare DOTENV_PRIVATE_KEY is never pushed or verified (see #1015)",
 )
 def test_a_plain_env_mapping_can_be_locked_pushed_and_verified(
-    cli: _Cli, vault: KV2StandIn, tmp_path: Path
+    cli: Cli, vault: KV2StandIn, tmp_path: Path
 ):
     """#1015: lock, vault-push --all and lock --verify-vault --check all succeed.
 
