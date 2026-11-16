@@ -414,7 +414,8 @@ the same secret reported by another scanner.
 
 Skip findings in the encrypted values of files that contain dotenvx or SOPS encryption
 markers. Enabled by default. Ciphertext can trigger false positives from scanners
-detecting high-entropy strings.
+detecting high-entropy strings. A dotenvx value counts as encrypted in every quote style
+dotenvx writes it in: bare, `"`, `'`, or backticks (`` KEY=`encrypted:...` ``).
 
 Only the encrypted values are skipped. A finding elsewhere in such a file is reported,
 even one on the line of an encrypted value, after it. A finding from a scanner that

@@ -107,6 +107,8 @@ command line. Without `--check`, each file is encrypted in turn.
 ### `--check`
 
 Only check encryption status without modifying the file. Exits with code 1 if plaintext secrets are detected.
+A backtick-quoted value is judged by the value inside the backticks, which is what dotenvx
+encrypts, so `` STRIPE=`sk_live_...` `` is reported as a plaintext secret.
 
 ```bash
 envdrift encrypt .env.production --check

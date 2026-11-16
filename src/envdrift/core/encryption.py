@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from envdrift.core.parser import EncryptionStatus, EnvFile
+from envdrift.core.parser import EncryptionStatus, EnvFile, strip_backtick_quotes
 from envdrift.core.partial_encryption import _is_sops_metadata_key
 from envdrift.core.schema import SchemaMetadata
 from envdrift.encryption.sops import SOPSEncryptionBackend
@@ -403,9 +403,13 @@ class EncryptionDetector:
         """
         Determine whether a plaintext value matches any configured secret patterns.
 
+        The patterns match from the start of the value, so a backtick-quoted value
+        is judged inside its backticks, the value dotenvx would encrypt (#964).
+
         Returns:
             `true` if the value appears to be a secret, `false` otherwise.
         """
+        value = strip_backtick_quotes(value)
         for pattern in self.SECRET_VALUE_PATTERNS:
             if pattern.search(value):
                 return True

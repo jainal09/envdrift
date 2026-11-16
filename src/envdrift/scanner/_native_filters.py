@@ -80,9 +80,11 @@ def _looks_like_code_member_access(value: str) -> bool:
 
 # dotenvx: ``encrypted:`` must be the (optionally quoted) start of an assignment's
 # *value* — ``NAME="encrypted:..."`` / ``NAME=encrypted:...`` — not anywhere in the
-# line (and never inside a comment line, which is excluded separately).
+# line (and never inside a comment line, which is excluded separately). The quote
+# may be a backtick: dotenvx keeps a backtick-quoted value's backticks around its
+# ciphertext (#964).
 _DOTENVX_VALUE_RE = re.compile(
-    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"']?encrypted:",
+    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"'`]?encrypted:",
 )
 
 # SOPS: a canonical ``ENC[AES256_GCM,...]`` value envelope (dotenv- or YAML-style).
@@ -122,7 +124,7 @@ def _line_is_sops_metadata(line: str) -> bool:
 # its ``ENC[AES256_GCM,...]`` envelope. Neither holds whitespace, so whatever follows on the line
 # is plaintext.
 _DOTENVX_VALUE_SPAN_RE = re.compile(
-    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"']?encrypted:[^\s\"']*[\"']?",
+    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"'`]?encrypted:[^\s\"'`]*[\"'`]?",
 )
 # A SOPS value runs from its envelope to the envelope's ``]``, or to the end of the line. Its
 # assignment, ``NAME=`` or ``"name": "``, is found by stepping back from the envelope, not by a
