@@ -14,8 +14,8 @@ The `init` command bootstraps your schema by generating a Pydantic Settings clas
 
 - **Infers types** - Detects booleans, integers, and strings
 - **Detects sensitive fields** - Marks likely secrets with `sensitive=True`
-- **Creates required fields** - String values become required (no default)
-- **Adds defaults** - Boolean and integer values get defaults
+- **Creates required fields** - String values and detected sensitive fields become required (no default)
+- **Adds defaults** - Non-sensitive boolean and integer values get defaults
 - **Reports malformed content** - Warns with the line numbers of non-comment
   content that could not become schema fields
 
@@ -141,7 +141,14 @@ envdrift init .env --output settings.py --class-name AppSettings
 | :-------------------------- | :------------ | :------------ |
 | `true`, `false`             | `bool`        | Yes           |
 | `123`, `8000`               | `int`         | Yes           |
+| `012345678901`, `02134`     | `str`         | No (required) |
 | `hello`, `postgres://...`   | `str`         | No (required) |
+
+Multi-digit values with a leading zero stay strings so account numbers and postal
+codes retain their original value. A single `0` is still inferred as an integer.
+Detected sensitive fields never receive defaults, even when inferred as `bool` or
+`int`, so their values are not copied into the generated module. They must be
+supplied by the environment or `.env` file when the application starts.
 
 ## Variable Names and Identifiers
 
