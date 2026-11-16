@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -221,14 +221,19 @@ def _check_extra_vars(
 
 def _collect_constraint_values(
     schema: SchemaMetadata, env_by_name: dict[str, EnvVar]
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], set[str]]:
     """Assemble the values dict the constraint pass feeds to the live model.
 
     Mirrors how pydantic-settings feeds the env source: raw strings for
     scalar fields, JSON-decoded values for complex fields (#472), skipping
     only ciphertext (and empties when env_ignore_empty says they're unset).
+
+    Also returns the fields skipped as ciphertext. Their plaintext is not known
+    here, so the model validates their defaults instead, and an error about a
+    default is not one about the file (``_record_constraint_errors``).
     """
     values: dict[str, Any] = {}
+    ciphertext_fields: set[str] = set()
     for field_name, field_meta in schema.fields.items():
         binding = _bound_env_binding(
             field_meta,
@@ -242,6 +247,7 @@ def _collect_constraint_values(
         model_input_key = binding_name if field_meta.alias is not None else field_name
         value = env_var.value
         if value.startswith(("encrypted:", "ENC[")):
+            ciphertext_fields.add(field_name)
             continue
         is_complex, allow_parse_failure = field_complexity(
             field_meta.field_type, field_meta.type_metadata
@@ -258,7 +264,7 @@ def _collect_constraint_values(
                     values[model_input_key] = value
         else:
             values[model_input_key] = value
-    return values
+    return values, ciphertext_fields
 
 
 def _constraint_error_entry(
@@ -279,9 +285,21 @@ def _constraint_error_entry(
 
 
 def _record_constraint_errors(
-    schema: SchemaMetadata, exc: ValidationError, result: ValidationResult
+    schema: SchemaMetadata,
+    exc: ValidationError,
+    result: ValidationResult,
+    ciphertext_fields: Collection[str] = (),
 ) -> None:
-    """Map a constraint-pass ValidationError onto field or model type_errors."""
+    """Map a constraint-pass ValidationError onto field or model type_errors.
+
+    A field in ``ciphertext_fields`` was left out because its value is
+    encrypted, so the model checked its default instead: an empty default
+    failed ``min_length=1`` (or ``str_min_length=1``) and ``validate --ci``
+    failed a file whose real value it never saw. Errors there are dropped,
+    unless the model has checks that a failed field stops
+    (``SchemaMetadata.checks_after_fields``): those never ran, so the error
+    stays, and says so.
+    """
     alias_to_field = {
         binding_name: name
         for name, fm in schema.fields.items()
@@ -297,7 +315,14 @@ def _record_constraint_errors(
         if entry is None:
             continue
         field_name, message = entry
-        result.type_errors.setdefault(field_name, message)
+        if field_name not in ciphertext_fields:
+            result.type_errors.setdefault(field_name, message)
+        elif schema.checks_after_fields:
+            result.type_errors.setdefault(
+                field_name,
+                f"its default stands in for the encrypted value and fails ({message}), "
+                "so the model's own validators could not run",
+            )
 
 
 class Validator:
@@ -524,11 +549,11 @@ class Validator:
 
         from pydantic import ValidationError
 
-        values = _collect_constraint_values(schema, env_by_name)
+        values, ciphertext_fields = _collect_constraint_values(schema, env_by_name)
         try:
             schema.model_class.model_validate(values)
         except ValidationError as exc:
-            _record_constraint_errors(schema, exc, result)
+            _record_constraint_errors(schema, exc, result, ciphertext_fields)
         except Exception as exc:
             # A model-level @model_validator / model_post_init can raise a
             # non-ValidationError; the base-type check already ran, so a

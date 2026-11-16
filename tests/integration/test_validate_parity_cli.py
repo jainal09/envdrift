@@ -60,6 +60,127 @@ def _validate_ci(tmp_path: Path, integration_env: dict[str, str], env_name: str 
 class TestValidateCiParity:
     """validate --ci exit codes must match whether the real app starts."""
 
+    @pytest.mark.parametrize(
+        "case",
+        [
+            ("str_min_length=1", "", 1),
+            ("str_min_length=1", "x", 0),
+            ("str_max_length=3", "long", 1),
+            ("str_max_length=3", "abc", 0),
+            ("str_max_length=0", "x", 1),
+            ("str_max_length=0", "", 0),
+        ],
+        ids=["too-short", "minimum", "too-long", "maximum", "zero-maximum-invalid", "empty"],
+    )
+    def test_model_string_limits_match_app_startup(self, tmp_path, integration_env, case):
+        """#952: model-config limits must run even without per-field constraints."""
+        config, value, expected_exit = case
+        _write_schema(
+            tmp_path,
+            f"""
+            from pydantic_settings import BaseSettings, SettingsConfigDict
+
+            class Settings(BaseSettings):
+                model_config = SettingsConfigDict({config})
+                ENVDRIFT_TEST_952_NAME: str
+            """,
+        )
+        (tmp_path / ".env").write_text(f"ENVDRIFT_TEST_952_NAME={value}\n", encoding="utf-8")
+        child_env = integration_env.copy()
+        child_env.pop("ENVDRIFT_TEST_952_NAME", None)
+        application = subprocess.run(
+            [sys.executable, "-c", "from sc import Settings; Settings(_env_file='.env')"],
+            cwd=tmp_path,
+            env=child_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            check=False,
+        )
+        assert application.returncode == expected_exit, application.stdout + application.stderr
+
+        result = _validate_ci(tmp_path, child_env)
+
+        out = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == expected_exit, out
+        assert ("Validation PASSED" in out) is (expected_exit == 0)
+
+    @pytest.mark.parametrize(
+        ("config", "field"),
+        [
+            ("", 'ENVDRIFT_TEST_952_KEY: str = Field("", min_length=1)'),
+            ("str_min_length=1", 'ENVDRIFT_TEST_952_KEY: str = ""'),
+        ],
+        ids=["field-min-length", "model-str-min-length"],
+    )
+    def test_encrypted_value_is_not_judged_by_its_default(
+        self, tmp_path, integration_env, config, field
+    ):
+        """An encrypted value cannot be checked, so neither may its default be.
+
+        Left out of the constraint pass, the value fell back to its empty default,
+        which fails min_length=1, and validate --ci exited 1 for a file whose real
+        value it never saw.
+        """
+        _write_schema(
+            tmp_path,
+            f"""
+            from pydantic import Field
+            from pydantic_settings import BaseSettings, SettingsConfigDict
+
+            class Settings(BaseSettings):
+                model_config = SettingsConfigDict({config})
+                {field}
+            """,
+        )
+        (tmp_path / ".env").write_text(
+            "ENVDRIFT_TEST_952_KEY=encrypted:BAAAexample\n", encoding="utf-8"
+        )
+
+        result = _validate_ci(tmp_path, integration_env)
+
+        out = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == 0, out
+        assert "Validation PASSED" in out, out
+
+    def test_an_encrypted_default_does_not_pass_a_model_check_that_never_ran(
+        self, tmp_path, integration_env
+    ):
+        """The default fails its field, so the model's after-validator never runs.
+
+        Dropping that error passed a PORT of 0, which the validator refuses whatever
+        the secret is: validate --ci must still fail the file, and say why.
+        """
+        _write_schema(
+            tmp_path,
+            """
+            from pydantic import Field, model_validator
+            from pydantic_settings import BaseSettings
+
+            class Settings(BaseSettings):
+                ENVDRIFT_TEST_952_KEY: str = Field("", min_length=1)
+                ENVDRIFT_TEST_952_PORT: int = 8080
+
+                @model_validator(mode="after")
+                def port_positive(self):
+                    if self.ENVDRIFT_TEST_952_PORT <= 0:
+                        raise ValueError("PORT must be positive")
+                    return self
+            """,
+        )
+        (tmp_path / ".env").write_text(
+            "ENVDRIFT_TEST_952_KEY=encrypted:BAAAexample\nENVDRIFT_TEST_952_PORT=0\n",
+            encoding="utf-8",
+        )
+
+        result = _validate_ci(tmp_path, integration_env)
+
+        out = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == 1, out
+        assert "Validation FAILED" in out, out
+        assert "could not run" in out, out
+
     def test_bool_spelling_on_exits_zero(self, tmp_path, integration_env):
         """#472: DEBUG=on loads in pydantic-settings; --ci must exit 0."""
         _write_schema(
