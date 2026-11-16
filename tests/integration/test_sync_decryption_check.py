@@ -33,7 +33,9 @@ def test_sync_decryption_check_does_not_pass_through_a_second_key_of_a_ring(
     """A first value "K1,K2" hands dotenvx both keys, so K2 could pass a check of K1.
 
     The file is encrypted under K2. K1 alone fails the check and K2 alone
-    passes it; the key ring of both must fail, not pass through K2.
+    passes it; the key ring of both must fail, not pass through K2. So must a
+    quoted value whose first line is K1 and whose second line names K2: dotenvx
+    reads it as K1 alone, but staged without its quotes it was two keys.
     """
     (k1, _), (k2, k2_public) = DOTENVX_KEY_PAIRS[0], DOTENVX_KEY_PAIRS[1]
     env_file = tmp_path / ".env.production"
@@ -55,7 +57,9 @@ def test_sync_decryption_check_does_not_pass_through_a_second_key_of_a_ring(
     )
 
     verdicts = {}
-    for label, held in (("K1", k1), ("K2", k2), ("ring", f"{k1},{k2}")):
+    quoted_lines = f'"{k1}\nDOTENV_PRIVATE_KEY_STAGING={k2}"'
+    cases = (("K1", k1), ("K2", k2), ("ring", f"{k1},{k2}"), ("quoted lines", quoted_lines))
+    for label, held in cases:
         keys_file.write_text(f"{PRODUCTION}={held}\n")
         verdicts[label] = engine._test_decryption(mapping)
 
@@ -63,4 +67,5 @@ def test_sync_decryption_check_does_not_pass_through_a_second_key_of_a_ring(
         "K1": DecryptionTestResult.FAILED,
         "K2": DecryptionTestResult.PASSED,
         "ring": DecryptionTestResult.FAILED,
+        "quoted lines": DecryptionTestResult.FAILED,
     }

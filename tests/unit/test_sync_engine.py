@@ -704,8 +704,9 @@ class TestSyncEngineDecryptionTest:
         )
         env_file = tmp_path / ".env.production"
         env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n', encoding="utf-8")
+        # A value dotenvx can use as a key: one it would skip is not staged.
         (tmp_path / "custom.keys").write_text(
-            "DOTENV_PRIVATE_KEY_PRODUCTION=key\n", encoding="utf-8"
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={'a' * 64}\n", encoding="utf-8"
         )
 
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")

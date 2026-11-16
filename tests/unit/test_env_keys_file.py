@@ -134,6 +134,44 @@ def test_write_key_does_not_overwrite_a_file_created_after_its_check(
     assert keys_path.read_text(encoding="utf-8") == theirs
 
 
+def test_write_key_does_not_replace_a_key_written_while_it_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another writer commits while envdrift writes its new copy of the file: theirs is kept.
+
+    The check of the key read was done by then, so only the file read again
+    right before the rename shows the change.
+    """
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=old\n", encoding="utf-8")
+    theirs = "DOTENV_PRIVATE_KEY_PRODUCTION=old\nDOTENV_PRIVATE_KEY_STAGING=theirs\n"
+    real_fsync = os.fsync
+
+    def other_writer_commits(fd: int) -> None:
+        real_fsync(fd)
+        keys_path.write_text(theirs, encoding="utf-8")
+
+    monkeypatch.setattr(os, "fsync", other_writer_commits)
+
+    with pytest.raises(ValueError, match="changed while envdrift was working on it"):
+        EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=["old"])
+
+    assert keys_path.read_text(encoding="utf-8") == theirs
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_write_key_keeps_the_mode_of_the_file_it_rewrites(tmp_path: Path) -> None:
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=old\n", encoding="utf-8")
+    keys_path.chmod(0o640)
+
+    EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=["old"])
+
+    assert EnvKeysFile(keys_path).read_values("DOTENV_PRIVATE_KEY_PRODUCTION") == ["new"]
+    assert keys_path.stat().st_mode & 0o777 == 0o640
+
+
 def test_write_key_does_not_overwrite_a_file_created_while_it_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

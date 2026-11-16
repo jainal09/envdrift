@@ -91,6 +91,43 @@ def test_decryption_check_fails_a_first_value_of_two_keys(
     assert ran == []
 
 
+@pytest.mark.parametrize(
+    ("first_value", "staged_keys"),
+    [
+        pytest.param(
+            f'"{VAULT}\nDOTENV_PRIVATE_KEY_STAGING={OTHER}"', f"{NAME}={VAULT}\n", id="line-break"
+        ),
+        pytest.param(
+            f'"{VAULT}\\nDOTENV_PRIVATE_KEY_STAGING={OTHER}"', f"{NAME}={VAULT}\n", id="escaped"
+        ),
+        pytest.param(f'"zz\\nDOTENV_PRIVATE_KEY_STAGING={OTHER}"', None, id="no-usable-key"),
+    ],
+)
+def test_decryption_check_stages_no_other_line_of_a_quoted_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first_value: str, staged_keys: str | None
+) -> None:
+    """dotenvx reads a quoted value's key from its leading hex digits, and only that is staged.
+
+    Staged as written, without its quotes, the value's second line was a key of
+    its own, and dotenvx decrypts with any key in the file.
+    """
+    (tmp_path / ".env.keys").write_text(f"{NAME}={first_value}\n", encoding="utf-8")
+    monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+    staged: list[str | None] = []
+
+    def fake_run(cmd, **kwargs):
+        keys = Path(kwargs["cwd"]) / ".env.keys"
+        staged.append(keys.read_text(encoding="utf-8") if keys.exists() else None)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+    engine = _engine(tmp_path, VAULT, SyncMode())
+
+    engine._test_decryption(engine.config.mappings[0])
+
+    assert staged == [staged_keys]
+
+
 def test_decryption_check_stages_a_ring_of_one_key_as_that_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

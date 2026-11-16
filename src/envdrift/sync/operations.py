@@ -127,11 +127,14 @@ class EnvKeysFile:
         ``expected`` is every value the caller read under ``key_name`` when it
         decided to write (``[]`` for none). When the file holds anything else
         by now, another writer changed it in between, and nothing is written.
+        Nor is it when the file changes while the new copy is written: it is
+        read again right before that copy replaces it.
         """
         self.require_readable_value(key_name, value)
         if self.path.exists():
             # UTF-8 like dotenvx itself, regardless of the platform locale (#474).
-            content = self.path.read_bytes().decode("utf-8")
+            raw = self.path.read_bytes()
+            content = raw.decode("utf-8")
             self._require_unchanged(key_name, content, expected)
             new_lines, key_found = _rewrite_key_lines(content.splitlines(), key_name, value)
 
@@ -147,7 +150,8 @@ class EnvKeysFile:
                 new_content += "\n"
 
             self._require_only_value(key_name, value, content, new_content)
-            atomic_write(self.path, new_content)
+            if not replace_if_unchanged(self.path, raw, new_content):
+                raise self._changed_error(key_name)
         else:
             self._require_unchanged(key_name, "", expected)
             # Create new file with header. dotenvx leaves a blank line between
@@ -304,18 +308,7 @@ def atomic_write(
     # Ensure parent directory exists
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Preserve the destination's existing mode if it already exists as a real
-    # file. Use ``lstat`` (does not follow symlinks) and skip preservation when
-    # the destination is a symlink: an attacker who pre-plants a symlink at the
-    # destination pointing at a 0o777 file they own must not be able to force
-    # that permissive mode onto the freshly written secret.
-    mode = permissions
-    with contextlib.suppress(FileNotFoundError):
-        dest_stat = path.lstat()
-        if not stat.S_ISLNK(dest_stat.st_mode):
-            mode = dest_stat.st_mode & 0o777
-    if max_permissions is not None:
-        mode &= max_permissions
+    mode = _destination_mode(path, permissions, max_permissions)
 
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=f".{path.name}.", suffix=".envdrift-tmp"
@@ -357,6 +350,57 @@ def atomic_write(
         with contextlib.suppress(FileNotFoundError):
             tmp_path.unlink()
         raise
+
+
+def _destination_mode(path: Path, permissions: int, max_permissions: int | None = None) -> int:
+    """The mode a file written over ``path`` gets: the mode of the file there, if any.
+
+    ``lstat`` does not follow symlinks, and a destination that is a symlink keeps
+    ``permissions``: an attacker who pre-plants a symlink at the destination
+    pointing at a 0o777 file they own must not be able to force that permissive
+    mode onto the freshly written secret.
+    """
+    mode = permissions
+    with contextlib.suppress(FileNotFoundError):
+        dest_stat = path.lstat()
+        if not stat.S_ISLNK(dest_stat.st_mode):
+            mode = dest_stat.st_mode & 0o777
+    if max_permissions is not None:
+        mode &= max_permissions
+    return mode
+
+
+def replace_if_unchanged(path: Path, before: bytes, content: str) -> bool:
+    """Replace ``path`` with ``content`` whole, but only while it still holds ``before``.
+
+    The new content is written to a temp file and synced first. Only then is
+    ``path`` read again, and the temp file renamed over it when that read gives
+    ``before``. So a writer that changed the file while envdrift worked on it is
+    not overwritten, except in the moment between that read and the rename.
+    Returns False, with nothing written, when the file changed.
+    """
+    mode = _destination_mode(path, 0o600)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".envdrift-tmp"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        _write_fd(fd, content.encode("utf-8"), mode)
+        if _read_bytes_or_none(path) != before:
+            return False
+        tmp_path.replace(path)
+        return True
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
+
+
+def _read_bytes_or_none(path: Path) -> bytes | None:
+    """Return the bytes of ``path``, or ``None`` when no file is there."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
 
 
 def create_new_file(path: Path, content: str, permissions: int = 0o600) -> None:

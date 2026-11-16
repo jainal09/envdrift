@@ -117,7 +117,9 @@ name, so the copy gets a keys file holding only the key sync compared with the
 vault: the first `DOTENV_PRIVATE_KEY_<ENV>` value of the mapping's keys file. A
 second, locally created key in `.env.keys` cannot make the check pass. dotenvx
 reads a value such as `a,b` as a key ring of two keys, so a first value that
-holds two different keys fails the check instead of passing through either. Stray
+holds two different keys fails the check instead of passing through either. The
+key is staged as the hex digits dotenvx reads from the value, so the next line of
+a quoted value never becomes a second key in the copy's keys file. Stray
 `DOTENV_PRIVATE_KEY*` variables in your shell are ignored too, and mappings with
 relative `folder_path` values (the usual monorepo layout) verify correctly from
 the project root.

@@ -590,23 +590,39 @@ class _EncryptSnapshot:
     def restore(self) -> None:
         """Put both files back exactly as they were (a created keys file goes).
 
+        Each file is put back on its own, so one that cannot be put back does
+        not keep the other from it: the keys file can hold the only copy of a key.
+
         Raises:
             DotenvxError: A file could not be put back; the message says which.
         """
-        try:
-            if _read_bytes_or_none(self.env_file) != self.env_bytes:
-                _replace_file(self.env_file, self.env_bytes)
-            current_keys = _read_bytes_or_none(self.keys_file)
-            if self.keys_bytes is None:
-                if current_keys is not None:
-                    self.keys_file.unlink()
-            elif current_keys != self.keys_bytes:
-                _replace_file(self.keys_file, self.keys_bytes)
-        except OSError as exc:
+        failures: list[tuple[Path, OSError]] = []
+        for path, put_back in (
+            (self.env_file, self._put_back_env_file),
+            (self.keys_file, self._put_back_keys_file),
+        ):
+            try:
+                put_back()
+            except OSError as exc:
+                failures.append((path, exc))
+        if failures:
+            names = " and ".join(str(path) for path, _ in failures)
+            reasons = "; ".join(str(exc) for _, exc in failures)
             raise DotenvxError(
-                f"Could not put {self.env_file} and {self.keys_file} back after a failed "
-                f"encryption: {exc}"
-            ) from exc
+                f"Could not put {names} back after a failed encryption: {reasons}"
+            ) from failures[0][1]
+
+    def _put_back_env_file(self) -> None:
+        if _read_bytes_or_none(self.env_file) != self.env_bytes:
+            _replace_file(self.env_file, self.env_bytes)
+
+    def _put_back_keys_file(self) -> None:
+        current_keys = _read_bytes_or_none(self.keys_file)
+        if self.keys_bytes is None:
+            if current_keys is not None:
+                self.keys_file.unlink()
+        elif current_keys != self.keys_bytes:
+            _replace_file(self.keys_file, self.keys_bytes)
 
 
 def _read_bytes_or_none(path: Path) -> bytes | None:

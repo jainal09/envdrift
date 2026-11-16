@@ -174,6 +174,27 @@ def test_a_restore_that_cannot_write_says_so(tmp_path: Path):
         wrapper.encrypt(env_file)
 
 
+def test_an_env_file_that_cannot_be_put_back_does_not_keep_the_keys_file_from_it(
+    tmp_path: Path,
+):
+    """dotenvx replaced the held key: it is put back although the env file cannot be."""
+    env_file, keys_file = _setup(tmp_path, keys=f"{NAME}={K1}\n")
+
+    def replace_key_and_env_file(env: Path, keys: Path) -> None:
+        keys.write_text(f"{NAME}={K2}\n", encoding="utf-8")
+        env.unlink()
+        env.mkdir()
+
+    wrapper, _ = _wrapper(replace_key_and_env_file)
+
+    with pytest.raises(DotenvxError, match="Could not put") as excinfo:
+        wrapper.encrypt(env_file)
+
+    assert keys_file.read_text(encoding="utf-8") == f"{NAME}={K1}\n"
+    assert str(env_file) in str(excinfo.value)
+    assert str(keys_file) not in str(excinfo.value)
+
+
 def test_a_file_that_cannot_be_written_is_a_clean_error(tmp_path: Path, monkeypatch):
     """The seeded header cannot be written: a DotenvxError, not a raw OSError."""
     env_file, _ = _setup(tmp_path, keys=f"{NAME}={K1}\n")

@@ -73,7 +73,8 @@ exit code (dotenvx can exit `0` without encrypting):
   again. If a key that was there before changed or gained a second value, if dotenvx
   created a new key although one was held, or if the file now carries a public key
   whose private key was not saved, both files are put back byte for byte (line endings
-  included) and the command fails instead of printing `[OK]`.
+  included) and the command fails instead of printing `[OK]`. Each file is put back on its
+  own: when one cannot be, the other still is, and the error names the one that could not.
 - **Keeps a renamed file's header.** A header block under another name is removed only
   when the file's own header is also there. On its own it still holds the public key the
   file's values were encrypted with, so `.env.staging` renamed to `.env.production` keeps

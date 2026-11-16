@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 from envdrift.env_files import detect_env_file, resolve_mapping_env_file
-from envdrift.integrations.dotenvx_keys import distinct_keys, private_key_candidates
+from envdrift.integrations.dotenvx_keys import (
+    distinct_keys,
+    private_key_candidates,
+    private_key_scalar,
+)
 from envdrift.sync.config import ServiceMapping, SyncConfig
 from envdrift.sync.operations import EnvKeysFile, atomic_write, ensure_directory, redact_value
 from envdrift.sync.result import (
@@ -46,7 +50,10 @@ def _stage_first_key(env_keys_path: Path, key_name: str, temp_dir: Path) -> bool
 
     dotenvx splits a value on "," into a key ring and decrypts with any of its
     keys, so a first value of two different keys is no one key to test: that
-    returns False. Nothing is staged when the keys file holds no such value.
+    returns False. The key is staged as the 64 hex digits dotenvx reads from it:
+    staged as written, a quoted value's next line became a key of its own.
+    Nothing is staged when the keys file holds no such value, or none dotenvx
+    could use.
     """
     value = EnvKeysFile(env_keys_path).read_key(key_name)
     keys = [] if value is None else distinct_keys(private_key_candidates([value]))
@@ -59,8 +66,9 @@ def _stage_first_key(env_keys_path: Path, key_name: str, temp_dir: Path) -> bool
             key_name,
         )
         return False
-    if keys:
-        atomic_write(temp_dir / ".env.keys", f"{key_name}={keys[0]}\n")
+    scalar = private_key_scalar(keys[0]) if keys else None
+    if scalar is not None:
+        atomic_write(temp_dir / ".env.keys", f"{key_name}={scalar:064x}\n")
     return True
 
 
