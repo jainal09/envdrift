@@ -467,6 +467,15 @@ def _print_plaintext_notice(
         )
 
 
+def _nothing_left_unprotected(
+    decrypted_count: int, protected_count: int, unprotected: list[Path]
+) -> bool:
+    """Whether the run decrypted nothing, or protected every file it decrypted."""
+    if decrypted_count == 0:
+        return True
+    return not unprotected and protected_count >= decrypted_count
+
+
 def _print_unprotected_warning(
     decrypted_count: int, protected_count: int, unprotected: list[Path]
 ) -> bool:
@@ -478,7 +487,7 @@ def _print_unprotected_warning(
     Decrypting succeeded, so this is a warning; the exit code stays as it is.
     Returns True when it printed.
     """
-    if decrypted_count == 0 or (not unprotected and protected_count >= decrypted_count):
+    if _nothing_left_unprotected(decrypted_count, protected_count, unprotected):
         return False
     body = Text.from_markup(
         "[bold red]🚨  SECRET FILES ARE PLAINTEXT WITH NO GIT PROTECTION[/bold red]\n\n"

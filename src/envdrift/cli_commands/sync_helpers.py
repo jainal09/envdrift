@@ -522,12 +522,23 @@ def _put_back_original(task: _DecryptTask) -> str:
     return ""
 
 
+def _pull_decrypt_failure(result: Any, error: Any) -> str | None:
+    """Why one file's pull decrypt failed, or None when it succeeded."""
+    if error is not None:
+        return str(error)
+    if result is None:
+        return "unknown error"
+    if result.success:
+        return None
+    return str(result.message)
+
+
 def _record_pull_decrypt_result(
     task: _DecryptTask, result: Any, error: Any, context: _PullDecryptContext
 ) -> None:
-    if error is not None or result is None or not result.success:
-        reason = error if error is not None else (result.message if result else "unknown error")
-        reason = f"{reason}{_put_back_original(task)}"
+    failure = _pull_decrypt_failure(result, error)
+    if failure is not None:
+        reason = f"{failure}{_put_back_original(task)}"
         console.print(
             styled_text("  [red]![/red] {} [red]- error: {}[/red]", task.env_file, reason)
         )
