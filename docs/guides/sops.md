@@ -143,7 +143,9 @@ See [`encrypt`](../cli/encrypt.md) and [`decrypt`](../cli/decrypt.md).
   --output-type dotenv <file>`, or `sops updatekeys` after editing `.sops.yaml`.
 - **Encrypted by the other backend** — `encrypt` refuses to double-encrypt a
   dotenvx-encrypted file with SOPS (and vice versa); decrypt with the original
-  backend first.
+  backend first. Only ciphertext in the values counts: the `DOTENV_PUBLIC_KEY`
+  header `dotenvx decrypt` leaves behind does not, and a SOPS file that kept that
+  key's name is still detected as SOPS.
 
 ## Key resolution precedence
 

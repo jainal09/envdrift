@@ -161,7 +161,8 @@ Re-running `encrypt` on an already-encrypted SOPS file verifies the post-state: 
 fully encrypted file is an honest exit-0 no-op (`already encrypted (no change)`),
 while surviving plaintext values or recipient flags missing from the file's metadata
 fail loudly. A file encrypted with the other backend is refused instead of being
-double-encrypted. See the
+double-encrypted. The refusal rests on the ciphertext the values hold, so a file
+`dotenvx decrypt` left with only its `DOTENV_PUBLIC_KEY` header encrypts with SOPS. See the
 [SOPS guide](../guides/sops.md#re-running-encrypt-on-an-already-encrypted-file).
 
 ## Examples

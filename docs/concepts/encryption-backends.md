@@ -203,6 +203,11 @@ envdrift decrypt .env.production
 envdrift encrypt .env.production --backend sops --age "age1..."
 ```
 
+`dotenvx decrypt` keeps the file's `DOTENV_PUBLIC_KEY` header, and SOPS keeps that
+key's name when it encrypts the file. envdrift tells the backends apart by the
+ciphertext the values hold, not by that header, so step 2 is not refused as "already
+encrypted with dotenvx", and `envdrift decrypt .env.production` then auto-detects SOPS.
+
 ### From SOPS to dotenvx
 
 ```bash
