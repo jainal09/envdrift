@@ -16,18 +16,17 @@ from envdrift.config import (
 )
 from envdrift.core.partial_encryption import (
     PartialEncryptionError,
+    SecretsOnlyPullError,
+    dotenvx_key_files,
     pull_partial_encryption,
     pull_secrets_only,
     push_partial_encryption,
     push_secrets_only,
+    unprotected_reason,
 )
 from envdrift.output.rich import console, print_error, print_success, print_warning
-from envdrift.utils import ensure_gitignore_entries
+from envdrift.utils import ensure_gitignore_entries, unignored_paths
 from envdrift.utils.text import styled_text
-
-# dotenvx writes the PRIVATE decryption key here during encryption. It must never
-# be committed, in either combine or secrets-only mode.
-_DOTENVX_KEYS_FILE = ".env.keys"
 
 
 def _print_line(template: str, *values: object) -> None:
@@ -53,12 +52,51 @@ def _ensure_combined_gitignore(envs_to_process) -> None:
     paths = [
         Path(e.combined_file) for e in envs_to_process if not e.secrets_only and e.combined_file
     ]
-    # Always protect the dotenvx private-key file regardless of mode.
-    paths.append(Path(_DOTENVX_KEYS_FILE))
-    added_entries = ensure_gitignore_entries(paths)
+    # Protect the PRIVATE key files dotenvx actually writes, in either mode: next
+    # to each secret file, not ./.env.keys. Run from a repository subdirectory,
+    # a cwd entry did not cover them and `git add .` staged the key (#961).
+    # ensure_gitignore_entries writes repository-root-relative entries, so they
+    # stay anchored wherever push runs, each in the .gitignore of the file's own
+    # repository (a submodule's, for a file in one).
+    key_files = [key for env_config in envs_to_process for key in dotenvx_key_files(env_config)]
+    added_entries = ensure_gitignore_entries([*paths, *key_files])
     if added_entries:
-        # The entries are configured paths: print them as they are.
+        # Text, not markup: the entries are printed exactly as written to .gitignore,
+        # never parsed as tags (a [/x] folder raised MarkupError) or emoji codes.
         console.print(Text(f"Updated .gitignore: {', '.join(added_entries)}", style="dim"))
+    _stop_unless_git_ignores(key_files)
+
+
+def _stop_unless_git_ignores(key_files: list[Path]) -> None:
+    """Exit 1 unless git says it ignores every one of the private key files ``key_files``.
+
+    Fail closed: an entry can still be overridden (by a later `!` rule in a .gitignore),
+    and then `git add .` stages the private key. Ask git, in each key file's own
+    repository, and stop before dotenvx touches a partial-encryption file unless git says
+    it ignores every one. (pull --merge gets here after its earlier steps, which may have
+    decrypted mapped files.)
+    """
+    exposed = unignored_paths(key_files)
+    re_included = [shown for shown, reason in exposed if reason is None]
+    unconfirmed = [f"{shown} ({reason})" for shown, reason in exposed if reason is not None]
+    stopped = "envdrift stopped before it encrypted or decrypted any partial-encryption file."
+    if re_included:
+        # git check-ignore does not report a tracked path as ignored, whatever the rules.
+        print_error(
+            f"git does not ignore {', '.join(re_included)}, where dotenvx keeps the private "
+            "key, so `git add .` would stage it. A rule in your git ignore files "
+            "re-includes it (a `!` pattern, for example), or git already tracks it. If "
+            "`git ls-files` lists it, the key is in the repository: run `git rm --cached` on "
+            f"it and rotate the key. Fix that and run again: {stopped}"
+        )
+    if unconfirmed:
+        print_error(
+            f"git could not say whether it ignores {', '.join(unconfirmed)}, where dotenvx "
+            "keeps the private key, so envdrift cannot make sure `git add .` would not "
+            f"stage it. Fix that and run again: {stopped}"
+        )
+    if exposed:
+        raise typer.Exit(code=1)
 
 
 def push(
@@ -325,9 +363,11 @@ def pull_cmd(
 
     decrypted_count = 0
     skipped_count = 0
-    # Tracks whether skip-worktree protection was actually applied to at least one
-    # file, so the Security Notice doesn't claim protection that silently failed.
-    protected_any = False
+    # Skip-worktree protection, per file this run decrypted: the notice must
+    # never call the set protected while one of them is not, and a file that
+    # was plaintext already does not count (#998).
+    protected_count = 0
+    unprotected: list[Path] = []
     errors = []
 
     for env_config in envs_to_process:
@@ -338,7 +378,8 @@ def pull_cmd(
             if env_config.secrets_only:
                 result = pull_secrets_only(env_config)
                 skipped_count += result["already_decrypted"]
-                protected_any = protected_any or result.get("protected", 0) > 0
+                protected_count += result.get("protected", 0)
+                unprotected.extend(result.get("unprotected", []))
                 if result["decrypted"]:
                     _print_line(
                         "  [green]✓[/green] Decrypted {} file(s) in {} "
@@ -356,16 +397,34 @@ def pull_cmd(
                     )
             else:
                 was_decrypted, protected = pull_partial_encryption(env_config)
-                protected_any = protected_any or protected
                 if was_decrypted:
                     _print_line("  [green]✓[/green] Decrypted {}", env_config.secret_file)
                     decrypted_count += 1
+                    if protected:
+                        protected_count += 1
+                    else:
+                        unprotected.append(Path(env_config.secret_file))
                 else:
                     _print_line(
                         "  [dim]=[/dim] {} [dim](already decrypted)[/dim]", env_config.secret_file
                     )
                     skipped_count += 1
 
+        except SecretsOnlyPullError as e:
+            # The files decrypted before the failing one are plaintext on disk:
+            # count them rather than report the environment as untouched (#948).
+            if e.decrypted:
+                _print_line(
+                    "  [green]✓[/green] Decrypted {} file(s) in {} before the error",
+                    e.decrypted,
+                    env_config.secrets_dir,
+                )
+            decrypted_count += e.decrypted
+            skipped_count += e.already_decrypted
+            protected_count += e.protected
+            unprotected.extend(e.unprotected)
+            _print_line("  [red]✗[/red] {}", e)
+            errors.append(f"{env_config.name}: {e}")
         except PartialEncryptionError as e:
             _print_line("  [red]✗[/red] {}", e)
             errors.append(f"{env_config.name}: {e}")
@@ -384,17 +443,33 @@ def pull_cmd(
 
     console.print(Panel("\n".join(summary_lines), title="Pull Summary", expand=False))
 
+    console.print()
     if errors:
-        console.print()
         print_warning("Some environments had errors:")
         for error in errors:
             console.print(Text(f"  • {error}"))
+    else:
+        print_success("Pull complete! Secret files are now decrypted for editing.")
+
+    # The files this run decrypted are plaintext on disk even when another
+    # environment failed, so the notice is shown either way (#948).
+    _print_plaintext_notice(decrypted_count, protected_count, unprotected)
+
+    if errors:
         raise typer.Exit(code=1)
 
-    console.print()
-    print_success("Pull complete! Secret files are now decrypted for editing.")
 
-    if decrypted_count > 0 and protected_any:
+def _print_plaintext_notice(
+    decrypted_count: int, protected_count: int, unprotected: list[Path]
+) -> None:
+    """Warn that decrypted secret files are plaintext, and how they are protected.
+
+    The yellow notice says they are protected only when every file this run
+    decrypted is; otherwise the DANGER warning names the ones that are not (#998).
+    """
+    if _print_unprotected_warning(decrypted_count, protected_count, unprotected):
+        return
+    if decrypted_count > 0:
         console.print()
         console.print(
             Panel(
@@ -411,19 +486,59 @@ def pull_cmd(
                 expand=False,
             )
         )
-    elif decrypted_count > 0:
-        console.print()
-        console.print(
-            Panel(
-                "[bold red]🚨  SECRET FILES ARE PLAINTEXT WITH NO GIT PROTECTION[/bold red]\n\n"
-                "Decryption succeeded but [bold]git skip-worktree[/bold] could not be applied "
-                "(e.g. detached HEAD, untracked file, or git unavailable).\n\n"
-                "[bold]A plain [bold cyan]git add .[/bold cyan] WILL stage your plaintext "
-                "secrets.[/bold] Do not run git add until you have re-encrypted.\n\n"
-                "Re-encrypt immediately with:\n"
-                "  [bold cyan]envdrift push[/bold cyan]   ← re-encrypts your secret files",
-                title="[bold red]⚠  DANGER: No Git Protection Applied[/bold red]",
-                border_style="red",
-                expand=False,
-            )
+
+
+def _nothing_left_unprotected(
+    decrypted_count: int, protected_count: int, unprotected: list[Path]
+) -> bool:
+    """Whether the run decrypted nothing, or protected every file it decrypted."""
+    if decrypted_count == 0:
+        return True
+    return not unprotected and protected_count >= decrypted_count
+
+
+def _print_unprotected_warning(
+    decrypted_count: int, protected_count: int, unprotected: list[Path]
+) -> bool:
+    """Name each decrypted secret file git skip-worktree could not protect, and why.
+
+    Shared by ``pull-partial`` and ``pull`` (#998, #999). Prints only when a file
+    this run decrypted is not protected, checked both by the files the pull
+    named and by the counts, so the set is never called protected by mistake.
+    Decrypting succeeded, so this is a warning; the exit code stays as it is.
+    Returns True when it printed.
+    """
+    if _nothing_left_unprotected(decrypted_count, protected_count, unprotected):
+        return False
+    body = Text.from_markup(
+        "[bold red]🚨  SECRET FILES ARE PLAINTEXT WITH NO GIT PROTECTION[/bold red]\n\n"
+        "Decryption succeeded, but [bold]git skip-worktree[/bold] "
+    )
+    if unprotected:
+        body.append("could not be applied to these decrypted files:\n")
+        for path in unprotected:
+            # Plain text, never markup: escape() let an emoji code in a path such as
+            # secrets/:fire:/.env.a print as an emoji, naming a file that does not exist.
+            body.append(f"  • {path} ({unprotected_reason(path)})\n")
+    else:
+        body.append("could not be applied to the decrypted files.\n")
+    if protected_count:
+        body.append(f"The other {protected_count} decrypted file(s) are marked skip-worktree.\n")
+    body.append_text(
+        Text.from_markup(
+            "\n[bold]Nothing stops a plain [bold cyan]git add .[/bold cyan] from staging "
+            "them.[/bold] Do not run git add until you have re-encrypted.\n\n"
+            "Re-encrypt immediately with:\n"
+            "  [bold cyan]envdrift push[/bold cyan]   ← re-encrypts your secret files"
         )
+    )
+    console.print()
+    console.print(
+        Panel(
+            body,
+            title="[bold red]⚠  DANGER: No Git Protection Applied[/bold red]",
+            border_style="red",
+            expand=False,
+        )
+    )
+    return True

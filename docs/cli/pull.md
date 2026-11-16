@@ -112,9 +112,14 @@ When this flag is used with partial encryption enabled, the command will:
 
 1. Decrypt `.env.{env}.secret` files
 2. Merge `.env.{env}.clear` + decrypted `.env.{env}.secret` → `.env.{env}`
-3. Add the combined file to `.gitignore` (it contains decrypted secrets)
+3. Add the combined file to `.gitignore` (it contains decrypted secrets), along
+   with the dotenvx `.env.keys` next to each `.secret` file, as `push` does
 
-This creates a single usable `.env` file for local development.
+This creates a single usable `.env` file for local development. If git still does
+not ignore one of those key files (a `!` rule re-includes it, or git already tracks
+it), or cannot say whether
+it does, the partial-encryption step stops with exit 1 before it decrypts or merges
+anything, as `push` does.
 
 > **Note:** The merged `.env.{env}` file contains decrypted secrets, so it is
 > added to `.gitignore` (just like `envdrift push`) to keep a routine
@@ -167,7 +172,7 @@ envdrift pull --profile local
 
 ## Output
 
-The command shows progress in two steps:
+The command shows progress in up to three steps:
 
 ### Step 1: Sync Keys
 
@@ -207,6 +212,29 @@ Step 2: Decrypting environment files...
 
 Setup complete! Your environment files are ready to use.
 ```
+
+A file that dotenvx can only partly decrypt (for example, one value was encrypted
+under another key) is counted as an error, and the file is left byte for byte as
+it was instead of half decrypted. The error names the value dotenvx could not
+decrypt; see [decrypt](decrypt.md#a-value-encrypted-under-another-key).
+
+### Step 3: Partial Encryption Files
+
+When partial encryption is enabled, `pull` then decrypts each `.secret` file and
+each secrets-only directory the way [`pull-partial`](pull-partial.md#when-a-decrypt-fails)
+does: a file that fails to decrypt is left as it was, and in secrets-only mode the
+files decrypted before the failing one are still counted under `Decrypted:` in
+the Partial Encryption Summary, whatever stopped the pull (a file it cannot read,
+say). An environment that fails is reported in that summary, never as a traceback.
+
+Like `pull-partial`, `pull` marks each decrypted secret file `skip-worktree` so a
+plain `git add .` does not stage its plaintext. git can only mark a file it tracks.
+When a decrypted file could not be marked, `pull` gives the same red DANGER
+warning as `pull-partial`, after `Setup complete!` (or before it exits 1 on an
+error). The warning names each such file with the reason (`untracked`, `outside a
+git repository`, or `skip-worktree failed`); see
+[pull-partial](pull-partial.md#plaintext-protection). Decrypting succeeded, so the
+exit code does not change; re-encrypt with `envdrift push` before you commit.
 
 ## Configuration File Format
 

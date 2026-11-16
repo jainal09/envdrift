@@ -148,10 +148,31 @@ envdrift pull-partial --env production
 1. Decrypts `.env.{env}.secret` in-place
 2. Makes it available for editing
 
+**When a decrypt fails** (see [pull-partial](../cli/pull-partial.md#when-a-decrypt-fails)):
+
+- If dotenvx can decrypt only some values (one value was encrypted under another
+  key, for example after a merge), the `.secret` file is put back byte for byte, so
+  it stays encrypted and nothing is left half decrypted in a tracked file. The error
+  names the value dotenvx could not decrypt.
+- A secret file that still holds ciphertext after dotenvx exits 0 is a failure, not
+  a decrypt. For a SOPS-encrypted `.secret`, which dotenvx cannot read, the error
+  says `it still holds SOPS ciphertext` and how to move the file to dotenvx: mark it
+  with `git update-index --skip-worktree <file>`, in the repository that tracks the
+  file (a submodule's, for a file in one), then run
+  `envdrift decrypt <file> --backend sops` and `envdrift push`. The file is left as
+  it was, is not counted, and is not marked `skip-worktree`.
+- In secrets-only mode the pull stops at that file. The files decrypted before it
+  are counted under `Decrypted:`, marked `skip-worktree`, and announced by the
+  plaintext notice, which is shown even when the command exits 1.
+
 ## Git Setup
 
 `envdrift push` automatically adds the combined file **and** the dotenvx
-private-key file (`.env.keys`) to `.gitignore`. You only need:
+private-key file to `.gitignore`. dotenvx writes that key to the `.env.keys` next
+to the `.secret` file (for `config/.env.production.secret`, `config/.env.keys`), and
+the entry is relative to the repository root, so it holds when you run `push` from
+a subdirectory. For a `.secret` file in a git submodule, the entries go in the
+submodule's `.gitignore`. You only need:
 
 ```gitignore
 *.bak
@@ -165,7 +186,7 @@ private-key file (`.env.keys`) to `.gitignore`. You only need:
 | `.env.production.clear` | ✅ Yes | Plain text, safe in history |
 | `.env.production.secret` | ✅ Yes | Always encrypted when committed |
 | `.env.production` | ❌ No | Runtime artifact, auto-gitignored |
-| `.env.keys` | ❌ No | dotenvx **private** decryption key, auto-gitignored |
+| `.env.keys` (next to the `.secret` file) | ❌ No | dotenvx **private** decryption key, auto-gitignored |
 
 ### Verify in CI
 
@@ -261,7 +282,9 @@ git commit -m "Migrate to partial encryption"
 - ✅ **Run `push` before committing** to re-encrypt `.secret` and regenerate the combined file
 - ✅ **Run `pull-partial` + `push` after `git pull`** to regenerate the combined file from updated sources
 - ✅ **Never commit the combined file** — it is a runtime artifact, auto-gitignored by `push`
-- ✅ **The `.secret` file is git-protected while decrypted** — `git add .` won't stage it until `push` re-encrypts it
+- ✅ **The `.secret` file is git-protected while decrypted** — `git add .` won't stage it until `push` re-encrypts it.
+  This needs git to track the file: `pull-partial` names any decrypted file it could not protect (untracked,
+  outside a git repository, or skip-worktree failed) in a red DANGER warning instead of calling it protected
 - ✅ **The pre-commit hook is a hard block** — if a plaintext `.secret` (or
   `.env.keys`) is staged, the commit is refused. The plaintext `.clear` half
   commits normally, and an encrypted `.secret` passes. Install it with
@@ -352,6 +375,12 @@ git commit -m "Update production secrets"
 
 Only the secrets directory needs gitignore consideration.
 The configs directory is committed as-is since it is never modified by envdrift.
+
+dotenvx writes a private key file (`.env.keys`) into each folder whose files it
+encrypts. `envdrift push` adds `secrets/production/.env.keys` to `.gitignore`, and
+with a recursive `pattern` like `**/.env*` it adds the `.env.keys` of every nested
+folder it encrypts too. The entries are relative to the root of the repository the
+folder is in (a submodule's, for a folder in a submodule).
 
 ```gitignore
 # Optionally ignore decrypted backups if your editor creates them

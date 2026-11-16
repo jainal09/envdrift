@@ -1,6 +1,12 @@
 """Pytest configuration and shared fixtures."""
 
+import os
+import shutil
 import subprocess
+import sys
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from pydantic import Field
@@ -21,6 +27,25 @@ def _no_inherited_git_location(monkeypatch):
     """
     for name in GIT_LOCATION_VARIABLES:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def searchable_tmp_path(tmp_path: Path) -> Iterator[Path]:
+    """``tmp_path``, except as root: a fresh directory that ``nobody`` can search.
+
+    pytest keeps root's temporary directories under ``/tmp/pytest-of-root``, mode
+    0700, so a test that drops to ``nobody`` to make a file unreadable
+    (``tests.helpers.unreadable_file``) could not even reach its files there.
+    """
+    if sys.platform == "win32" or os.geteuid() != 0:
+        yield tmp_path
+        return
+    directory = Path(tempfile.mkdtemp(prefix="envdrift-test-"))
+    directory.chmod(0o711)
+    try:
+        yield directory
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

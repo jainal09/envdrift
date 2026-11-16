@@ -33,9 +33,31 @@ The summary panel labels secrets-only counts as **"Encrypted files (secrets-only
 combine-mode counts as **"Encrypted vars"** (and shows both when an
 envdrift run mixes the two modes).
 
-In both modes, `push` ensures the dotenvx private-key file (`.env.keys`) is listed
-in `.gitignore` so the decryption key is never committed. In combine mode it also
-adds each `combined_file` to `.gitignore`.
+In both modes, `push` ensures the dotenvx private-key files are listed in
+`.gitignore` so the decryption key is never committed. dotenvx writes the key to
+the `.env.keys` next to the file it encrypts, so that is the file `push` ignores:
+next to each `secret_file` in combine mode, and in secrets-only mode the
+`.env.keys` in `secrets_dir` and in every folder the `pattern` reaches (a
+recursive pattern like `**/.env*` gets one key file per folder). The entries are
+relative to the repository root, so they still match when `push` runs from a
+subdirectory, and gitignore syntax in a path is escaped (a folder named `[prod]` is
+written `\[prod]`), so each entry matches exactly that file. Each entry goes in the
+`.gitignore` of the repository the file is in: for a file in a git submodule, the
+submodule's, since `git add` there never reads the superproject's `.gitignore`. In
+combine mode it also adds each `combined_file` to `.gitignore`. `pull-partial` adds
+the same entries.
+
+It then asks git, in each key file's own repository, whether it ignores the file.
+A rule can still re-include one after the entry, such as `!.env.keys` in a deeper
+`.gitignore`, and then `git add .` would stage the private key. git also never ignores
+a file it already tracks: then the key is in the repository, and the message says to run
+`git rm --cached` on it and rotate the key. In either case `push` exits 1 with
+`git does not ignore <key file>, ...` before any environment runs, so nothing is
+encrypted or decrypted. The check fails closed: when git cannot answer
+for a key file in a repository (git fails, times out or is not installed), `push`
+exits 1 the same way, with `git could not say whether it ignores <key file> (<why>), ...`.
+`pull-partial` and `pull --merge` make the same check. `push --check` changes nothing, so it
+writes no entries and makes no such check.
 
 This command requires partial encryption to be configured in `envdrift.toml`.
 
