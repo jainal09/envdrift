@@ -20,6 +20,7 @@ import subprocess  # nosec B404
 import sys
 import tempfile
 import urllib.request
+from bisect import bisect_left
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -1184,11 +1185,12 @@ class DotenvxWrapper:
         header that cleanup may remove.
         """
         in_values = value_continuation_lines(text)
+        breaks = [index for index, char in enumerate(text) if char == "\n"]
         return [
             block
             for block in cls.DOTENVX_HEADER_BLOCK_PATTERN.finditer(text)
             if block.start() == 0 or text[block.start() - 1] == "\n"
-            if text.count("\n", 0, block.start()) not in in_values
+            if bisect_left(breaks, block.start()) not in in_values
         ]
 
     @staticmethod

@@ -1302,6 +1302,56 @@ class TestVaultPullNeverDropsADifferentLocalKey:
         assert keys.read_text(encoding="utf-8") == theirs
 
     @patch("envdrift.vault.get_vault_client")
+    def test_force_makes_no_backup_for_a_key_it_would_not_write(self, mock_get_client, tmp_path):
+        """A vault key dotenvx would read back as another value is refused before any backup."""
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}#tail"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={self.LOCAL_KEY}\n", encoding="utf-8")
+        before = keys.read_bytes()
+
+        result = runner.invoke(app, self._args(tmp_path, "--force"))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "would not read" in out
+        assert keys.read_bytes() == before
+        assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_a_refused_write_after_the_backup_keeps_it(
+        self, mock_get_client, tmp_path, monkeypatch
+    ):
+        """Another writer changes the key while --force backs it up: the backup is kept."""
+        from envdrift.cli_commands import vault_keys
+
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={self.LOCAL_KEY}\n", encoding="utf-8")
+        theirs = "DOTENV_PRIVATE_KEY_PRODUCTION=theirs\n"
+        back_up = vault_keys._backup_pull_keys
+
+        def back_up_then_another_writer(env_keys_path):
+            backup = back_up(env_keys_path)
+            keys.write_text(theirs, encoding="utf-8")
+            return backup
+
+        monkeypatch.setattr(vault_keys, "_backup_pull_keys", back_up_then_another_writer)
+
+        result = runner.invoke(app, self._args(tmp_path, "--force"))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "was kept" in out
+        assert keys.read_text(encoding="utf-8") == theirs
+        backups = [path for path in tmp_path.iterdir() if ".backup." in path.name]
+        assert len(backups) == 1
+        assert self.LOCAL_KEY in backups[0].read_text(encoding="utf-8")
+
+    @patch("envdrift.vault.get_vault_client")
     def test_force_stops_when_the_backup_cannot_be_ignored(
         self, mock_get_client, tmp_path, monkeypatch
     ):

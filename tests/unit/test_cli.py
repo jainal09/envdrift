@@ -4397,7 +4397,9 @@ class TestLockCommand:
         service_dir = tmp_path / "svc"
         service_dir.mkdir()
         (service_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={secret}\n")
-        (service_dir / ".env.production").write_text("SECRET=encrypted:xyz\n")
+        (service_dir / ".env.production").write_text(
+            f'DOTENV_PUBLIC_KEY_PRODUCTION="{DOTENVX_KEY_PAIRS[0][1]}"\nSECRET=encrypted:xyz\n'
+        )
 
         from envdrift.sync.config import ServiceMapping, SyncConfig
 

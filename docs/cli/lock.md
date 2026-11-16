@@ -189,7 +189,8 @@ that is not a dotenvx key, a file already encrypted under another public key, or
 encrypted values but no public key is refused with both files left as they were, and if dotenvx still creates or replaces a key, or leaves
 the file without the held key's public key, both files are put back and the file counts as an
 error. An already encrypted file is checked the same way: a held value that is not a dotenvx
-key, or that is not the key of the file's public key, is an error, not "already encrypted".
+key, or that is not the key of the file's public key, is an error, not "already encrypted", and
+so is a held key for a file whose encrypted values have no public key to check it against.
 
 A custom filename (`env_file = ".env.prod"` for `environment = "production"`) has its key
 renamed to the canonical `DOTENV_PRIVATE_KEY_<ENVIRONMENT>`. A different key that is already

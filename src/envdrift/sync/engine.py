@@ -41,10 +41,39 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _first_value_keys(env_keys_path: Path, key_name: str) -> list[str]:
-    """The distinct keys of the first ``key_name`` value, split like dotenvx's key ring."""
+def _stage_first_key(env_keys_path: Path, key_name: str, temp_dir: Path) -> bool:
+    """Stage the one key of the first ``key_name`` value in ``temp_dir/.env.keys``.
+
+    dotenvx splits a value on "," into a key ring and decrypts with any of its
+    keys, so a first value of two different keys is no one key to test: that
+    returns False. Nothing is staged when the keys file holds no such value.
+    """
     value = EnvKeysFile(env_keys_path).read_key(key_name)
-    return [] if value is None else distinct_keys(private_key_candidates([value]))
+    keys = [] if value is None else distinct_keys(private_key_candidates([value]))
+    if len(keys) > 1:
+        logger.warning(
+            "Decryption check failed: %s holds %d keys in its first %s value, "
+            "and dotenvx decrypts with any of them",
+            env_keys_path,
+            len(keys),
+            key_name,
+        )
+        return False
+    if keys:
+        atomic_write(temp_dir / ".env.keys", f"{key_name}={keys[0]}\n")
+    return True
+
+
+def _write_after_backup(
+    env_keys_file: EnvKeysFile, ctx: _ServiceSyncContext, held: list[str], backup: Path
+) -> None:
+    """Write the vault key; a refused write names the backup it leaves in place."""
+    try:
+        env_keys_file.write_key(
+            ctx.effective_key_name, ctx.vault_value, ctx.effective_environment, expected=held
+        )
+    except ValueError as e:
+        raise ValueError(f"{e} The backup {backup} was kept.") from None
 
 
 @dataclass
@@ -394,11 +423,10 @@ class SyncEngine:
             should_update = self.prompt_callback(prompt_msg)
 
         if should_update:
-            # Create backup before updating
+            # A vault key that cannot be written needs no backup: check it first.
+            env_keys_file.require_readable_value(ctx.effective_key_name, ctx.vault_value)
             backup_path = env_keys_file.create_backup()
-            env_keys_file.write_key(
-                ctx.effective_key_name, ctx.vault_value, ctx.effective_environment, expected=held
-            )
+            _write_after_backup(env_keys_file, ctx, held, backup_path)
             return ServiceSyncResult(
                 secret_name=ctx.mapping.secret_name,
                 folder_path=ctx.mapping.folder_path,
@@ -573,27 +601,15 @@ class SyncEngine:
             # name, so copying the whole file let a second, locally minted key
             # pass a check meant for the vault key (#938). The check tests the
             # first value of the mapping's key name only; sync itself compares
-            # every value under that name with the vault. dotenvx splits a value
-            # on "," into a key ring, so a first value of two keys is no one key.
-            keys = _first_value_keys(env_keys_path, key_name)
-            if len(keys) > 1:
-                logger.warning(
-                    "Decryption check for %s failed: %s holds %d keys in its first %s value, "
-                    "and dotenvx decrypts with any of them",
-                    target_file,
-                    env_keys_path,
-                    len(keys),
-                    key_name,
-                )
-                return DecryptionTestResult.FAILED
+            # every value under that name with the vault.
             with tempfile.TemporaryDirectory(prefix=".envdrift-check-decryption-") as temp_dir:
                 temp_dir_path = Path(temp_dir)
                 # Preserve the file name: dotenvx derives the expected
                 # DOTENV_PRIVATE_KEY_<ENV> name from it.
                 temp_copy = temp_dir_path / target_file.name
                 shutil.copy2(target_file, temp_copy)
-                if keys:
-                    atomic_write(temp_dir_path / ".env.keys", f"{key_name}={keys[0]}\n")
+                if not _stage_first_key(env_keys_path, key_name, temp_dir_path):
+                    return DecryptionTestResult.FAILED
 
                 try:
                     result = subprocess.run(  # nosec B603

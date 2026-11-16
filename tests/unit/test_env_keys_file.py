@@ -46,39 +46,36 @@ def test_write_key_rewrites_every_line_a_reader_would_load(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize(
-    ("original", "value", "held", "message"),
+    "case",
     [
         # dotenvx reads ``KEY:`` + newline + value as the key: never append a second one.
         pytest.param(
-            "# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION:\nold\n",
-            "new",
-            ["old"],
-            "cannot rewrite",
+            (
+                "# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION:\nold\n",
+                "new",
+                ["old"],
+                "cannot rewrite",
+            ),
             id="key-on-the-next-line",
         ),
         # dotenvx reads one value of A here, which a line-by-line rewrite would split.
         pytest.param(
-            "A=1\u2028DOTENV_PRIVATE_KEY_PRODUCTION=old\n",
-            "new",
-            [],
-            "cannot rewrite",
+            ("A=1\u2028DOTENV_PRIVATE_KEY_PRODUCTION=old\n", "new", [], "cannot rewrite"),
             id="line-separator-inside-a-value",
         ),
         # dotenvx reads ``#`` as a comment, so it would load "new", not the value given.
         pytest.param(
-            "DOTENV_PRIVATE_KEY_PRODUCTION=old\n",
-            "new#tail",
-            ["old"],
-            "would not read",
+            ("DOTENV_PRIVATE_KEY_PRODUCTION=old\n", "new#tail", ["old"], "would not read"),
             id="value-with-a-hash",
         ),
-        pytest.param(None, "new#tail", [], "would not read", id="value-with-a-hash-new-file"),
+        pytest.param((None, "new#tail", [], "would not read"), id="value-with-a-hash-new-file"),
     ],
 )
 def test_write_key_writes_nothing_dotenvx_would_read_otherwise(
-    tmp_path: Path, original: str | None, value: str, held: list[str], message: str
+    tmp_path: Path, case: tuple[str | None, str, list[str], str]
 ) -> None:
     """No write when dotenvx would load another value, or read another name differently."""
+    original, value, held, message = case
     keys_path = tmp_path / ".env.keys"
     if original is not None:
         keys_path.write_text(original, encoding="utf-8")
@@ -113,6 +110,26 @@ def test_write_key_refuses_a_key_written_since_it_was_read(
         assert not keys_path.exists()
     else:
         assert keys_path.read_text(encoding="utf-8") == before
+
+
+def test_write_key_does_not_overwrite_a_file_created_after_its_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another writer creates the keys file after write_key found none: it is kept."""
+    keys_path = tmp_path / ".env.keys"
+    theirs = "DOTENV_PRIVATE_KEY_PRODUCTION=theirs\n"
+    keys_path.write_text(theirs, encoding="utf-8")
+    real_exists = Path.exists
+
+    def exists_before_the_other_writer(self: Path, *args, **kwargs) -> bool:
+        return False if self == keys_path else real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists_before_the_other_writer)
+
+    with pytest.raises(ValueError, match="changed while envdrift was working on it"):
+        EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=[])
+
+    assert keys_path.read_text(encoding="utf-8") == theirs
 
 
 def test_write_key_writes_when_the_key_is_still_what_was_read(tmp_path: Path) -> None:

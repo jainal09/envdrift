@@ -379,8 +379,8 @@ sure git ignores it (it adds `<folder>/<keys file>.backup.*`, for example `servi
 covers it) before writing it. If a `.gitignore` rule such as `!*.backup.*` would still let git track it, no backup is written and the key is not
 updated. A key whose quoted value spans several lines is replaced with all of its lines. A key written as `DOTENV_PRIVATE_KEY_<ENV>:` with the key
 on the next line cannot be rewritten in place, and neither can one whose rewrite would change how dotenvx reads another line: that service is
-reported as an error with its keys file unchanged. So is a vault key that dotenvx would read back as another value, such as one holding `#`, and a
-key that another process changed after sync read it.
+reported as an error with its keys file unchanged. So is a vault key that dotenvx would read back as another value, such as one holding `#` (no
+backup is made for it), and a key that another process changed after sync read it (the error names the backup, which is kept).
 
 ```text
   ~ services/myapp (myapp-key, env: production) - updated

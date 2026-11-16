@@ -123,16 +123,15 @@ def _refuse_pull_overwrite(env_keys_path: Path, key_name: str) -> Never:
     raise typer.Exit(code=1)
 
 
-def _backup_pull_keys(env_keys_path: Path) -> None:
+def _backup_pull_keys(env_keys_path: Path) -> Path:
     """Back up ``.env.keys`` (gitignored) before a forced replacement."""
     from envdrift.sync.operations import EnvKeysFile
 
     try:
-        backup = EnvKeysFile(env_keys_path).create_backup()
+        return EnvKeysFile(env_keys_path).create_backup()
     except OSError as e:
         print_error(f"Cannot back up {env_keys_path}: {e}. Nothing was changed.")
         raise typer.Exit(code=1) from None
-    print_warning(f"Replacing the local {env_keys_path.name} key; backup: {backup}")
 
 
 def write_pull_key(request: VaultPullRequest, key_name: str, key_value: str) -> Path | None:
@@ -147,18 +146,23 @@ def write_pull_key(request: VaultPullRequest, key_name: str, key_value: str) -> 
     from envdrift.sync.operations import EnvKeysFile
 
     env_keys_path = request.folder / ".env.keys"
+    keys = EnvKeysFile(env_keys_path)
     held = _held_pull_values(env_keys_path, key_name)
     if set(held) == {key_value}:
         return None
-    if held:
-        if not request.force:
-            _refuse_pull_overwrite(env_keys_path, key_name)
-        _backup_pull_keys(env_keys_path)
+    backup = None
     try:
-        EnvKeysFile(env_keys_path).write_key(
-            key_name, key_value, environment=request.environment, expected=held
-        )
+        # A key that cannot be written needs no backup: check it first.
+        keys.require_readable_value(key_name, key_value)
+        if held:
+            if not request.force:
+                _refuse_pull_overwrite(env_keys_path, key_name)
+            backup = _backup_pull_keys(env_keys_path)
+        keys.write_key(key_name, key_value, environment=request.environment, expected=held)
     except (OSError, ValueError) as e:
-        print_error(f"Cannot write {env_keys_path}: {e}")
+        kept = f" The backup {backup} was kept." if backup else ""
+        print_error(f"Cannot write {env_keys_path}: {e}{kept}")
         raise typer.Exit(code=1) from None
+    if backup:
+        print_warning(f"Replaced the local {env_keys_path.name} key; backup: {backup}")
     return env_keys_path

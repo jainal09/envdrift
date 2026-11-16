@@ -29,6 +29,10 @@ from tests.helpers import DOTENVX_KEY_PAIRS, DummyEncryptionBackend
 runner = CliRunner()
 # A key dotenvx can use: lock checks the key held for an encrypted file (#938).
 HELD_KEY = DOTENVX_KEY_PAIRS[0][0]
+# An encrypted file as dotenvx writes it for HELD_KEY: its public key, then ciphertext.
+ENCRYPTED_FOR_HELD_KEY = (
+    f'DOTENV_PUBLIC_KEY_PRODUCTION="{DOTENVX_KEY_PAIRS[0][1]}"\nSECRET=encrypted:abc\n'
+)
 
 
 # --------------------------------------------------------------------------
@@ -699,9 +703,7 @@ class TestLockCommand:
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
         # already-encrypted file (>=90% encrypted) -> nothing to encrypt
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -764,9 +766,7 @@ class TestLockCommand:
     def test_lock_verify_vault_keys_match(self, mock_resolve, tmp_path, loaded_config, no_git_hook):
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
 
         client = MagicMock()
@@ -786,9 +786,7 @@ class TestLockCommand:
     ):
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
 
         client = MagicMock()
@@ -878,9 +876,7 @@ class TestLockCommand:
         """#473: a missing vault secret is "cannot verify" -> hard error."""
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
 
         client = MagicMock()
@@ -901,9 +897,7 @@ class TestLockCommand:
         """#473: an empty vault secret is "cannot verify" -> hard error."""
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
 
         client = MagicMock()
@@ -922,9 +916,7 @@ class TestLockCommand:
     ):
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=localkey\n")
 
         client = MagicMock()
@@ -947,9 +939,7 @@ class TestLockCommand:
         string false-mismatching the local key forever (#480)."""
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
 
         client = MagicMock()
@@ -1037,9 +1027,7 @@ class TestLockCommand:
     ):
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -1404,9 +1392,7 @@ class TestLockRelabelOnKeyNameMismatch:
         """dotenvx skips a held value it cannot use, so nothing here decrypts the file."""
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=not-a-key\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -1418,6 +1404,25 @@ class TestLockRelabelOnKeyNameMismatch:
             assert (
                 "DOTENV_PRIVATE_KEY_PRODUCTION in the keys file is not a valid dotenvx key" in out
             )
+            assert "already encrypted" not in out
+
+    @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+    def test_lock_flags_ciphertext_without_a_public_key(
+        self, mock_resolve, tmp_path, loaded_config, no_git_hook
+    ):
+        """With no public key in the file, nothing ties the held key to its values."""
+        backend = DummyEncryptionBackend()
+        mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
+        (tmp_path / ".env.production").write_text("SECRET=encrypted:abc\n")
+        (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
+        loaded_config(_sync_config([mapping]))
+
+        for args in (["lock", "--force"], ["lock", "--check"]):
+            result = runner.invoke(app, args)
+            out = " ".join(result.output.split())
+            assert result.exit_code == 1, result.output
+            assert "holds encrypted values but no DOTENV_PUBLIC_KEY" in out
             assert "already encrypted" not in out
 
     @patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
@@ -1558,9 +1563,7 @@ class TestLockPartialEncryptionAll:
         cfg = _write_partial_config(tmp_path, secret_file, combined_file)
 
         # A regular mapping that is already encrypted so step 2 is uneventful.
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -1594,9 +1597,7 @@ class TestLockPartialEncryptionAll:
         combined_file.write_text("API_KEY=plain\nPUBLIC=ok\n")
         cfg = _write_partial_config(tmp_path, secret_file, combined_file)
 
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -1619,9 +1620,7 @@ class TestLockPartialEncryptionAll:
         combined_file.write_text("API_KEY=plain\n")
         cfg = _write_partial_config(tmp_path, secret_file, combined_file)
 
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -1651,9 +1650,7 @@ class TestLockPartialEncryptionAll:
         combined_file = tmp_path / ".env"
         cfg = _write_partial_config(tmp_path, secret_file, combined_file)
 
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -1672,9 +1669,7 @@ class TestLockPartialEncryptionAll:
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
         cfg = _write_partial_config(tmp_path, None, None, secrets_only=True)
 
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -1703,9 +1698,7 @@ class TestLockPartialEncryptionAll:
         secrets_dir.mkdir()
         (secrets_dir / ".env.api").write_text("API_TOKEN=plain\n")
 
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=k\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -1732,9 +1725,7 @@ class TestLockPartialEncryptionAll:
         secrets_dir.mkdir()
         (secrets_dir / ".env.api").write_text("API_TOKEN=encrypted:abc\n")
 
-        (tmp_path / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={HELD_KEY}\n")
         mapping = ServiceMapping(secret_name="s", folder_path=tmp_path, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -1949,9 +1940,7 @@ class TestNonUtf8MappedFilesCleanError:
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
         folder = tmp_path / "svc"
         folder.mkdir()
-        (folder / ".env.production").write_text(
-            "#/---BEGIN DOTENV ENCRYPTED---/\nSECRET=encrypted:abc\n"
-        )
+        (folder / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (folder / ".env.keys").write_bytes(b"DOTENV_PRIVATE_KEY_PRODUCTION=caf\xe9\n")
         mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
         loaded_config(_sync_config([mapping]))
@@ -2095,7 +2084,7 @@ class TestEveryHeldValueAndKeyConflicts:
         """dotenvx splits a value on ',' into keys: compare those keys, not the raw lines."""
         backend = DummyEncryptionBackend()
         mock_resolve.return_value = (backend, EncryptionProvider.DOTENVX, None)
-        (tmp_path / ".env.production").write_text("SECRET=encrypted:abc\n")
+        (tmp_path / ".env.production").write_text(ENCRYPTED_FOR_HELD_KEY)
         (tmp_path / ".env.keys").write_text(keys_text)
         client = MagicMock()
         client.get_secret.return_value = SecretValue(

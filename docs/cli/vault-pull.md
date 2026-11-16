@@ -78,8 +78,9 @@ as `DOTENV_PRIVATE_KEY_<ENV>:` with the key on the next line, which dotenvx also
 be rewritten in place: the command fails and `.env.keys` is left unchanged. Write it as
 `DOTENV_PRIVATE_KEY_<ENV>=<key>` and re-run. The command also fails, with `.env.keys`
 unchanged, rather than change how dotenvx reads any other line of the file, or write a vault key
-that dotenvx would read back as another value, such as one holding `#`. If another process
-changes the key after `vault-pull` read it, nothing is written either: run the command again.
+that dotenvx would read back as another value, such as one holding `#`; such a key is refused
+before any backup is made. If another process changes the key after `vault-pull` read it,
+nothing is written either, and the error names the backup `--force` made: run the command again.
 
 ## Options
 

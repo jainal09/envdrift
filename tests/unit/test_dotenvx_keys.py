@@ -29,6 +29,7 @@ from envdrift.integrations.dotenvx_keys import (
     plan_key_reuse,
     private_key_candidates,
     private_key_scalar,
+    private_keys,
     public_key_for,
     public_key_values,
     seed_public_key,
@@ -264,6 +265,14 @@ def test_plan_refuses_ciphertext_without_a_public_key(tmp_path: Path):
         _plan("A=encrypted:abc\nB=new\n", f"{NAME}={K1}\n", tmp_path)
 
 
+def test_plan_drops_the_other_lines_of_a_multiline_public_key(tmp_path: Path):
+    """A header whose quoted value spans lines is replaced whole: no line of it is left."""
+    text = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB2}\nDOTENV_PRIVATE_KEY_PRODUCTION=hidden"\nA=plain\n'
+    plan = _plan(text, f"{NAME}={K1}\n", tmp_path)
+    assert plan.env_text == f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB1}"\nA=plain\n'
+    assert private_keys(plan.env_text) == {}
+
+
 def test_plan_refuses_a_file_encrypted_under_another_key(tmp_path: Path):
     text = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB2}"\nA=encrypted:abc\nB=new\n'
     with pytest.raises(KeyReuseError, match="encrypted with another public key"):
@@ -375,6 +384,13 @@ def test_outcome_flags_a_second_public_key_prepended_to_the_file(tmp_path: Path)
 
 
 # --- read-only check for encrypted files (lock, B4) ----------------------------
+
+
+def test_held_key_problem_flags_ciphertext_without_a_public_key():
+    """Nothing ties a held key to values with no header, so lock cannot vouch for it."""
+    problem = held_key_problem("A=encrypted:x\n", f"{NAME}={K1}\n", NAME) or ""
+    assert "holds encrypted values but no DOTENV_PUBLIC_KEY" in problem
+    assert held_key_problem("A=encrypted:x\n", None, NAME) is None
 
 
 def test_held_key_problem_cases():

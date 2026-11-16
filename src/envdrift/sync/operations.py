@@ -128,7 +128,7 @@ class EnvKeysFile:
         decided to write (``[]`` for none). When the file holds anything else
         by now, another writer changed it in between, and nothing is written.
         """
-        self._require_readable_value(key_name, value)
+        self.require_readable_value(key_name, value)
         if self.path.exists():
             # UTF-8 like dotenvx itself, regardless of the platform locale (#474).
             content = self.path.read_bytes().decode("utf-8")
@@ -154,7 +154,10 @@ class EnvKeysFile:
             # the header block and the first "# .env.<environment>" comment —
             # reproduce its layout byte-for-byte (#474).
             content = f"{DOTENVX_HEADER}\n\n# .env.{environment}\n{key_name}={value}\n"
-            atomic_write(self.path, content)
+            try:
+                create_new_file(self.path, content)
+            except FileExistsError:
+                raise self._changed_error(key_name) from None
 
     def _require_unchanged(self, key_name: str, content: str, expected: list[str] | None) -> None:
         """Refuse when ``content`` no longer holds the ``expected`` values of ``key_name``.
@@ -163,12 +166,16 @@ class EnvKeysFile:
             ValueError: Another writer changed the key after the caller read it.
         """
         if expected is not None and assignment_values(content, key_name) != expected:
-            raise ValueError(
-                f"{self.path} changed while envdrift was working on it: it no longer holds "
-                f"the {key_name} envdrift read. Nothing was changed; run the command again."
-            )
+            raise self._changed_error(key_name)
 
-    def _require_readable_value(self, key_name: str, value: str) -> None:
+    def _changed_error(self, key_name: str) -> ValueError:
+        """The refusal for a key another writer changed after it was read."""
+        return ValueError(
+            f"{self.path} changed while envdrift was working on it: it no longer holds "
+            f"the {key_name} envdrift read. Nothing was changed; run the command again."
+        )
+
+    def require_readable_value(self, key_name: str, value: str) -> None:
         """Refuse a value that ``key_name=<value>`` would not load as given.
 
         dotenvx reads ``#`` as the start of a comment and strips quotes and
@@ -349,6 +356,25 @@ def atomic_write(
         # destination; suppress its absence so the original error propagates.
         with contextlib.suppress(FileNotFoundError):
             tmp_path.unlink()
+        raise
+
+
+def create_new_file(path: Path, content: str, permissions: int = 0o600) -> None:
+    """Write ``path`` whole, but only when no file is there yet.
+
+    The name is claimed with ``O_EXCL`` first, so a file that another writer
+    created in the meantime is never overwritten: ``FileExistsError`` is
+    raised instead. ``atomic_write`` then replaces the empty claim, so the file
+    never holds part of ``content``.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, permissions))
+    try:
+        atomic_write(path, content, permissions)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            if path.stat().st_size == 0:
+                path.unlink()
         raise
 
 

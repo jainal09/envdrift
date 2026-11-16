@@ -399,15 +399,25 @@ def rewrite_public_keys(text: str, public_key: str) -> str:
     """Set every single-line ``DOTENV_PUBLIC_KEY*`` value in ``text`` to ``public_key``.
 
     A line inside a quoted value that spans lines is that value's text, not a
-    public key, so it stays as it is.
+    public key, so it stays as it is. A public key whose own quoted value spans
+    lines is replaced whole: its other lines go with it.
     """
-    lines = text.split("\n")
     in_values = value_continuation_lines(text)
-    for index, line in enumerate(lines):
+    own = set().union(
+        *(
+            value_continuation_lines(text, name)
+            for name in parse_assignments(text)
+            if name.startswith(PUBLIC_KEY_PREFIX)
+        )
+    )
+    rewritten: list[str] = []
+    for index, line in enumerate(text.split("\n")):
         match = None if index in in_values else _PUBLIC_KEY_LINE_RE.match(line)
         if match:
-            lines[index] = f'{match.group("head")}"{public_key}"{match.group("tail")}'
-    return "\n".join(lines)
+            rewritten.append(f'{match.group("head")}"{public_key}"{match.group("tail")}')
+        elif index not in own:
+            rewritten.append(line)
+    return "\n".join(rewritten)
 
 
 @dataclass(frozen=True)
@@ -528,10 +538,16 @@ def held_key_problem(env_text: str, keys_text: str | None, key_name: str) -> str
     The read-only form of :func:`plan_key_reuse` for a file that is already
     encrypted: ``key_name`` must hold one key that dotenvx can use, and every
     public key in the file must be that key's. No key held is not a problem:
-    anyone may encrypt with the file's public key.
+    anyone may encrypt with the file's public key. A held key cannot be checked
+    against ciphertext in a file without a public key, so that is one.
     """
     values = assignment_values(keys_text, key_name) if keys_text else []
-    return held_values_problem(env_text, values, key_name)
+    problem = held_values_problem(env_text, values, key_name)
+    if problem is None and values and unverifiable_ciphertext(env_text):
+        return (
+            f"the file holds encrypted values but no DOTENV_PUBLIC_KEY to check {key_name} against"
+        )
+    return problem
 
 
 def held_values_problem(env_text: str, values: list[str], key_name: str) -> str | None:
