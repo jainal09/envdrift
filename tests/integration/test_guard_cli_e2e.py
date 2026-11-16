@@ -268,6 +268,141 @@ def test_committed_private_key_exit_code_one(git_repo: Path) -> None:
     assert payload["exit_code"] == 1
 
 
+# --- #1016: git is asked about each path as that one file -------------------
+
+_KEY_LINE = "DOTENV_PRIVATE_KEY_PRODUCTION=" + "a1b2c3d4" * 8 + "\n"
+_posix_names = pytest.mark.skipif(
+    sys.platform == "win32", reason="a Windows file name cannot hold ':'"
+)
+
+
+def _commit(work_dir: Path, *pathspecs: str) -> None:
+    _run_git(["add", "-f", "--", *pathspecs], cwd=work_dir)
+    _run_git(["commit", "-q", "-m", "files"], cwd=work_dir)
+
+
+def test_a_key_committed_in_a_directory_named_like_an_option_is_reported(git_repo: Path) -> None:
+    """A ``.env.keys`` committed below ``-svc`` is a committed-private-key (#1016).
+
+    git read ``-svc/.env.keys``, with no ``--`` before it, as options and exited 129, which
+    envdrift took for "not tracked": guard passed the committed key with exit 0.
+    """
+    (git_repo / "-svc").mkdir()
+    (git_repo / "-svc" / ".env.keys").write_text(_KEY_LINE)
+    _commit(git_repo, "-svc/.env.keys")
+
+    result = _run_envdrift(["guard", "--native-only", "--json", "--", "-svc"], cwd=git_repo)
+
+    assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+    assert "committed-private-key" in _rule_ids(_guard_json(result))
+
+
+@_posix_names
+def test_a_key_committed_in_a_directory_named_with_a_leading_colon_is_reported(
+    git_repo: Path,
+) -> None:
+    """``:sec/.env.keys`` is asked about as itself (#1016).
+
+    git read the leading ``:`` as pathspec magic, so it answered for ``sec/.env.keys``, which
+    is not tracked, and guard passed the committed key.
+    """
+    (git_repo / ":sec").mkdir()
+    (git_repo / ":sec" / ".env.keys").write_text(_KEY_LINE)
+    _commit(git_repo, ":(literal):sec/.env.keys")
+
+    result = _run_envdrift(["guard", "--native-only", "--json", ":sec"], cwd=git_repo)
+
+    assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+    assert "committed-private-key" in _rule_ids(_guard_json(result))
+
+
+def test_an_untracked_key_is_not_called_committed_because_its_name_is_a_glob(
+    git_repo: Path,
+) -> None:
+    """``[ab]/.env.keys`` is not tracked because ``a/.env.keys`` is (#1016).
+
+    As a glob, ``[ab]/.env.keys`` matched the committed ``a/.env.keys``, so guard called the
+    local key file committed as well.
+    """
+    for folder in ("a", "[ab]"):
+        (git_repo / folder).mkdir()
+        (git_repo / folder / ".env.keys").write_text(_KEY_LINE)
+    _commit(git_repo, "a/.env.keys")
+
+    result = _run_envdrift(["guard", "--native-only", "--json", "."], cwd=git_repo)
+
+    payload = _guard_json(result)
+    committed = {
+        f["file_path"] for f in payload["findings"] if f["rule_id"] == "committed-private-key"
+    }
+    assert committed == {"a/.env.keys"}, payload["findings"]
+
+
+def test_guard_fails_when_git_cannot_tell_whether_a_key_is_committed(git_repo: Path) -> None:
+    """A git failure is not "not tracked": the scan fails instead of passing (#1016)."""
+    (git_repo / ".env.keys").write_text(_KEY_LINE)
+    _commit(git_repo, ".env.keys")
+    (git_repo / ".git" / "index").write_bytes(b"not an index")
+
+    result = _run_envdrift(["guard", "--native-only", "--json", "."], cwd=git_repo)
+
+    payload = _guard_json(result)
+    errors = [r["error"] for r in payload["scanner_results"] if r["name"] == "native"]
+    assert result.returncode == 5, (result.returncode, result.stdout, result.stderr)
+    assert errors, payload["scanner_results"]
+    assert "git could not tell whether it tracks" in " ".join(str(errors[0]).split())
+
+
+@_posix_names
+def test_a_secret_committed_below_a_leading_colon_is_not_dropped_as_ignored(
+    git_repo: Path,
+) -> None:
+    """``--skip-gitignored`` keeps the findings of the committed ``:sec/app.env`` (#1016).
+
+    ``git check-ignore --stdin`` reads each path as a pathspec, so it was asked about
+    ``sec/app.env``, which ``sec/`` ignores, and the secret was dropped.
+    """
+    (git_repo / ".gitignore").write_text("sec/\n")
+    (git_repo / ":sec").mkdir()
+    (git_repo / ":sec" / "app.env").write_text(_LEAK_LINE)
+    _commit(git_repo, ".gitignore", ":(literal):sec/app.env")
+
+    result = _run_envdrift(
+        ["guard", "--native-only", "--skip-gitignored", "--json", "."], cwd=git_repo
+    )
+
+    payload = _guard_json(result)
+    assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+    assert any(
+        f["rule_id"] == "aws-secret-access-key" and f["file_path"] == ":sec/app.env"
+        for f in payload["findings"]
+    ), payload["findings"]
+
+
+@_posix_names
+def test_staged_scans_a_file_whose_name_starts_like_a_stage_number(git_repo: Path) -> None:
+    """``--staged`` scans the staged ``0:x/app.env``, not ``x/app.env`` (#1016).
+
+    ``git show :0:x/app.env`` is stage 0 of ``x/app.env``: the mirror held the other file's
+    clean blob, and the staged secret went unscanned.
+    """
+    for folder, line in (("x", "SETTING=value\n"), ("0:x", _LEAK_LINE)):
+        (git_repo / folder).mkdir()
+        (git_repo / folder / "app.env").write_text(line)
+    _run_git(["add", "--", "x/app.env", ":(literal)0:x/app.env"], cwd=git_repo)
+
+    result = _run_envdrift(
+        ["guard", "--staged", "--native-only", "--no-auto-install", "--json"], cwd=git_repo
+    )
+
+    payload = _guard_json(result)
+    assert result.returncode == 1, (result.returncode, result.stdout, result.stderr)
+    assert any(
+        f["rule_id"] == "aws-secret-access-key" and f["file_path"] == "0:x/app.env"
+        for f in payload["findings"]
+    ), payload["findings"]
+
+
 # --- BP-17 (P0): plaintext .env.production -> unencrypted-env-file HIGH, exit 2 --
 
 

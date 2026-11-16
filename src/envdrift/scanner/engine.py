@@ -99,6 +99,15 @@ def _as_reported(path: Path) -> Path:
 _BYTE_COLUMN_SCANNERS = frozenset({"gitleaks"})
 
 
+def _check_ignore_form(name: str) -> str:
+    """``name`` as ``git check-ignore --stdin`` reads it as that one path.
+
+    git reads each path on stdin as a pathspec, so a leading ``:`` was pathspec magic and the
+    answer was for another file (#1016). ``./`` in front keeps it a path.
+    """
+    return f"./{name}" if name.startswith(":") else name
+
+
 @dataclass
 class GuardConfig:
     """Configuration for the guard command and scan engine.
@@ -1175,10 +1184,14 @@ class ScanEngine:
                 # finding paths under a non-UTF-8 locale (and crashed
                 # ``Path.resolve()``). Binary pipes also sidestep Windows
                 # text-mode ``\n`` -> ``\r\n`` translation, and ``-z`` makes git
-                # read/print paths verbatim (no core.quotepath quoting).
+                # read/print paths verbatim (no core.quotepath quoting). git reads a
+                # path on stdin as a pathspec: the committed ``:sec/app.env`` was
+                # asked about as ``sec/app.env``, and its findings were dropped when
+                # ``sec/`` was ignored (#1016). git prints each path as it was given,
+                # and ``root / "./:sec/app.env"`` is the file.
                 result = subprocess.run(  # nosec B603, B607
                     ["git", "check-ignore", "--stdin", "-z"],
-                    input=b"\0".join(os.fsencode(p) for p in rel_paths) + b"\0",
+                    input=b"\0".join(os.fsencode(_check_ignore_form(p)) for p in rel_paths) + b"\0",
                     capture_output=True,
                     timeout=30,
                     cwd=str(root),
@@ -1259,9 +1272,12 @@ class ScanEngine:
             # compares equal to the configured combined-file names.
             # ``surrogateescape`` mirrors _filter_gitignored_files: it round-trips
             # raw filename bytes exactly, where ``replace`` would rewrite them.
+            # A name that starts with ``:`` is given as ``./:...``, as in
+            # _filter_gitignored_files, and git prints each name as it was given.
+            asked = [(_check_ignore_form(name), name) for name in self.config.combined_files]
             result = subprocess.run(  # nosec B603, B607
                 ["git", "check-ignore", "--stdin", "-z"],
-                input="\0".join(self.config.combined_files) + "\0",
+                input="\0".join(form for form, _ in asked) + "\0",
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -1283,7 +1299,8 @@ class ScanEngine:
                 )
                 return warnings
 
-            gitignored = {p for p in result.stdout.split("\0") if p}
+            printed = {p for p in result.stdout.split("\0") if p}
+            gitignored = {name for form, name in asked if form in printed}
 
             for combined_file in self.config.combined_files:
                 if combined_file not in gitignored:

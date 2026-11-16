@@ -568,14 +568,14 @@ def test_guard_staged_scans_only_staged_files(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("envdrift.cli_commands.guard.load_config", lambda _p=None: config)
     monkeypatch.setattr("envdrift.cli_commands.guard.ScanEngine", DummyEngine)
 
-    # Mock git: diff --cached lists two staged files; show :<path> returns the
+    # Mock git: diff --cached lists two staged files; show :0:<path> returns the
     # index blob (which differs from the working-tree copies on disk).
     def mock_run(cmd, *args, **kwargs):
         if "diff" in cmd and "--cached" in cmd:
             # ``-z`` prints NUL-separated bytes verbatim (#514).
             return subprocess.CompletedProcess(cmd, 0, stdout=b"file1.py\0file2.env\0", stderr=b"")
         if "show" in cmd:
-            rel = cmd[-1].removeprefix(":")
+            rel = cmd[-1].removeprefix(":0:")
             return subprocess.CompletedProcess(
                 cmd, 0, stdout=f"STAGED {rel}\n".encode(), stderr=b""
             )
@@ -988,7 +988,7 @@ def test_guard_staged_unreadable_blob_skipped_with_warning(tmp_path: Path, monke
         if "diff" in cmd and "--cached" in cmd:
             return subprocess.CompletedProcess(cmd, 0, stdout=b"submodule\0good.py\0", stderr=b"")
         if "show" in cmd:
-            if cmd[-1] == ":submodule":
+            if cmd[-1] == ":0:submodule":
                 return subprocess.CompletedProcess(
                     cmd, 128, stdout=b"", stderr=b"fatal: bad object\n"
                 )

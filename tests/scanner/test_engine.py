@@ -1633,6 +1633,32 @@ class TestCombinedFilesSecurity:
         assert "SECURITY WARNING" in warnings[0]
         assert ".env.production" in warnings[0]
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="a Windows file name cannot hold ':'")
+    @pytest.mark.parametrize(
+        ("ignore", "warned"),
+        [("sec/\n", True), (":sec/\n", False)],
+        ids=["another-folder-ignored", "its-folder-ignored"],
+    )
+    def test_a_combined_file_below_a_leading_colon_is_checked_as_itself(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ignore: str, warned: bool
+    ):
+        """``:sec/combined.env`` is checked as itself, not as ``sec/combined.env`` (#1016).
+
+        ``git check-ignore --stdin`` reads each path as a pathspec, so a leading ``:`` was
+        magic: the warning followed whether git ignores ``sec/``, not the file's own folder.
+        """
+        import subprocess
+
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, capture_output=True, check=True)
+        (tmp_path / ".gitignore").write_text(ignore)
+        monkeypatch.chdir(tmp_path)
+        engine = ScanEngine(GuardConfig(use_gitleaks=False, combined_files=[":sec/combined.env"]))
+
+        warnings = engine.check_combined_files_security()
+
+        assert bool(warnings) is warned, warnings
+        assert all(":sec/combined.env" in w for w in warnings)
+
     def test_combined_files_git_not_available(self, monkeypatch):
         """Test graceful handling when git is not available."""
         import subprocess

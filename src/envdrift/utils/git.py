@@ -363,6 +363,16 @@ def get_file_from_git(file_path: Path, ref: str = "HEAD") -> str | None:
         return None
 
 
+def _literal_pathspec(relative_path: Path) -> str:
+    """``relative_path`` as a pathspec that names that one file and nothing else.
+
+    Pass it after ``--``, so that a name starting with ``-`` is not an option. ``:(literal)``
+    stops git from reading ``[prod]`` as a glob, which matched ``p.env`` too, and a leading
+    ``:`` as pathspec magic, which named another file (#1016).
+    """
+    return f":(literal){relative_path.as_posix()}"
+
+
 def is_file_modified(file_path: Path) -> bool:
     """
     Check if a file has been modified compared to HEAD.
@@ -383,7 +393,7 @@ def is_file_modified(file_path: Path) -> bool:
 
         # Check for both staged and unstaged modifications
         result = run_tool(
-            ["git", "status", "--porcelain", str(relative_path)],
+            ["git", "status", "--porcelain", "--", _literal_pathspec(relative_path)],
             cwd=str(git_root),
             env=_hook_env(git_root),
             capture_output=True,
@@ -421,7 +431,7 @@ def restore_file_from_git(file_path: Path, ref: str = "HEAD") -> bool:
         relative_path = file_path.resolve().relative_to(git_root)
 
         result = run_tool(
-            ["git", "checkout", ref, "--", str(relative_path)],
+            ["git", "checkout", ref, "--", _literal_pathspec(relative_path)],
             cwd=str(git_root),
             env=_hook_env(git_root),
             capture_output=True,
@@ -448,7 +458,23 @@ def is_file_tracked(file_path: Path, *, env: Mapping[str, str] | None = None) ->
             ``without_git_location()`` always asks the index of the file's own repository.
 
     Returns:
-        True if the file is tracked by git, False otherwise.
+        True if the file is tracked by git, False otherwise, and False when git cannot tell.
+        ``git_tracks`` raises instead.
+    """
+    try:
+        return git_tracks(file_path, env=env)
+    except GitError:
+        return False
+
+
+def git_tracks(file_path: Path, *, env: Mapping[str, str] | None = None) -> bool:
+    """Whether git tracks ``file_path``, as ``is_file_tracked`` says, or raise when it cannot tell.
+
+    A file outside any repository is not tracked. git failing, timing out or not running at all
+    is not an answer, so it is not read as "not tracked" (#1016).
+
+    Raises:
+        GitError: git could not tell whether it tracks the file.
     """
     git_root = get_git_root(file_path)
     if not git_root:
@@ -456,9 +482,12 @@ def is_file_tracked(file_path: Path, *, env: Mapping[str, str] | None = None) ->
 
     try:
         relative_path = file_path.resolve().relative_to(git_root)
+    except ValueError:
+        return False  # not below the repository's root, so not a file it tracks
 
+    try:
         result = run_tool(
-            ["git", "ls-files", "--error-unmatch", str(relative_path)],
+            ["git", "ls-files", "--error-unmatch", "--", _literal_pathspec(relative_path)],
             cwd=str(git_root),
             env=_hook_env(git_root) if env is None else env,
             capture_output=True,
@@ -467,10 +496,15 @@ def is_file_tracked(file_path: Path, *, env: Mapping[str, str] | None = None) ->
             errors="surrogateescape",
             timeout=10,
         )
-
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
-        return False
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise GitError(f"git could not tell whether it tracks {file_path}: {exc}") from exc
+    if result.returncode not in (0, 1):  # 1: the file is not tracked
+        detail = result.stderr.strip().splitlines()[0] if result.stderr.strip() else ""
+        raise GitError(
+            f"git could not tell whether it tracks {file_path} "
+            f"(exit {result.returncode}){': ' + detail if detail else ''}"
+        )
+    return result.returncode == 0
 
 
 def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = None) -> list[str]:

@@ -50,7 +50,7 @@ from envdrift.scanner.patterns import (
     redact_secret,
 )
 from envdrift.utils.deadline import run_tool
-from envdrift.utils.git import is_file_tracked, without_git_location
+from envdrift.utils.git import GitError, git_tracks, without_git_location
 from envdrift.utils.text import line_and_column, split_lines
 
 # Encryption markers for dotenvx
@@ -596,6 +596,11 @@ class NativeScanner(ScannerBackend):
                     # Not read, so not scanned: say so instead of passing it for clean (#933).
                     warnings.append(_too_large_warning(file_path, cwd))
                     continue
+                except GitError as e:
+                    # git could not say whether a key file is committed: fail the scan rather
+                    # than pass it for clean (#1016).
+                    errors.append(str(e))
+                    continue
                 files_scanned += 1
                 findings.extend(file_findings)
 
@@ -906,11 +911,12 @@ class NativeScanner(ScannerBackend):
         # unencrypted-env-file remediation) is nonsensical advice for a key file.
         # A purely local, untracked key file is the expected state (a gitignored one
         # is already dropped during collection), so only flag it once git tracks or
-        # stages it (is_file_tracked reads the index, which covers both: the index of
-        # the file's repository, not one a git hook exported). Either way it bypasses
-        # the env-file/pattern checks below.
+        # stages it (git_tracks reads the index, which covers both: the index of the
+        # file's repository, not one a git hook exported). Either way it bypasses the
+        # env-file/pattern checks below. When git cannot tell, git_tracks raises
+        # GitError and the scan fails (#1016).
         if self._is_private_key_file(file_path):
-            if is_file_tracked(file_path, env=without_git_location()):
+            if git_tracks(file_path, env=without_git_location()):
                 findings.append(
                     ScanFinding(
                         file_path=file_path,
