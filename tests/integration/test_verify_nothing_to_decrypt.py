@@ -85,7 +85,9 @@ def test_verify_vault_fails_a_file_with_no_encrypted_value(
 
     A file that dotenvx decrypted keeps its ``DOTENV_PUBLIC_KEY_PRODUCTION`` header,
     so it still looks like a dotenvx file. The vault holds the key of another pair,
-    which cannot decrypt anything encrypted for that header.
+    which cannot decrypt anything encrypted for that header. The fix must say why it
+    fails (the file has no encrypted value), so a vault, auth or configuration error,
+    which also exits 1 without "keys are in sync", fails this test instead of passing it.
     """
     (_, public), (other_private, _) = DOTENVX_KEY_PAIRS[0], DOTENVX_KEY_PAIRS[1]
     lines = [f'DOTENV_PUBLIC_KEY_PRODUCTION="{public}"'] if header else []
@@ -106,6 +108,7 @@ def test_verify_vault_fails_a_file_with_no_encrypted_value(
         raise _KnownFalsePassError(output)
     assert "keys are in sync" not in output, output
     assert result.returncode == 1, output
+    assert "no encrypted value" in output.lower(), output
 
 
 def _decryption_check(folder: Path, content: str) -> DecryptionTestResult:

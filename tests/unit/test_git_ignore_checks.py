@@ -93,6 +93,7 @@ def _superproject(tmp_path: Path) -> tuple[Path, Path]:
     return superproject, superproject / "sub"
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 class TestUnignoredPaths:
     """``unignored_paths`` asks git, after the entries are written, what it still sees."""
 
