@@ -704,8 +704,9 @@ class TestSyncEngineDecryptionTest:
         )
         env_file = tmp_path / ".env.production"
         env_file.write_text('DOTENV_PUBLIC_KEY="abc"\nSECRET="encrypted:xyz"\n', encoding="utf-8")
+        # A value dotenvx can use as a key: one it would skip is not staged.
         (tmp_path / "custom.keys").write_text(
-            "DOTENV_PRIVATE_KEY_PRODUCTION=key\n", encoding="utf-8"
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={'a' * 64}\n", encoding="utf-8"
         )
 
         monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
@@ -1458,3 +1459,94 @@ class TestSyncEngineKeyMaterialShapes:
         assert result.services[0].action == SyncAction.ERROR
         assert "binary" in (result.services[0].error or "").lower()
         assert not (service_dir / ".env.keys").exists()
+
+
+class TestEveryHeldValueIsCompared:
+    """#938: dotenvx loads every value of a key name, so sync compares them all."""
+
+    VAULT = "a" * 64
+    OTHER = "b" * 64
+
+    def _engine(self, tmp_path: Path, client: MagicMock, mode: SyncMode) -> SyncEngine:
+        mapping = ServiceMapping(
+            secret_name="app-key", folder_path=tmp_path, environment="production"
+        )
+        (tmp_path / ".env.production").write_text("A=encrypted:x\n", encoding="utf-8")
+        client.get_secret.return_value = SecretValue(
+            name="app-key", value=f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT}"
+        )
+        return SyncEngine(config=SyncConfig(mappings=[mapping]), vault_client=client, mode=mode)
+
+    def _write_keys(self, tmp_path: Path) -> Path:
+        keys = tmp_path / ".env.keys"
+        keys.write_text(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT}\n"
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.OTHER}\n",
+            encoding="utf-8",
+        )
+        return keys
+
+    def test_verify_fails_when_a_second_value_differs(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        keys = self._write_keys(tmp_path)
+        before = keys.read_bytes()
+
+        result = self._engine(tmp_path, mock_vault_client, SyncMode(verify_only=True)).sync_all()
+
+        service = result.services[0]
+        assert service.action == SyncAction.ERROR
+        assert service.error == (
+            "Local value differs from vault (.env.keys holds 2 values for "
+            "DOTENV_PRIVATE_KEY_PRODUCTION)"
+        )
+        assert keys.read_bytes() == before
+
+    def test_force_backs_up_and_leaves_only_the_vault_key(
+        self, mock_vault_client: MagicMock, tmp_path: Path
+    ) -> None:
+        keys = self._write_keys(tmp_path)
+
+        result = self._engine(tmp_path, mock_vault_client, SyncMode(force_update=True)).sync_all()
+
+        service = result.services[0]
+        assert service.action == SyncAction.UPDATED
+        assert service.backup_path is not None
+        assert self.OTHER in service.backup_path.read_text(encoding="utf-8")
+        text = keys.read_text(encoding="utf-8")
+        assert text.count(f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT}") == 2
+        assert self.OTHER not in text
+
+    def test_decryption_check_stages_only_the_first_value(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dotenvx decrypts with ANY key it is given, so the check gets one key only."""
+        self._write_keys(tmp_path)
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+        staged: list[str] = []
+
+        def fake_run(cmd, **kwargs):
+            staged.append((Path(kwargs["cwd"]) / ".env.keys").read_text(encoding="utf-8"))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+        engine = self._engine(tmp_path, mock_vault_client, SyncMode())
+
+        assert engine._test_decryption(engine.config.mappings[0]) == DecryptionTestResult.PASSED
+        assert staged == [f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT}\n"]
+
+    def test_decryption_check_with_no_local_key_stages_none(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+        staged: list[bool] = []
+
+        def fake_run(cmd, **kwargs):
+            staged.append((Path(kwargs["cwd"]) / ".env.keys").exists())
+            return subprocess.CompletedProcess(cmd, 1)
+
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+        engine = self._engine(tmp_path, mock_vault_client, SyncMode())
+
+        assert engine._test_decryption(engine.config.mappings[0]) == DecryptionTestResult.FAILED
+        assert staged == [False]
