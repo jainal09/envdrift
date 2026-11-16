@@ -107,13 +107,17 @@ def _rename_header(env_text: str, public_key: str, public_name: str, basename: s
     lines = env_text.split("\n")
     for index, line in enumerate(lines):
         renamed = _renamed_header_line(line, public_key, public_name)
-        if renamed is None:
-            continue
-        lines[index] = renamed
-        if _has_filename_comment(lines, index):
-            ending = "\r" if lines[index + 2].endswith("\r") else ""
-            lines[index + 2] = f"# {basename}{ending}"
+        if renamed is not None:
+            _put_renamed_header(lines, index, renamed, basename)
     return "\n".join(lines)
+
+
+def _put_renamed_header(lines: list[str], header: int, renamed: str, basename: str) -> None:
+    """Write ``renamed`` at ``lines[header]``, and ``basename`` into its ``# <filename>`` line."""
+    lines[header] = renamed
+    if _has_filename_comment(lines, header):
+        ending = "\r" if lines[header + 2].endswith("\r") else ""
+        lines[header + 2] = f"# {basename}{ending}"
 
 
 @dataclass(frozen=True)

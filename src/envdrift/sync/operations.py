@@ -12,7 +12,12 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from envdrift.integrations.dotenvx_keys import assignment_line_pattern, assignment_values
+from envdrift.integrations.dotenvx_keys import (
+    assignment_line_pattern,
+    assignment_values,
+    parse_assignments,
+    value_continuation_lines,
+)
 
 # Per-process salt so the redaction digest is a within-run discriminator only
 # (local vs vault in the same output), never an offline brute-force / rainbow
@@ -32,6 +37,31 @@ DOTENVX_HEADER = """#/------------------!DOTENV_PRIVATE_KEYS!-------------------
 #/     [how it works](https://dotenvx.com/encryption)       /
 #/          ⛨ ARMORED KEYS: `dotenvx armor up`              /
 #/----------------------------------------------------------/"""
+
+
+def _rewrite_key_lines(lines: list[str], key_name: str, value: str) -> tuple[list[str], bool]:
+    """Set every line dotenvx reads as ``key_name`` to ``value``.
+
+    A quoted value that spans lines is replaced whole: its other lines go with
+    it, so none of its text is left to be read as a line of its own. A line
+    inside another value is that value's text and stays as it is. Returns the
+    new lines and whether any line was ``key_name``'s.
+    """
+    text = "\n".join(lines)
+    own = value_continuation_lines(text, key_name)
+    inside = value_continuation_lines(text)
+    key_pattern = assignment_line_pattern(key_name)
+    rewritten: list[str] = []
+    found = False
+    for index, line in enumerate(lines):
+        if index in own:
+            continue
+        if index not in inside and key_pattern.match(line):
+            rewritten.append(f"{key_name}={value}")
+            found = True
+        else:
+            rewritten.append(line)
+    return rewritten, found
 
 
 class EnvKeysFile:
@@ -91,19 +121,7 @@ class EnvKeysFile:
         if self.path.exists():
             # UTF-8 like dotenvx itself, regardless of the platform locale (#474).
             content = self.path.read_bytes().decode("utf-8")
-            lines = content.splitlines()
-
-            # Check if key already exists
-            key_pattern = assignment_line_pattern(key_name)
-            key_found = False
-            new_lines = []
-
-            for line in lines:
-                if key_pattern.match(line):
-                    new_lines.append(f"{key_name}={value}")
-                    key_found = True
-                else:
-                    new_lines.append(line)
+            new_lines, key_found = _rewrite_key_lines(content.splitlines(), key_name, value)
 
             if not key_found:
                 # Add environment comment if not present
@@ -116,7 +134,7 @@ class EnvKeysFile:
             if not new_content.endswith("\n"):
                 new_content += "\n"
 
-            self._require_only_value(key_name, value, new_content)
+            self._require_only_value(key_name, value, content, new_content)
             atomic_write(self.path, new_content)
         else:
             # Create new file with header. dotenvx leaves a blank line between
@@ -125,23 +143,30 @@ class EnvKeysFile:
             content = f"{DOTENVX_HEADER}\n\n# .env.{environment}\n{key_name}={value}\n"
             atomic_write(self.path, content)
 
-    def _require_only_value(self, key_name: str, value: str, new_content: str) -> None:
-        """Refuse a rewrite after which a reader would still load another value.
+    def _require_only_value(
+        self, key_name: str, value: str, content: str, new_content: str
+    ) -> None:
+        """Refuse a rewrite after which a reader would load anything but ``value`` anew.
 
         dotenvx also reads ``KEY:`` with the value on the next line. That layout
         cannot be rewritten line by line, so the old key would stay loaded next
-        to the new one; nothing is written instead.
+        to the new one; nothing is written instead. Every other name must read
+        as it did in ``content``.
 
         Raises:
             ValueError: ``new_content`` holds a value for ``key_name`` that is
-                not ``value`` (``value`` on several lines is the same key).
+                not ``value`` (``value`` on several lines is the same key), or
+                another name reads differently than in ``content``.
         """
         expected = set(assignment_values(f"{key_name}={value}\n", key_name))
-        if set(assignment_values(new_content, key_name)) != expected:
+        before = parse_assignments(content)
+        after = parse_assignments(new_content)
+        before.pop(key_name, None)
+        if set(after.pop(key_name, [])) != expected or after != before:
             raise ValueError(
-                f"{self.path} holds {key_name} in a layout envdrift cannot rewrite, such "
-                f"as '{key_name}:' with the key on the next line. Write it as "
-                f"{key_name}=<key> and re-run. Nothing was changed."
+                f"{self.path} holds {key_name} in a layout envdrift cannot rewrite without "
+                f"changing what dotenvx reads, such as '{key_name}:' with the key on the "
+                f"next line. Write it as {key_name}=<key> and re-run. Nothing was changed."
             )
 
     def has_dotenvx_header(self) -> bool:

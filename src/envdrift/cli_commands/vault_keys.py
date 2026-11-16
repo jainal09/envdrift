@@ -27,7 +27,7 @@ def push_key_problem(
     ``values`` are every value the keys file holds under the key name: dotenvx
     may have used any of them, so two different ones are refused.
     """
-    others = sorted({value for value in values if value != key_value})
+    others = set(values) - {key_value}
     if others:
         return (
             f"{target.mapping.folder_path} holds {len(others) + 1} different values for "
@@ -143,7 +143,7 @@ def write_pull_key(request: VaultPullRequest, key_name: str, key_value: str) -> 
 
     env_keys_path = request.folder / ".env.keys"
     held = _held_pull_values(env_keys_path, key_name)
-    if held and all(value == key_value for value in held):
+    if set(held) == {key_value}:
         return None
     if held:
         if not request.force:

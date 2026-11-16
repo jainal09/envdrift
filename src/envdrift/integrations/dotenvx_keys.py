@@ -128,20 +128,22 @@ def parse_assignments(text: str) -> dict[str, list[str]]:
     return parsed
 
 
-def value_continuation_lines(text: str) -> set[int]:
+def value_continuation_lines(text: str, name: str | None = None) -> set[int]:
     """Return the indices of the ``text.split("\\n")`` lines that continue a quoted value.
 
     dotenvx reads a quoted value across lines. Those lines are the value's text,
     not comments or assignments of their own, so a writer that edits lines must
-    leave them alone.
+    leave them alone, or drop them with the value it replaces. With ``name``,
+    only the lines of the values assigned to ``name`` are returned.
     """
     flat = text.replace("\r\n", "\n")
     breaks = [index for index, char in enumerate(flat) if char == "\n"]
     inside: set[int] = set()
     for match in _LINE_RE.finditer(flat):
-        if match.group(2) is not None:
-            first = bisect_left(breaks, match.start(2))
-            inside.update(range(first + 1, bisect_left(breaks, match.end(2)) + 1))
+        if match.group(2) is None or name not in (None, match.group(1)):
+            continue
+        first = bisect_left(breaks, match.start(2))
+        inside.update(range(first + 1, bisect_left(breaks, match.end(2)) + 1))
     return inside
 
 

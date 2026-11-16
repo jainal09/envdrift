@@ -43,13 +43,30 @@ PRODUCTION = "DOTENV_PRIVATE_KEY_PRODUCTION"
 # --- helpers ------------------------------------------------------------------
 
 
+def _venv_root() -> Path | None:
+    """The virtualenv this process looks for dotenvx in, or None when it finds none."""
+    from envdrift.integrations.dotenvx import get_venv_bin_dir
+
+    try:
+        return get_venv_bin_dir().parent
+    except RuntimeError:
+        return None
+
+
 def _child_env(pythonpath: str) -> dict[str, str]:
-    """The CLI's environment: this checkout's code, the stand-in token, no stray keys."""
+    """The CLI's environment: this checkout's code, the stand-in token, no stray keys.
+
+    ``VIRTUAL_ENV`` is the folder ``_dotenvx_command`` looks in. The CLI checks
+    it first, so both run the same dotenvx whatever their working directory.
+    """
     env = {key: value for key, value in os.environ.items() if not key.startswith("DOTENV_")}
     env.pop("FORCE_COLOR", None)
     env["NO_COLOR"] = "1"
     env["PYTHONPATH"] = pythonpath
     env["VAULT_TOKEN"] = TOKEN
+    venv_root = _venv_root()
+    if venv_root is not None:
+        env["VIRTUAL_ENV"] = str(venv_root)
     for name in ("NO_PROXY", "no_proxy"):
         env[name] = ",".join(filter(None, [env.get(name, ""), "127.0.0.1", "localhost"]))
     return env
@@ -59,10 +76,9 @@ def _dotenvx_command() -> str:
     """The dotenvx the CLI under test runs: the virtualenv's, else the one on PATH."""
     from envdrift.integrations.dotenvx import get_dotenvx_path
 
-    try:
-        venv_binary = get_dotenvx_path()
-    except RuntimeError:
+    if _venv_root() is None:
         return "dotenvx"
+    venv_binary = get_dotenvx_path()
     return str(venv_binary) if venv_binary.exists() else "dotenvx"
 
 

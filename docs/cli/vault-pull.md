@@ -73,9 +73,11 @@ sure git ignores the backup (it adds `<folder>/.env.keys.backup.*` to `.gitignor
 existing rule covers it), then writes the vault's key. If the backup cannot be made, or a
 `.gitignore` rule would still let git track it, `.env.keys` is left unchanged (the `.gitignore`
 entry may already have been added). A key that already matches the vault is left as it is.
-A key written as `DOTENV_PRIVATE_KEY_<ENV>:` with the key on the next line, which dotenvx also
-reads, cannot be rewritten in place: the command fails and `.env.keys` is left unchanged.
-Write it as `DOTENV_PRIVATE_KEY_<ENV>=<key>` and re-run.
+A key whose quoted value spans several lines is replaced with all of its lines. A key written
+as `DOTENV_PRIVATE_KEY_<ENV>:` with the key on the next line, which dotenvx also reads, cannot
+be rewritten in place: the command fails and `.env.keys` is left unchanged. Write it as
+`DOTENV_PRIVATE_KEY_<ENV>=<key>` and re-run. The command also fails, with `.env.keys`
+unchanged, rather than change how dotenvx reads any other line of the file.
 
 ## Options
 
