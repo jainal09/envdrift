@@ -13,6 +13,7 @@ import pytest
 from envdrift.utils.git import (
     GitError,
     ensure_gitignore_entries,
+    file_at_commit,
     get_file_from_git,
     get_git_root,
     git_tracks,
@@ -246,6 +247,35 @@ class TestIsFileTracked:
 
         with patch("envdrift.utils.git.get_git_root", return_value=repo):
             assert git_tracks(outside) is False
+
+
+class TestFileAtCommit:
+    """The text of a file as a commit holds it, for the history scan (#1014)."""
+
+    def test_reads_the_file_as_the_commit_holds_it(self, tmp_path: Path):
+        repo = _repo_with(tmp_path, {"app.env": "A=1\n"})
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        (repo / "app.env").write_text("A=2\n")
+
+        assert file_at_commit(repo / "app.env", commit) == "A=1\n"
+
+    def test_a_file_outside_any_work_tree_has_none(self, tmp_path: Path):
+        (tmp_path / "app.env").write_text("A=1\n")
+
+        assert file_at_commit(tmp_path / "app.env", "0123abcd") is None
+
+    def test_a_commit_that_does_not_hold_the_file_has_none(self, tmp_path: Path):
+        repo = _repo_with(tmp_path, {"app.env": "A=1\n"})
+
+        assert file_at_commit(repo / "other.env", "HEAD") is None
+
+    def test_git_that_cannot_run_gives_none(self, tmp_path: Path):
+        repo = _repo_with(tmp_path, {"app.env": "A=1\n"})
+
+        with patch("envdrift.utils.git.run_tool", side_effect=OSError("no git")):
+            assert file_at_commit(repo / "app.env", "HEAD") is None
 
 
 class TestGetFileFromGit:
