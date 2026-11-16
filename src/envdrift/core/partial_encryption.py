@@ -635,6 +635,9 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
     """
     target = _written_file(path)
     folder, env = git_location_for(target)
+    # The file's path is not logged: git's own message names the file ("fatal: Unable
+    # to mark file <path>"), and CodeQL reads a secret file's path as the secret
+    # (py/clear-text-logging-sensitive-data).
     try:
         result = subprocess.run(  # nosec B603, B607
             ["git", "-C", str(folder), "update-index", flag, "--", str(target)],
@@ -643,7 +646,7 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
             env=env,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        logger.debug("git update-index %s not applied to %s: %s", flag, path, exc)
+        logger.debug("git update-index %s not applied: %s", flag, exc)
         return False
     if result.returncode != 0:
         stderr = result.stderr
@@ -654,15 +657,9 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
         # is simply not applicable there, so log it at debug like git-unavailable
         # (otherwise `push`/`pull` in a non-repo dir print scary git noise).
         if "not a git repository" in message.lower():
-            logger.debug("git update-index %s skipped (not a git repo): %s", flag, path)
+            logger.debug("git update-index %s skipped (not a git repo): %s", flag, message)
             return False
-        logger.warning(
-            "git update-index %s failed for %s (exit %s): %s",
-            flag,
-            path,
-            result.returncode,
-            message,
-        )
+        logger.warning("git update-index %s failed (exit %s): %s", flag, result.returncode, message)
         return False
     return True
 
