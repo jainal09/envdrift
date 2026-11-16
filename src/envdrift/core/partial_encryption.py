@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 import subprocess  # nosec B404
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, TypedDict
@@ -716,13 +717,41 @@ def unprotected_reason(path: Path) -> str:
         reason = "outside a git repository"
     else:
         reason = "skip-worktree failed"
-    if any(part.is_symlink() for part in (path, *path.parents)):
-        try:
-            shown = target.relative_to(Path.cwd().resolve())
-        except (ValueError, OSError):
-            shown = target
-        reason += f"; through a symlink, the plaintext is in {shown}"
+    if _through_symlink(path):
+        reason += f"; through a symlink, the plaintext is in {_shown(target)}"
     return reason
+
+
+def _through_symlink(path: Path) -> bool:
+    """Whether ``path``, or a directory on the way to it, is a symlink."""
+    return any(part.is_symlink() for part in (path, *path.parents))
+
+
+def _shown(path: Path) -> Path:
+    """``path`` relative to the working directory, or in full when it is not under it."""
+    try:
+        return path.relative_to(Path.cwd().resolve())
+    except (ValueError, OSError):
+        return path
+
+
+def _git_for_written_file(path: Path) -> tuple[str, str]:
+    """The ``git`` to type, and the file to name, to act on the file ``path`` writes to.
+
+    The skip-worktree mark is set on that file, by git run in its own directory
+    (``_run_git_update_index``): for a symlinked ``path`` the link's target, and
+    for a file in a submodule the submodule's repository. Recovery advice that
+    named ``path`` from the working directory unmarked and checked out the link,
+    or was refused in the superproject, so the plaintext stayed. The commands run
+    git in that directory too (``git -C``) unless it is the working directory,
+    where a file not reached through a symlink keeps the name it was given.
+    """
+    target = _written_file(path)
+    folder = _shown(target.parent)
+    git = "git" if folder == Path() else f"git -C {shlex.quote(str(folder))}"
+    if folder == Path() and not _through_symlink(path):
+        return git, str(path)
+    return git, shlex.quote(target.name)
 
 
 class DecryptSnapshot:
@@ -765,9 +794,17 @@ class DecryptSnapshot:
     def restore(self) -> str:
         """Put the original bytes back if the file changed; return what happened.
 
+        The bytes go back whole or not at all: to a temp file next to the file
+        the write lands in (``_written_file``, so a symlink stays a symlink),
+        synced, then renamed over it with its mode kept. Written in place, a
+        write that failed part way (a full disk, a file size limit) left the
+        file cut short, with neither the values dotenvx decrypted nor the
+        ciphertext it left, and an untracked file had no copy anywhere.
+
         The returned sentence ends the caller's error message. When the write
-        itself fails the file may hold decrypted plaintext, so it is marked
-        skip-worktree and the sentence says whether that protection worked.
+        itself fails the file is as dotenvx left it and may hold decrypted
+        plaintext, so it is marked skip-worktree and the sentence says whether
+        that protection worked, and how to recover the file.
         """
         try:
             changed = self.path.read_bytes() != self.original
@@ -775,8 +812,9 @@ class DecryptSnapshot:
             changed = True  # Unreadable now: write the original back to be safe.
         if not changed:
             return f"{self.path} was left as it was."
+        written = _written_file(self.path)
         try:
-            self.path.write_bytes(self.original)
+            atomic_write(written, self.original)
             failure = "" if self.path.read_bytes() == self.original else "its bytes still differ"
         except OSError as exc:
             failure = str(exc)
@@ -789,12 +827,16 @@ class DecryptSnapshot:
             f"envdrift could not restore {self.path} ({failure}), so it may now hold "
             "decrypted plaintext values"
         )
+        if _through_symlink(self.path):
+            lead += f" (through a symlink, they are in {_shown(written)})"
+        # The commands act on that file, in the repository the mark was set in.
+        git, name = _git_for_written_file(self.path)
         if _git_skip_worktree(self.path):
             # git checkout refuses a skip-worktree path, so lift the bit first.
             return (
                 f"{lead}. It is marked skip-worktree, so a plain `git add .` won't stage it. "
-                f"To restore it, run `git update-index --no-skip-worktree {self.path}` and "
-                f"then `git checkout -- {self.path}`."
+                f"To restore it, run `{git} update-index --no-skip-worktree {name}` and "
+                f"then `{git} checkout -- {name}`."
             )
         # The advice depends on why the mark failed: git checkout can restore
         # only a file git has a copy of.
@@ -812,7 +854,7 @@ class DecryptSnapshot:
             )
         return (
             f"{lead}, and it could not be marked skip-worktree: a plain `git add .` "
-            f"WILL stage it. Run `git checkout -- {self.path}` before you commit."
+            f"WILL stage it. Run `{git} checkout -- {name}` before you commit."
         )
 
 

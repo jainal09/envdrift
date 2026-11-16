@@ -168,10 +168,18 @@ and unprotected. The error names the value dotenvx could not decrypt:
 .env.production.secret was left as it was: envdrift restored the bytes it had before the decrypt.
 ```
 
-If envdrift cannot write the file back, the message says the file may now hold
-decrypted plaintext, marks it `skip-worktree`, and says whether that protection
-worked. When it did not, it says how to recover: `git checkout -- <file>` for a
-tracked file, `envdrift encrypt <file>` for one git has no copy of.
+The copy goes back whole or not at all: envdrift writes it to a temporary file next
+to the secret file and renames that over it, so a write that fails (a full disk,
+for example) leaves the file as dotenvx wrote it, never cut short. The message then
+says the file may now hold decrypted plaintext, marks it `skip-worktree`, and says
+whether that protection worked and how to recover:
+`git update-index --no-skip-worktree <file>` and then `git checkout -- <file>` for a
+file it marked, `git checkout -- <file>` for a tracked file it could not mark, and
+`envdrift encrypt <file>` for one git has no copy of. The git commands act on the
+file the plaintext is in, in the repository that tracks it. For a symlinked secret
+file that is the file the link points to, and git runs in that file's directory
+when it is not the current one (a submodule, for example), as in
+`git -C shared checkout -- production.secret`.
 
 `pull-partial` also reads each secret file back after dotenvx exits 0, because the
 exit code alone can lie. A SOPS-encrypted secret file is one example: dotenvx finds

@@ -249,13 +249,18 @@ names the value dotenvx could not decrypt:
 ```
 
 The same applies when dotenvx exits 0 but leaves ciphertext behind (`Decryption
-did not take effect`). If envdrift cannot write the file back, the message says
-the file may now hold decrypted plaintext, marks it `skip-worktree` so a plain
-`git add .` won't stage it, and says whether that protection worked. When it did
-not, the advice depends on why: `git checkout -- <file>` for a tracked file, or
-`envdrift encrypt <file>` for a file git has no copy of (untracked, or outside a
-git repository). `envdrift pull` and `vault-pull` decrypt through the same code,
-so they leave a file as it was in the same way.
+did not take effect`). The copy goes back whole or not at all: it is written to a
+temporary file next to the file and renamed over it, so if envdrift cannot write
+it back (a full disk, for example), the file is left as dotenvx wrote it, never
+cut short. The message then says the file may now hold decrypted plaintext, marks
+it `skip-worktree` so a plain `git add .` won't stage it, and says whether that
+protection worked. When it did not, the advice depends on why:
+`git checkout -- <file>` for a tracked file, or `envdrift encrypt <file>` for a
+file git has no copy of (untracked, or outside a git repository). The git commands
+act on the file the plaintext is in: for a symlink, the file it points to, with
+`git -C <directory>` when that file is not in the current directory.
+`envdrift pull` and `vault-pull` decrypt through the same code, so they leave a
+file as it was in the same way.
 
 When using `--verify-vault`, a wrong key returns exit 1 with a message like:
 

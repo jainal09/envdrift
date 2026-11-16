@@ -9,13 +9,25 @@ leaves ciphertext behind. The dotenvx backend (``envdrift decrypt``, ``pull`` an
 The real-binary proof is ``tests/integration/test_decrypt_failure_e2e.py``.
 Here the dotenvx subprocess seam is replaced by a stand-in that writes what the
 real binary writes, so every branch of the restore can be reached; the restore
-itself, the read-back and git run for real.
+itself, the read-back and git run for real. A restore that cannot write is a
+real write failure where the platform has file size limits (POSIX), and
+elsewhere a rename onto the file that is made to fail.
 """
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import os
+import re
+import shlex
 import shutil
+import signal
+import stat
 import subprocess
+import sys
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -41,6 +53,12 @@ _PARTLY_DECRYPTED = (
     b"STRIPE_API_KEY=encrypted:BFOREIGN\n"
 )
 _DOTENVX_FAILURE = "dotenvx decryption failed: [DECRYPTION_FAILED] could not decrypt STRIPE_API_KEY"
+# The same file with many more values: a file size limit of half of it stops
+# the restore's write part way, and stays far above anything else written
+# while it is on (git's index, pytest's capture files).
+_LARGE_ENCRYPTED = _ENCRYPTED + b"".join(
+    b"VALUE_%04d=encrypted:B%s\r\n" % (number, b"A" * 96) for number in range(600)
+)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -74,15 +92,87 @@ def _snapshot(path: Path):
 
 
 def _fail_writes(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
-    """Make writing ``target`` fail (the restore's own write), like a full disk."""
-    real_write_bytes = Path.write_bytes
+    """Make putting ``target``'s bytes back fail, like a full disk.
 
-    def _write_bytes(self: Path, data: bytes) -> int:
-        if self == target:
-            raise OSError(28, "No space left on device")
-        return real_write_bytes(self, data)
+    The restore writes them to a temp file and renames it over the file. Here
+    the rename onto ``target`` fails, as it can when the directory has no room
+    left for the entry, so these tests run on every platform; the real write
+    failures in ``TestRestoreIsWholeOrNothing`` need POSIX.
+    """
+    real_replace = os.replace
+    written = target.resolve()
 
-    monkeypatch.setattr(Path, "write_bytes", _write_bytes)
+    def _replace(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+        if Path(dst).resolve() == written:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", _replace)
+
+
+@pytest.fixture
+def file_size_limit() -> Callable[[int], AbstractContextManager[None]]:
+    """Make every write past ``size`` bytes of a file fail, for real (``RLIMIT_FSIZE``).
+
+    The kernel refuses the write with ``EFBIG``, as a full disk refuses one with
+    ``ENOSPC``; with ``SIGXFSZ`` ignored the process gets the error instead of
+    being killed. git, run while the limit is on, inherits it. POSIX only.
+    """
+    resource = pytest.importorskip("resource", reason="RLIMIT_FSIZE is POSIX only")
+    if not hasattr(signal, "SIGXFSZ"):
+        pytest.skip("no SIGXFSZ on this platform")
+
+    @contextlib.contextmanager
+    def _limit(size: int) -> Iterator[None]:
+        soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+        if hard != resource.RLIM_INFINITY and hard < size:
+            pytest.skip(f"the hard file size limit ({hard}) is below {size} bytes")
+        previous = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        try:
+            resource.setrlimit(resource.RLIMIT_FSIZE, (size, hard))
+            try:
+                yield
+            finally:
+                resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+        finally:
+            if previous is not None:
+                signal.signal(signal.SIGXFSZ, previous)
+
+    return _limit
+
+
+def _init_repo(repo: Path) -> None:
+    """A real git repository at ``repo``, with an identity to commit as."""
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+
+
+def _symlink(link: Path, target: str) -> None:
+    if sys.platform == "win32":
+        pytest.skip("git checks symlinks out as plain files on Windows by default")
+    link.symlink_to(target)
+
+
+def _flag(repo: Path, path: str) -> str:
+    """``git ls-files -v`` for ``path``: ``S`` skip-worktree, ``H`` tracked."""
+    return _git(repo, "ls-files", "-v", "--", path)[:2].strip()
+
+
+def _recovery_commands(note: str) -> tuple[str, str]:
+    """The two commands the note of a marked file says to run, in order."""
+    found = re.search(r"To restore it, run `([^`]+)` and then `([^`]+)`", " ".join(note.split()))
+    assert found, note
+    return found.group(1), found.group(2)
+
+
+def _run_each(repo: Path, *commands: str) -> None:
+    """Run each printed command in ``repo``, as a user would paste it there."""
+    for command in commands:
+        ran = subprocess.run(shlex.split(command), cwd=repo, capture_output=True, text=True)
+        assert ran.returncode == 0, f"{command}: {ran.stderr}"
 
 
 class TestDecryptSnapshotRestore:
@@ -214,13 +304,25 @@ class TestDecryptSnapshotRestore:
     def test_restore_that_does_not_stick_is_reported(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A write that returns but leaves other bytes is not a restore."""
+        """A write that returns but leaves other bytes is not a restore.
+
+        Here another writer (a second dotenvx run, say) writes the file right
+        after the restore renamed its copy over it.
+        """
         monkeypatch.chdir(tmp_path)
         target = tmp_path / ".env.production"
         target.write_bytes(_ENCRYPTED)
         snapshot = _snapshot(target)
         target.write_bytes(_PARTLY_DECRYPTED)
-        monkeypatch.setattr(Path, "write_bytes", lambda self, data: len(data))
+        real_replace = os.replace
+
+        def _replace_then_overwritten(
+            src: str | os.PathLike[str], dst: str | os.PathLike[str]
+        ) -> None:
+            real_replace(src, dst)
+            Path(dst).write_bytes(_PARTLY_DECRYPTED)
+
+        monkeypatch.setattr(os, "replace", _replace_then_overwritten)
 
         flat = " ".join(snapshot.restore().split())
 
@@ -247,6 +349,140 @@ class TestDecryptSnapshotRestore:
 
         assert target.read_bytes() == b"JWT_SECRET=plain\n"
         assert snapshot.note == ""
+
+
+class TestRestoreIsWholeOrNothing:
+    """The original bytes go back whole, or the file is left as dotenvx wrote it.
+
+    ``restore`` wrote them in place, and a write truncates the file first. One
+    that failed part way (a full disk, a file size limit) left the file cut
+    short: the values dotenvx decrypted and the ciphertext it left were gone,
+    and an untracked file had no copy anywhere. The write failures here are
+    real: the kernel refuses a write past a file size limit.
+    """
+
+    def test_a_write_that_fails_part_way_leaves_the_file_as_it_was(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        file_size_limit: Callable[[int], AbstractContextManager[None]],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / ".env.production"
+        target.write_bytes(_LARGE_ENCRYPTED)
+        snapshot = _snapshot(target)
+        target.write_bytes(_PARTLY_DECRYPTED)
+
+        with file_size_limit(len(_LARGE_ENCRYPTED) // 2):
+            note = snapshot.restore()
+
+        # Not the first half of the original: what dotenvx wrote is all there.
+        assert target.read_bytes() == _PARTLY_DECRYPTED
+        flat = " ".join(note.split())
+        assert f"envdrift could not restore {target} ([Errno {errno.EFBIG}]" in flat, flat
+        assert "may now hold decrypted plaintext values" in flat, flat
+        # The copy that could not be written is not left next to it either.
+        assert [path.name for path in tmp_path.iterdir()] == [".env.production"]
+
+    def test_a_symlink_stays_a_symlink_with_its_target_s_mode(self, tmp_path: Path) -> None:
+        """The bytes land in the file the link points to, which keeps its mode."""
+        (tmp_path / "shared").mkdir()
+        target = tmp_path / "shared" / "production.secret"
+        target.write_bytes(_ENCRYPTED)
+        target.chmod(0o640)
+        link = tmp_path / ".env.production"
+        _symlink(link, "shared/production.secret")
+        snapshot = _snapshot(link)
+        target.write_bytes(_PARTLY_DECRYPTED)
+
+        note = snapshot.restore()
+
+        assert note.startswith(f"{link} was left as it was: envdrift restored"), note
+        assert link.is_symlink()
+        assert target.read_bytes() == _ENCRYPTED
+        assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+
+class TestRecoveryAdviceActsOnTheFileThePlaintextIsIn:
+    """The printed commands run git where the skip-worktree mark was set.
+
+    The mark goes on the file the write lands in, by git run in that file's own
+    directory: for a symlinked secret file the link's target, and for a file in
+    a submodule the submodule's repository. The advice named the path from the
+    working directory, so for a link it unmarked and checked out the link while
+    the target kept the plaintext and the mark, and for a file in a submodule
+    git refused it.
+    """
+
+    def test_a_symlinked_secret_file(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        file_size_limit: Callable[[int], AbstractContextManager[None]],
+    ) -> None:
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "shared").mkdir()
+        (tmp_path / "config").mkdir()
+        target = tmp_path / "shared" / "production.secret"
+        target.write_bytes(_LARGE_ENCRYPTED)
+        link = Path("config/.env.production.secret")
+        _symlink(tmp_path / link, "../shared/production.secret")
+        _git(tmp_path, "add", "-A")
+        _git(tmp_path, "commit", "-q", "-m", "symlinked secret")
+        snapshot = _snapshot(link)
+        target.write_bytes(_PARTLY_DECRYPTED)
+
+        with file_size_limit(len(_LARGE_ENCRYPTED) // 2):
+            note = snapshot.restore()
+
+        assert _flag(tmp_path, "shared/production.secret") == "S"
+        commands = _recovery_commands(note)
+        assert commands == (
+            "git -C shared update-index --no-skip-worktree production.secret",
+            "git -C shared checkout -- production.secret",
+        ), note
+        _run_each(tmp_path, *commands)
+        assert _flag(tmp_path, "shared/production.secret") == "H"
+        assert target.read_bytes() == _LARGE_ENCRYPTED
+        assert (tmp_path / link).is_symlink()
+        # The sentence says why the commands name another file.
+        flat = " ".join(note.split())
+        assert "(through a symlink, they are in shared/production.secret)" in flat, flat
+
+    def test_a_secret_file_in_a_submodule(
+        self,
+        tmp_path: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+        file_size_limit: Callable[[int], AbstractContextManager[None]],
+    ) -> None:
+        inner = tmp_path_factory.mktemp("inner")
+        _init_repo(inner)
+        (inner / ".env.secret").write_bytes(_LARGE_ENCRYPTED)
+        _git(inner, "add", ".env.secret")
+        _git(inner, "commit", "-q", "-m", "inner")
+        _init_repo(tmp_path)
+        allow_local = ("-c", "protocol.file.allow=always")  # git refuses a local one otherwise
+        _git(tmp_path, *allow_local, "submodule", "add", "-q", str(inner), "sub")
+        _git(tmp_path, "commit", "-q", "-m", "submodule")
+        monkeypatch.chdir(tmp_path)
+        secret = tmp_path / "sub" / ".env.secret"
+        snapshot = _snapshot(Path("sub/.env.secret"))
+        secret.write_bytes(_PARTLY_DECRYPTED)
+
+        with file_size_limit(len(_LARGE_ENCRYPTED) // 2):
+            note = snapshot.restore()
+
+        assert _flag(tmp_path / "sub", ".env.secret") == "S"
+        commands = _recovery_commands(note)
+        assert commands == (
+            "git -C sub update-index --no-skip-worktree .env.secret",
+            "git -C sub checkout -- .env.secret",
+        ), note
+        _run_each(tmp_path, *commands)
+        assert _flag(tmp_path / "sub", ".env.secret") == "H"
+        assert secret.read_bytes() == _LARGE_ENCRYPTED
 
 
 def _backend_with(decrypt_effect) -> tuple[DotenvxEncryptionBackend, MagicMock]:
