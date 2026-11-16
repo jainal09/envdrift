@@ -218,6 +218,10 @@ Validation PASSED
 
 ### Validation with Errors
 
+Diagnostics display values, field names, paths and schema patterns literally: square
+brackets and backslashes are printed as written. Invalid values such as
+`[/api, /health]` are reported without interrupting validation of the remaining files.
+
 ```bash
 envdrift validate .env.production --schema config.settings:ProductionSettings
 ```

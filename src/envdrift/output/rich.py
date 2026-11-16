@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
-from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -15,40 +14,45 @@ from envdrift.core.diff import DiffResult, DiffType
 from envdrift.core.encryption import EncryptionReport
 from envdrift.core.schema import SchemaMetadata
 from envdrift.core.validator import MODEL_ERROR_KEY, ValidationResult
+from envdrift.utils.text import styled_text
 
 if TYPE_CHECKING:
     from envdrift.sync.result import ServiceSyncResult, SyncResult
 
 # Full command reports are stdout payloads; standalone diagnostics use stderr.
-console = Console()
-diagnostic_console = Console(stderr=True)
+# emoji=False: paths, names and values are printed as they are, so a file named
+# `:fire:.env` must not turn into an emoji. envdrift's own text uses no emoji codes.
+console = Console(emoji=False)
+diagnostic_console = Console(stderr=True, emoji=False)
 
 
 def print_success(message: str) -> None:
-    """Print a success message."""
-    console.print(f"[green][OK][/green] {message}")
+    """Print a message prefixed with a green "OK" badge.
+
+    The message is literal text, like :func:`print_error`'s.
+    """
+    console.print(styled_text("[green][OK][/green] {}", message))
 
 
 def print_error(message: str) -> None:
     """
     Print a message prefixed with a red "ERROR" badge to stderr.
 
-    The message is treated as literal text: any bracketed substrings (e.g. TOML
-    table names like ``[vault.sync]``) are escaped so Rich does not interpret
-    them as console markup and silently drop them.
+    The message is treated as literal text: bracketed substrings (e.g. TOML
+    table names like ``[vault.sync]`` or a path like ``cfg[/x]/.env``),
+    backslashes and ``:emoji:`` codes are printed exactly as they are, never
+    interpreted as console markup.
     """
-    diagnostic_console.print(f"[red][ERROR][/red] {escape(message)}")
+    diagnostic_console.print(styled_text("[red][ERROR][/red] {}", message))
 
 
 def print_warning(message: str) -> None:
     """
     Display a yellow "WARN" badge followed by the provided message on stderr.
 
-    The message is treated as literal text: any bracketed substrings (e.g. TOML
-    table names like ``[vault.sync]``) are escaped so Rich does not interpret
-    them as console markup and silently drop them.
+    The message is treated as literal text, like :func:`print_error`'s.
     """
-    diagnostic_console.print(f"[yellow][WARN][/yellow] {escape(message)}")
+    diagnostic_console.print(styled_text("[yellow][WARN][/yellow] {}", message))
 
 
 def print_validation_result(
@@ -72,8 +76,12 @@ def print_validation_result(
     console.print()
     console.print(
         Panel(
-            f"[bold]Validating:[/bold] {env_path}\n"
-            f"[bold]Schema:[/bold] {schema.module_path}:{schema.class_name}",
+            styled_text(
+                "[bold]Validating:[/bold] {}\n[bold]Schema:[/bold] {}:{}",
+                env_path,
+                schema.module_path,
+                schema.class_name,
+            ),
             title="envdrift validate",
         )
     )
@@ -92,21 +100,23 @@ def print_validation_result(
         for var in sorted(result.missing_required):
             field_meta = schema.fields.get(var)
             desc = f" - {field_meta.description}" if field_meta and field_meta.description else ""
-            console.print(f"  [red]*[/red] {var}{desc}")
+            console.print(styled_text("  [red]*[/red] {}", var + desc))
         console.print()
 
     # Extra variables
     if result.extra_vars:
         console.print("[bold yellow]EXTRA VARIABLES (not in schema):[/bold yellow]")
         for var in sorted(result.extra_vars):
-            console.print(f"  [yellow]*[/yellow] {var}")
+            console.print(styled_text("  [yellow]*[/yellow] {}", var))
         console.print()
 
     # Unencrypted secrets (warning, not error)
     if result.unencrypted_secrets:
         console.print("[bold yellow]UNENCRYPTED SECRETS (warning):[/bold yellow]")
         for var in sorted(result.unencrypted_secrets):
-            console.print(f"  [yellow]*[/yellow] {var} (marked sensitive but not encrypted)")
+            console.print(
+                styled_text("  [yellow]*[/yellow] {} (marked sensitive but not encrypted)", var)
+            )
         console.print("[dim]  Run 'envdrift encrypt --check' for strict enforcement[/dim]")
         console.print()
 
@@ -115,14 +125,14 @@ def print_validation_result(
         console.print("[bold red]TYPE ERRORS:[/bold red]")
         for var, error in sorted(result.type_errors.items()):
             label = "Model validation" if var == MODEL_ERROR_KEY else var
-            console.print(f"  [red]*[/red] {label}: {error}")
+            console.print(styled_text("  [red]*[/red] {}: {}", label, error))
         console.print()
 
     # Warnings
     if result.warnings:
         console.print("[bold yellow]WARNINGS:[/bold yellow]")
         for warning in result.warnings:
-            console.print(f"  [yellow]*[/yellow] {warning}")
+            console.print(styled_text("  [yellow]*[/yellow] {}", warning))
         console.print()
 
     # Missing optional (verbose only)
@@ -134,7 +144,7 @@ def print_validation_result(
                 default = f" (default: {field_meta.default})"
             else:
                 default = ""
-            console.print(f"  [dim]*[/dim] {var}{default}")
+            console.print(styled_text("  [dim]*[/dim] {}", var + default))
         console.print()
 
     # Summary (show if there are any issues)
@@ -160,7 +170,7 @@ def print_diff_result(result: DiffResult, show_unchanged: bool = False) -> None:
     console.print()
     console.print(
         Panel(
-            f"[bold]Comparing:[/bold] {result.env1_path} vs {result.env2_path}",
+            styled_text("[bold]Comparing:[/bold] {} vs {}", result.env1_path, result.env2_path),
             title="envdrift diff",
         )
     )
@@ -174,8 +184,9 @@ def print_diff_result(result: DiffResult, show_unchanged: bool = False) -> None:
     # Create table
     table = Table(show_header=True, header_style="bold")
     table.add_column("Variable", style="cyan")
-    table.add_column(str(result.env1_path.name), style="dim")
-    table.add_column(str(result.env2_path.name), style="dim")
+    # File names are literal headers: a name like `.env[prod]` is not markup.
+    table.add_column(Text(result.env1_path.name), style="dim")
+    table.add_column(Text(result.env2_path.name), style="dim")
     table.add_column("Status", justify="center")
 
     for diff in result.differences:
@@ -239,7 +250,10 @@ def print_encryption_report(report: EncryptionReport) -> None:
     """
     console.print()
     console.print(
-        Panel(f"[bold]Encryption Status:[/bold] {report.path}", title="envdrift encrypt --check")
+        Panel(
+            styled_text("[bold]Encryption Status:[/bold] {}", report.path),
+            title="envdrift encrypt --check",
+        )
     )
 
     # Overall status
@@ -267,14 +281,14 @@ def print_encryption_report(report: EncryptionReport) -> None:
     if report.plaintext_secrets:
         console.print("[bold red]PLAINTEXT SECRETS DETECTED:[/bold red]")
         for var in sorted(report.plaintext_secrets):
-            console.print(f"  [red]*[/red] {var}")
+            console.print(styled_text("  [red]*[/red] {}", var))
         console.print()
 
     # Warnings
     if report.warnings:
         console.print("[bold yellow]WARNINGS:[/bold yellow]")
         for warning in report.warnings:
-            console.print(f"  [yellow]*[/yellow] {warning}")
+            console.print(styled_text("  [yellow]*[/yellow] {}", warning))
         console.print()
 
     # Recommendation
@@ -282,10 +296,14 @@ def print_encryption_report(report: EncryptionReport) -> None:
         console.print("[bold]Recommendation:[/bold]")
         if report.detected_backend == "sops":
             console.print(
-                f"  Run: [cyan]envdrift encrypt --backend sops[/cyan] [dim]{report.path}[/dim]"
+                styled_text(
+                    "  Run: [cyan]envdrift encrypt --backend sops[/cyan] [dim]{}[/dim]", report.path
+                )
             )
         else:
-            console.print(f"  Run: [cyan]envdrift encrypt[/cyan] [dim]{report.path}[/dim]")
+            console.print(
+                styled_text("  Run: [cyan]envdrift encrypt[/cyan] [dim]{}[/dim]", report.path)
+            )
         console.print()
 
 
@@ -324,21 +342,21 @@ def print_sync_summary(
         console.print(f"[bold red]{errors} service(s) failed[/bold red]")
 
 
-def _service_identity(result: ServiceSyncResult) -> str:
-    """Escaped ``<folder> (<secret>, env: <env>)`` row prefix for sync output.
+def _service_identity(result: ServiceSyncResult) -> Text:
+    """The literal ``<folder> (<secret>, env: <env>)`` row prefix for sync output.
 
     Identifies the mapping, not just the folder: two mappings can share a
     folder_path (per-environment secrets for one service), and bare
     "<folder> - <status>" rows are indistinguishable (#441). Folder, secret
     name, and environment are user-controlled (config/vault values), so each
-    is escaped: a bracketed segment like ``kv/app[legacy]/key`` must render
-    literally instead of being eaten as Rich markup, and a stray closing tag
+    is literal text: a bracketed segment like ``kv/app[legacy]/key`` must render
+    as it is instead of being eaten as Rich markup, and a stray closing tag
     must not raise ``MarkupError``.
     """
-    identity = escape(str(result.secret_name))
+    identity = str(result.secret_name)
     if result.environment:
-        identity += f", env: {escape(result.environment)}"
-    return f"{escape(str(result.folder_path))} [dim]({identity})[/dim]"
+        identity += f", env: {result.environment}"
+    return styled_text("{} [dim]({})[/dim]", result.folder_path, identity)
 
 
 def print_service_sync_status(result: ServiceSyncResult) -> None:
@@ -369,26 +387,26 @@ def print_service_sync_status(result: ServiceSyncResult) -> None:
         icon = "[red]x[/red]"
         status = "[red]error[/red]"
 
-    console.print(f"  {icon} {_service_identity(result)} - {status}")
+    console.print(styled_text("  " + icon + " {} - " + status, _service_identity(result)))
 
     # Show error details. When the engine only set ``message`` (no ``error``),
     # fall back to it so an error row always carries its reason (#487).
-    # Escaped: error text embeds user-controlled names (secret, folder), so a
-    # bracketed segment must render literally, not crash or vanish as markup.
+    # Literal: error text embeds user-controlled names (secret, folder), so a
+    # bracketed segment must render as it is, not crash or vanish as markup.
     if result.error:
-        console.print(f"    [red]Error: {escape(result.error)}[/red]")
+        console.print(styled_text("    [red]Error: {}[/red]", result.error))
     elif result.action == SyncAction.ERROR and result.message:
-        console.print(f"    [red]Error: {escape(result.message)}[/red]")
+        console.print(styled_text("    [red]Error: {}[/red]", result.message))
 
     # Show mismatch preview
     if result.local_value_preview and result.vault_value_preview:
         if result.local_value_preview != result.vault_value_preview:
-            console.print(f"    [dim]Local:  {result.local_value_preview}[/dim]")
-            console.print(f"    [dim]Vault:  {result.vault_value_preview}[/dim]")
+            console.print(styled_text("    [dim]Local:  {}[/dim]", result.local_value_preview))
+            console.print(styled_text("    [dim]Vault:  {}[/dim]", result.vault_value_preview))
 
     # Show backup path
     if result.backup_path:
-        console.print(f"    [dim]Backup: {result.backup_path}[/dim]")
+        console.print(styled_text("    [dim]Backup: {}[/dim]", result.backup_path))
 
     # Show decryption test result
     if result.decryption_result is not None:
@@ -463,7 +481,9 @@ def print_mismatch_warning(
         vault_preview (str): Preview of vault value (first N chars).
     """
     diagnostic_console.print()
-    diagnostic_console.print(f"[bold yellow]VALUE MISMATCH: {service_name}[/bold yellow]")
-    diagnostic_console.print(f"  Local:  {local_preview}")
-    diagnostic_console.print(f"  Vault:  {vault_preview}")
+    diagnostic_console.print(
+        styled_text("[bold yellow]VALUE MISMATCH: {}[/bold yellow]", service_name)
+    )
+    diagnostic_console.print(styled_text("  Local:  {}", local_preview))
+    diagnostic_console.print(styled_text("  Vault:  {}", vault_preview))
     diagnostic_console.print()

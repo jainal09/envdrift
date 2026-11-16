@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Never
 import typer
 
 from envdrift.output.rich import console, print_error, print_warning
+from envdrift.utils.text import styled_text
 
 if TYPE_CHECKING:
     from .vault_helpers import VaultPullRequest, _BulkPushContext, _PushTarget
@@ -117,8 +118,11 @@ def _refuse_pull_overwrite(env_keys_path: Path, key_name: str) -> Never:
         f"decrypted any more. Nothing was changed."
     )
     console.print(
-        "  Push the local key first (envdrift vault-push), or re-run with --force to "
-        f"replace it; --force backs up {env_keys_path.name} before writing."
+        styled_text(
+            "  Push the local key first (envdrift vault-push), or re-run with --force to "
+            "replace it; --force backs up {} before writing.",
+            env_keys_path.name,
+        )
     )
     raise typer.Exit(code=1)
 

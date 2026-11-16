@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from rich.text import Text
 
 from envdrift.output.rich import console, print_error, print_success
 
@@ -38,7 +39,9 @@ def hook(
     if show_config or (not install):
         from envdrift.integrations.precommit import get_hook_config
 
-        console.print(get_hook_config())
+        # Verbatim and never wrapped by Rich: a YAML line broken at the terminal
+        # width is no longer the same YAML once it is copied.
+        console.print(Text(get_hook_config()), soft_wrap=True)
 
         if not install:
             console.print("[dim]Use --install to add hooks to .pre-commit-config.yaml[/dim]")

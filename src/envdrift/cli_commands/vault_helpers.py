@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Never
 
 import typer
+from rich.text import Text
 
 from envdrift.cli_commands.sync_config_helpers import (
     AZURE_VAULT_URL_REQUIRED,
@@ -16,6 +17,7 @@ from envdrift.cli_commands.sync_config_helpers import (
 )
 from envdrift.env_files import EnvFileDetection, resolve_custom_env_file, resolve_mapping_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
+from envdrift.utils.text import styled_text
 
 from .sync_config_helpers import require_profile_mappings
 from .vault_keys import push_key_problem, read_push_key, write_pull_key
@@ -264,7 +266,8 @@ def _require_installed_backend(backend: EncryptionBackend) -> None:
     """Fail with install guidance when an encryption backend is unavailable."""
     if not backend.is_installed():
         print_error(f"{backend.name} is not installed")
-        console.print(backend.install_instructions())
+        # Literal: the instructions quote TOML such as `[encryption.sops]`.
+        console.print(Text(backend.install_instructions()))
         raise typer.Exit(code=1)
 
 
@@ -370,8 +373,11 @@ def _skip_existing_secret(
         stats.errors += 1
         return True
     console.print(
-        f"[dim]Skipped[/dim] {target.mapping.folder_path}: "
-        f"Secret '{target.mapping.secret_name}' already exists"
+        styled_text(
+            "[dim]Skipped[/dim] {}: Secret '{}' already exists",
+            target.mapping.folder_path,
+            target.mapping.secret_name,
+        )
     )
     stats.skipped += 1
     return True
@@ -385,7 +391,9 @@ def _skip_missing_env_file(target: _PushTarget, stats: _PushStats) -> bool:
         f"{target.env_file.name} file" if target.mapping.env_file is not None else ".env file"
     )
     console.print(
-        f"[dim]Skipped[/dim] {target.mapping.folder_path}: No {missing_description} found"
+        styled_text(
+            "[dim]Skipped[/dim] {}: No {} found", target.mapping.folder_path, missing_description
+        )
     )
     stats.skipped += 1
     return True
@@ -414,8 +422,12 @@ def _handle_provider_mismatch(
         stats.dotenvx_mismatch = True
         return True
     console.print(
-        f"[dim]Skipped[/dim] {target.mapping.folder_path}: "
-        f"Encrypted with {detected_provider.value}, config uses {context.backend_provider.value}"
+        styled_text(
+            "[dim]Skipped[/dim] {}: Encrypted with {}, config uses {}",
+            target.mapping.folder_path,
+            detected_provider.value,
+            context.backend_provider.value,
+        )
     )
     stats.skipped += 1
     return True
@@ -429,7 +441,7 @@ def _encrypt_target(
     """Encrypt one plaintext target, returning whether processing may continue."""
     from envdrift.encryption import EncryptionBackendError, EncryptionNotFoundError
 
-    console.print(f"Encrypting {target.env_file} with {context.backend.name}...")
+    console.print(Text(f"Encrypting {target.env_file} with {context.backend.name}..."))
     try:
         result = context.backend.encrypt(target.env_file, **_bulk_encrypt_kwargs(context, target))
     except (EncryptionNotFoundError, EncryptionBackendError) as e:
@@ -626,7 +638,7 @@ def _push_single_secret(request: VaultPushRequest) -> None:
         raise typer.Exit(code=1) from None
     print_success(f"Pushed secret '{secret_name}' to {settings.provider} vault")
     if result.version:
-        console.print(f"  Version: {result.version}")
+        console.print(Text(f"  Version: {result.version}"))
 
 
 def _validate_pull_folder(folder: Path) -> None:
@@ -772,6 +784,6 @@ def execute_vault_pull(request: VaultPullRequest) -> None:
         return
     target = _resolve_pull_target(request)
     if not target.exists():
-        console.print(f"[dim]Key written; no {target} found to decrypt.[/dim]")
+        console.print(Text(f"Key written; no {target} found to decrypt.", style="dim"))
         return
     _decrypt_pull_target(request, target, env_keys_path)
