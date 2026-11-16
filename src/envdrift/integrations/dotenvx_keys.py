@@ -226,6 +226,41 @@ def comment_cut_names(text: str) -> list[str]:
     return names
 
 
+@dataclass(frozen=True)
+class CiphertextValue:
+    """One dotenvx ciphertext value in a text: its name, and where the ciphertext is.
+
+    ``start`` and ``end`` bound the ciphertext alone, inside any quotes around it,
+    so replacing that span keeps the quotes the value has.
+    """
+
+    name: str
+    start: int
+    end: int
+    ciphertext: str
+
+
+def ciphertext_values(text: str) -> list[CiphertextValue]:
+    """Return every value of ``text`` that dotenvx decrypts, in file order (#946).
+
+    ``text`` must have ``\\n`` line ends: the spans are positions in it. dotenvx's
+    own scanner finds the values, so a line inside a quoted multi-line value is
+    never taken for an assignment of its own.
+    """
+    values: list[CiphertextValue] = []
+    for match in _LINE_RE.finditer(text):
+        raw = match.group(2)
+        if raw is None:
+            continue
+        start = match.start(2) + len(raw) - len(raw.lstrip(_JS_SPACE_CHARS))
+        token = raw.strip(_JS_SPACE_CHARS)
+        if len(token) >= 2 and token[0] in ("'", '"', "`") and token[-1] == token[0]:
+            start, token = start + 1, token[1:-1]
+        if token.startswith(ENCRYPTED_PREFIX):
+            values.append(CiphertextValue(match.group(1), start, start + len(token), token))
+    return values
+
+
 def unverifiable_ciphertext(text: str) -> bool:
     """Whether ``text`` holds ciphertext but no public key to tie a private key to it.
 

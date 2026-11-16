@@ -15,6 +15,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess  # nosec B404
 import sys
@@ -33,10 +34,13 @@ from envdrift.install_integrity import (
     verify_download,
 )
 from envdrift.integrations.dotenvx_keys import (
+    PUBLIC_KEY_PREFIX,
+    CiphertextValue,
     KeyReuseError,
     KeyReusePlan,
     KeyTarget,
     assignment_values,
+    ciphertext_values,
     comment_cut_names,
     distinct_keys,
     dotenvx_key_names,
@@ -443,6 +447,52 @@ def _replace_file(path: Path, data: bytes) -> None:
     from envdrift.sync.operations import atomic_write
 
     atomic_write(path, data)
+
+
+def _public_key_assignments(text: str) -> list[tuple[str, str]]:
+    """Every ``DOTENV_PUBLIC_KEY*`` name and value in ``text``, as dotenvx reads them."""
+    return [
+        (name, value)
+        for name, values in parse_assignments(text).items()
+        if name.startswith(PUBLIC_KEY_PREFIX)
+        for value in values
+    ]
+
+
+def _stand_in_values(output: bytes, stand_in: str, count: int) -> list[str] | None:
+    """The values ``dotenvx decrypt --stdout`` printed under the stand-in names, or None.
+
+    Each line it prints for one reads ``<stand_in><index>='<plaintext>'``. A plaintext
+    can hold quotes and line breaks, so it runs to the next stand-in line, or to the
+    end marker, which no plaintext holds: the stand-in names carry a random nonce.
+    """
+    try:
+        text = "\n" + output.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    plaintexts: list[str] = []
+    position = 0
+    for index in range(count):
+        opening = f"\n{stand_in}{index}='"
+        following = f"{stand_in}{index + 1}='" if index + 1 < count else f"# {stand_in}END"
+        start = text.find(opening, position)
+        end = text.find(f"'\n{following}", start + len(opening)) if start >= 0 else -1
+        if end < 0:
+            return None
+        plaintexts.append(text[start + len(opening) : end])
+        position = end
+    return plaintexts
+
+
+def _with_plaintexts(text: str, values: list[CiphertextValue], plaintexts: list[str]) -> str:
+    """``text`` with the ciphertext of each of ``values`` replaced by its plaintext."""
+    pieces: list[str] = []
+    position = 0
+    for value, plaintext in zip(values, plaintexts, strict=True):
+        pieces += [text[position : value.start], plaintext]
+        position = value.end
+    pieces.append(text[position:])
+    return "".join(pieces)
 
 
 def get_platform_info() -> tuple[str, str]:
@@ -1486,8 +1536,16 @@ class DotenvxWrapper:
         """
         Decrypt the specified dotenv file in place.
 
-        Automatically normalizes line endings to Unix-style (LF) before decryption
-        to ensure cross-platform compatibility with dotenvx.
+        Only the ciphertext changes: each value comes back as the exact text it was
+        encrypted from, inside the quotes it had, and the rest of the file stays as
+        it was, except that line endings are normalized to Unix-style (LF) for
+        cross-platform compatibility. ``dotenvx decrypt`` itself writes every value
+        the way ``dotenvx run`` loads it: it expands ``$VAR`` and ``${VAR}``, runs
+        ``$(command)``, drops the backslash of ``\\$`` and takes the value of a
+        variable its environment already has, the plaintext values included, so
+        ``Xk9$mQ2zz!`` came back as ``Xk9!`` (#946). So dotenvx only decrypts the
+        ciphertext (``_decrypted_values``), and envdrift writes it into the file,
+        whole or not at all.
 
         Parameters:
             env_file (Path | str): Path to the .env file to decrypt.
@@ -1496,32 +1554,132 @@ class DotenvxWrapper:
             cwd (Path | str | None): Optional working directory for the subprocess.
 
         Raises:
-            DotenvxError: If env_file does not exist or the decryption command fails.
+            DotenvxError: If env_file does not exist, is not UTF-8 text, or the
+                decryption fails. The file is then left as it was.
             DotenvxNotFoundError: If the dotenvx binary cannot be located when running the command.
         """
         env_file = Path(env_file)
         if not env_file.exists():
             raise DotenvxError(f"File not found: {env_file}")
 
-        # Normalize CRLF -> LF for cross-platform consistency (see encrypt()).
-        self._normalize_line_endings(env_file)
-
         # Pin -fk to the sibling .env.keys: dotenvx v2 otherwise looks for the
         # key store in the process cwd (v1 read it next to the file), so a
         # subfolder file would fail to decrypt (#566).
         env_keys_file = _sibling_env_keys_file(env_file, env_keys_file)
 
-        # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
-        # misparses them as flags (#474).
-        args = ["decrypt", "-f", _dash_safe_path(env_file)]
-        args.extend(["-fk", _dash_safe_path(env_keys_file)])
+        text = self._decryptable_text(env_file)
+        values = ciphertext_values(text)
+        if not values:
+            return
+        plaintexts = self._decrypted_values(env_file, env_keys_file, values, text, env, cwd)
+        self._write_decrypted(env_file, _with_plaintexts(text, values, plaintexts))
 
-        # Run with check=False so we can detect the case where dotenvx prints a
-        # decrypt error (e.g. "decryption failed", "private key not found",
-        # "MISSING_DOTENV_KEY") while still exiting 0. Without this post-check a
-        # 0-exit-with-error-output would be reported as a successful decrypt.
-        result = self._run(args, env=env, cwd=cwd, check=False)
-        self._raise_on_error_output(result, "decryption")
+    @staticmethod
+    def _decryptable_text(env_file: Path) -> str:
+        """``env_file``'s text with LF line ends, or a ``DotenvxError`` with it untouched."""
+        try:
+            data = env_file.read_bytes()
+        except OSError as exc:
+            raise DotenvxError(f"Cannot read {env_file}: {exc.strerror or exc}") from None
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise DotenvxError(
+                f"Cannot decrypt {env_file}: it is not valid UTF-8, so its values could not "
+                "be written back exactly. Nothing was changed."
+            ) from None
+        # Normalize CRLF -> LF for cross-platform consistency (see encrypt()).
+        return text.replace("\r\n", "\n").replace("\r", "\n")
+
+    def _decrypted_values(
+        self,
+        env_file: Path,
+        keys_file: Path | str,
+        values: list[CiphertextValue],
+        text: str,
+        env: dict[str, str] | None,
+        cwd: Path | str | None,
+    ) -> list[str]:
+        """Return the plaintext of each ciphertext in ``values``, exactly as encrypted.
+
+        dotenvx leaves a single-quoted value as it is, under a name its environment
+        does not have. So the ciphertexts go to dotenvx in a copy of the file that
+        holds only its public keys, which tie the ciphertexts to their private keys,
+        and the ciphertexts, single-quoted under names made up for this run. The copy
+        keeps the file's name, from which dotenvx 1.x derived the key name, and
+        dotenvx prints the decrypted copy instead of writing it, so no plaintext is
+        written anywhere but the file. Any value it cannot decrypt fails the whole
+        run, so a failed decrypt changes nothing.
+        """
+        stand_in = f"ENVDRIFT_{secrets.token_hex(8)}_"
+        lines = [f'{name}="{key}"' for name, key in _public_key_assignments(text)]
+        lines += [f"{stand_in}{index}='{value.ciphertext}'" for index, value in enumerate(values)]
+        lines.append(f"# {stand_in}END")
+        with tempfile.TemporaryDirectory(prefix="envdrift-decrypt-") as folder:
+            copy = Path(folder) / env_file.name
+            copy.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
+            # misparses them as flags (#474).
+            args = ["decrypt", "-f", _dash_safe_path(copy), "-fk", _dash_safe_path(keys_file)]
+            result = self._run_raw([*args, "--stdout"], env=env, cwd=cwd)
+        # dotenvx names a value it could not decrypt: by its real name in the error.
+        stderr = re.sub(
+            rf"{stand_in}(\d+)",
+            lambda found: values[int(found.group(1))].name,
+            result.stderr.decode("utf-8", errors="replace"),
+        )
+        # Only stderr: stdout holds the plaintext, which may itself read like an
+        # error. dotenvx can exit 0 while printing a decrypt error, so both count.
+        self._raise_on_error_output(
+            subprocess.CompletedProcess(args, result.returncode, "", stderr), "decryption"
+        )
+        plaintexts = _stand_in_values(result.stdout, stand_in, len(values))
+        if plaintexts is None:
+            raise DotenvxError(
+                f"dotenvx decryption failed: its output for {env_file} did not hold every "
+                "decrypted value, so nothing was written."
+            )
+        return plaintexts
+
+    def _run_raw(
+        self, args: list[str], env: dict[str, str] | None, cwd: Path | str | None
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run dotenvx like ``_run(check=False)``, its output kept as bytes.
+
+        Text mode turns ``\\r`` into ``\\n``, which would change a decrypted value.
+        """
+        binary = self._find_binary()
+        try:
+            return subprocess.run(  # nosec B603
+                [str(binary), *args],
+                capture_output=True,
+                timeout=120,
+                env=env,
+                cwd=str(cwd) if cwd else None,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise DotenvxError("dotenvx command timed out") from e
+        except FileNotFoundError as e:
+            raise DotenvxNotFoundError(f"dotenvx binary not found: {e}") from e
+
+    @staticmethod
+    def _write_decrypted(env_file: Path, text: str) -> None:
+        """Write the decrypted ``text`` over ``env_file`` whole, through any symlink to it.
+
+        dotenvx's own write went through a symlinked file into its target, so the
+        link stays a link and the plaintext lands where it did before.
+        """
+        try:
+            target = env_file.resolve()
+        except (OSError, RuntimeError):  # a symlink loop: write the path itself
+            target = env_file
+        try:
+            _replace_file(target, text.encode("utf-8"))
+        except OSError as exc:
+            raise DotenvxError(
+                f"Cannot write the decrypted values to {env_file}: {exc.strerror or exc}. "
+                "Nothing was changed."
+            ) from None
 
     def run(self, env_file: Path | str, command: list[str]) -> subprocess.CompletedProcess:
         """

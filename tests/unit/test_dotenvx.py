@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -24,6 +25,21 @@ from envdrift.integrations.dotenvx import (
     get_platform_info,
     get_venv_bin_dir,
 )
+
+
+def _decrypt_stdout(plaintext: str):
+    """A ``dotenvx decrypt --stdout`` stand-in: prints its copy with every value decrypted.
+
+    decrypt hands dotenvx a copy of the file holding the ciphertexts single-quoted
+    (#946), and reads the decrypted copy back from stdout.
+    """
+
+    def run(cmd, **_kwargs):
+        copy = Path(cmd[cmd.index("-f") + 1])
+        text = re.sub(r"'encrypted:[^']*'", lambda _m: f"'{plaintext}'", copy.read_text())
+        return subprocess.CompletedProcess(cmd, 0, (text + "\n").encode(), b"")
+
+    return run
 
 
 class TestExceptions:
@@ -804,9 +820,9 @@ class TestDotenvxWrapper:
         mock_path.return_value = binary_path
 
         env_file = tmp_path / ".env"
-        env_file.write_text("ENCRYPTED_KEY=xyz")
+        env_file.write_text("ENCRYPTED_KEY=encrypted:xyz")
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _decrypt_stdout("plain")
 
         wrapper = DotenvxWrapper()
         wrapper.decrypt(env_file)
@@ -814,6 +830,8 @@ class TestDotenvxWrapper:
         mock_run.assert_called()
         call_args = mock_run.call_args[0][0]
         assert "decrypt" in call_args
+        assert "--stdout" in call_args
+        assert env_file.read_text() == "ENCRYPTED_KEY=plain"
 
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
     def test_decrypt_file_not_found(self, mock_path, tmp_path):
@@ -845,11 +863,11 @@ class TestDotenvxWrapper:
         mock_path.return_value = binary_path
 
         env_file = tmp_path / ".env"
-        env_file.write_text("ENCRYPTED_KEY=xyz")
+        env_file.write_text("ENCRYPTED_KEY=encrypted:xyz")
 
         # Exit 0 but an error in stderr -> must be treated as a failure.
         mock_run.return_value = MagicMock(
-            returncode=0, stdout="", stderr="decryption failed: private key not found"
+            returncode=0, stdout=b"", stderr=b"decryption failed: private key not found"
         )
 
         wrapper = DotenvxWrapper()
@@ -857,6 +875,7 @@ class TestDotenvxWrapper:
             wrapper.decrypt(env_file)
 
         assert "decryption failed" in str(exc_info.value)
+        assert env_file.read_text() == "ENCRYPTED_KEY=encrypted:xyz"
 
     @patch("subprocess.run")
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
@@ -867,9 +886,9 @@ class TestDotenvxWrapper:
         mock_path.return_value = binary_path
 
         env_file = tmp_path / ".env"
-        env_file.write_text("ENCRYPTED_KEY=xyz")
+        env_file.write_text("ENCRYPTED_KEY=encrypted:xyz")
 
-        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
+        mock_run.return_value = MagicMock(returncode=1, stdout=b"", stderr=b"boom")
 
         wrapper = DotenvxWrapper()
         with pytest.raises(DotenvxError) as exc_info:
@@ -886,12 +905,14 @@ class TestDotenvxWrapper:
         mock_path.return_value = binary_path
 
         env_file = tmp_path / ".env"
-        env_file.write_text("ENCRYPTED_KEY=xyz")
+        env_file.write_text("ENCRYPTED_KEY=encrypted:xyz")
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="decrypted (1 line)", stderr="")
+        mock_run.side_effect = _decrypt_stdout("plain")
 
         wrapper = DotenvxWrapper()
         wrapper.decrypt(env_file)  # must not raise
+
+        assert env_file.read_text() == "ENCRYPTED_KEY=plain"
 
     @patch("subprocess.run")
     @patch("envdrift.integrations.dotenvx.get_dotenvx_path")
@@ -1236,17 +1257,16 @@ class TestLineEndingNormalization:
         binary_path.touch()
         mock_path.return_value = binary_path
 
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = _decrypt_stdout("abc")
 
         env_file = tmp_path / ".env"
-        env_file.write_bytes(b"KEY=encrypted:abc123\r\n")
+        env_file.write_bytes(b"KEY=encrypted:abc123\r\nOTHER=plain\r\n")
 
         wrapper = DotenvxWrapper()
         wrapper.decrypt(env_file)
 
-        # Verify file was normalized before decrypt
-        # Note: after decrypt, dotenvx would modify the file, but since we're mocking
-        # we just verify the normalization happened before the call
+        # The decrypted file is written with LF line endings, in one write.
+        assert env_file.read_bytes() == b"KEY=abc\nOTHER=plain\n"
         mock_run.assert_called_once()
 
 

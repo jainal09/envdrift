@@ -15,6 +15,9 @@ workflow. Its exact behaviour depends on the mode configured for each environmen
 
 **Combine mode** (default): decrypts `.secret` files in place so you can edit sensitive
 variables. After editing, run `envdrift push` to re-encrypt and regenerate the combined file.
+Each value comes back exactly as it was encrypted, a `$` included (`Xk9$mQ2zz!` stays
+`Xk9$mQ2zz!`; see [decrypt](decrypt.md#values-come-back-exactly-as-written)), so a `push`
+without edits re-encrypts the same secrets.
 
 **Secrets-only mode** (`secrets_only = true`): decrypts every file matching `pattern`
 inside `secrets_dir` in place. No combined file is involved. The `pattern` glob is
