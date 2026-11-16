@@ -47,6 +47,7 @@ from envdrift.scanner.platform_utils import (
 )
 from envdrift.utils.deadline import run_tool
 from envdrift.utils.git import without_git_location
+from envdrift.utils.text import split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -700,9 +701,9 @@ class TrivyScanner(ScannerBackend):
         if line_cache is not None and file_path in line_cache:
             return line_cache[file_path]
         try:
-            lines: list[str] | None = file_path.read_text(
-                encoding="utf-8", errors="replace"
-            ).splitlines()
+            lines: list[str] | None = split_lines(
+                file_path.read_text(encoding="utf-8", errors="replace")
+            )
         except OSError:
             lines = None
         if line_cache is not None:
@@ -731,7 +732,7 @@ class TrivyScanner(ScannerBackend):
         Args:
             file_path: The scanned file the finding points at.
             secret: Secret data from trivy output.
-            line_cache: Optional shared cache of ``splitlines()`` results
+            line_cache: Optional shared cache of :func:`split_lines` results
                 (``None`` for unreadable files) so several findings in one
                 file cost a single read.
         """

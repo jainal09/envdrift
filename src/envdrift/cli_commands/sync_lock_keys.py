@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import typer
+from rich.markup import escape
 
 from envdrift.output.rich import console, print_error
 from envdrift.vault.base import SecretNotFoundError, VaultError
@@ -23,6 +24,9 @@ class _LocalLockKey:
     mapping: ServiceMapping
     value: str
     environment: str
+    # Every value the keys file holds under the key name: dotenvx loads all of
+    # them, so each must be the vault key (#938).
+    values: tuple[str, ...] = ()
 
 
 def _sync_lock_keys(request: LockRequest, context: SyncCommandContext) -> None:
@@ -70,9 +74,25 @@ def _read_local_lock_key(
         )
         state.verification_issues += 1
         return None
-    local_key = EnvKeysFile(keys_file).read_key(key_name)
-    if local_key:
-        return _LocalLockKey(mapping=mapping, value=local_key, environment=environment)
+    try:
+        values = EnvKeysFile(keys_file).read_values(key_name)
+    except (OSError, ValueError) as exc:
+        console.print(
+            f"  [red]✗[/red] {mapping.folder_path} "
+            f"[red]- cannot verify: cannot read {keys_file.name}: {escape(str(exc))}[/red]"
+        )
+        state.errors.append(
+            f"{mapping.folder_path}: cannot verify - cannot read {keys_file}: {exc}"
+        )
+        state.verification_issues += 1
+        return None
+    if any(values):
+        # Every value is compared below, an empty first line included: dotenvx
+        # loads them all, so a later value must not hide behind "not found".
+        first = next(value for value in values if value)
+        return _LocalLockKey(
+            mapping=mapping, value=first, environment=environment, values=tuple(values)
+        )
     console.print(
         f"  [red]✗[/red] {mapping.folder_path} "
         f"[red]- cannot verify: {key_name} not found in {keys_file.name}[/red]"
@@ -99,7 +119,10 @@ def _compare_lock_vault_key(
             _record_unavailable_vault_secret(local, "is empty", state)
             return
         vault_key, vault_suffix = extract_key_material(secret, local.environment)
-        if _vault_key_matches(local.value, vault_key, vault_suffix, local.environment):
+        if all(
+            _vault_key_matches(value, vault_key, vault_suffix, local.environment)
+            for value in _held_keys(local)
+        ):
             console.print(
                 f"  [green]✓[/green] {local.mapping.folder_path} [dim]- keys match vault[/dim]"
             )
@@ -125,13 +148,26 @@ def _record_unavailable_vault_secret(local: _LocalLockKey, reason: str, state: _
     state.verification_issues += 1
 
 
+def _held_keys(local: _LocalLockKey) -> list[str]:
+    """Every key the keys file holds for ``local``, key rings (``a,b``) split as dotenvx does."""
+    from envdrift.integrations.dotenvx_keys import private_key_candidates
+
+    return private_key_candidates(list(local.values or (local.value,)))
+
+
 def _record_lock_key_mismatch(local: _LocalLockKey, state: _LockState) -> None:
+    detail = ""
+    distinct = len(set(_held_keys(local)))
+    if distinct > 1:
+        # The first line can match the vault while a second, different key is
+        # what dotenvx encrypted with (#938): name it instead of "differs".
+        detail = f" (the keys file holds {distinct} different values for this key)"
     console.print(
         f"  [red]✗[/red] {local.mapping.folder_path} "
-        f"[red]- KEY MISMATCH: local key differs from vault![/red]"
+        f"[red]- KEY MISMATCH: local key differs from vault!{detail}[/red]"
     )
     state.errors.append(
-        f"{local.mapping.folder_path}: local key does not match vault "
+        f"{local.mapping.folder_path}: local key does not match vault{detail} "
         f"(run 'envdrift lock --sync-keys' to fix)"
     )
     state.verification_issues += 1

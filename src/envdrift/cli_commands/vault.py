@@ -62,6 +62,10 @@ Modes:
 2. Pull key only (skip decryption):
    envdrift vault-pull ./services/soak soak-machine --env soak --no-decrypt -p azure --vault-url https://myvault.vault.azure.net/
 
+A different DOTENV_PRIVATE_KEY_<ENV> already in .env.keys is never replaced
+silently: vault-pull refuses and changes nothing. With --force it backs up
+.env.keys (.env.keys.backup.<timestamp>, gitignored) and then replaces the key.
+
 Provider/URL/region/project-id may be omitted when they are configured in the
 `\[vault]` section of an envdrift.toml/pyproject.toml.
 
@@ -177,6 +181,17 @@ _EnvFileOption = Annotated[
     Path | None,
     typer.Option("--env-file", help="Custom env filename to decrypt, relative to FOLDER"),
 ]
+_PullForceOption = Annotated[
+    bool,
+    typer.Option(
+        "--force",
+        "-f",
+        help=(
+            "Replace a different DOTENV_PRIVATE_KEY_<ENV> already in .env.keys "
+            "(a backup of .env.keys is made first)"
+        ),
+    ),
+]
 
 
 def vault_push(
@@ -227,6 +242,7 @@ def vault_pull(
     project_id: _ProjectIdOption = None,
     no_decrypt: _NoDecryptOption = False,
     env_file: _EnvFileOption = None,
+    force: _PullForceOption = False,
 ) -> None:
     """Pull an encryption key from a cloud vault and optionally decrypt its env file."""
     execute_vault_pull(
@@ -243,5 +259,6 @@ def vault_pull(
             ),
             no_decrypt=no_decrypt,
             env_file=env_file,
+            force=force,
         )
     )
