@@ -64,11 +64,18 @@ def _ensure_combined_gitignore(envs_to_process) -> None:
         # Text, not markup: the entries are printed exactly as written to .gitignore,
         # never parsed as tags (a [/x] folder raised MarkupError) or emoji codes.
         console.print(Text(f"Updated .gitignore: {', '.join(added_entries)}", style="dim"))
-    # Fail closed: an entry can still be overridden (by a later `!` rule in a
-    # .gitignore), and then `git add .` stages the private key. Ask git, in each key
-    # file's own repository, and stop before dotenvx touches a partial-encryption file
-    # unless git says it ignores every one. (pull --merge gets here after its earlier
-    # steps, which may have decrypted mapped files.)
+    _stop_unless_git_ignores(key_files)
+
+
+def _stop_unless_git_ignores(key_files: list[Path]) -> None:
+    """Exit 1 unless git says it ignores every one of the private key files ``key_files``.
+
+    Fail closed: an entry can still be overridden (by a later `!` rule in a .gitignore),
+    and then `git add .` stages the private key. Ask git, in each key file's own
+    repository, and stop before dotenvx touches a partial-encryption file unless git says
+    it ignores every one. (pull --merge gets here after its earlier steps, which may have
+    decrypted mapped files.)
+    """
     exposed = unignored_paths(key_files)
     re_included = [shown for shown, reason in exposed if reason is None]
     unconfirmed = [f"{shown} ({reason})" for shown, reason in exposed if reason is not None]

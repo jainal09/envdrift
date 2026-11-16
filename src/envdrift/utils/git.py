@@ -521,13 +521,21 @@ def _add_gitignore_entries(git_root: Path, path_list: list[Path]) -> list[str]:
             existing.add(entry.strip())
 
     if new_entries:
-        with gitignore_path.open("a", encoding="utf-8") as handle:
-            if content and not content.endswith("\n"):
-                handle.write("\n")
-            for entry in new_entries:
-                handle.write(f"{entry}\n")
-
+        _append_lines(gitignore_path, content, new_entries)
     return new_entries
+
+
+def _append_lines(gitignore_path: Path, content: str, lines: list[str]) -> None:
+    """Append ``lines`` to ``gitignore_path``, whose text is ``content``, one per line.
+
+    A line break goes first when ``content`` does not end with one, so the first line is
+    not glued to the last line already there.
+    """
+    with gitignore_path.open("a", encoding="utf-8") as handle:
+        if content and not content.endswith("\n"):
+            handle.write("\n")
+        for line in lines:
+            handle.write(f"{line}\n")
 
 
 def gitignore_escape(name: str) -> str:
@@ -653,6 +661,17 @@ def ensure_gitignore_glob(sample: Path, pattern: str) -> str | None:
     scope = "/".join(gitignore_escape(part) for part in folder.parts)
     entry = f"{scope}/{pattern}" if scope else pattern
     added = _append_gitignore_entry(git_root / ".gitignore", entry)
+    _require_ignored(sample, git_root, entry)
+    return added
+
+
+def _require_ignored(sample: Path, git_root: Path, entry: str) -> None:
+    """Raise unless git, in ``git_root``, says it ignores ``sample`` with ``entry`` in place.
+
+    Raises:
+        GitignoreOverrideError: git says it does not: a later ``!`` rule re-includes it.
+        OSError: git could not say (it failed, timed out or could not run).
+    """
     verdict = _ignore_verdict(sample, git_root)
     if verdict is False:
         raise GitignoreOverrideError(
@@ -662,7 +681,6 @@ def ensure_gitignore_glob(sample: Path, pattern: str) -> str | None:
         )
     if verdict is not True:
         raise OSError(f"envdrift cannot make sure git ignores {sample.name}: {verdict}")
-    return added
 
 
 def _require_outside_a_checkout(sample: Path) -> None:
