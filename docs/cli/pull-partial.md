@@ -213,11 +213,11 @@ in the submodule, since the superproject tracks only the submodule's commit.
 
 A file name that needs quotes is quoted for the shell you paste the commands into:
 in single quotes on Linux and macOS, and in double quotes on Windows. A name that
-starts with `-` gets a leading `./`, so neither git nor envdrift reads it as an
-option. Inside double quotes cmd.exe still expands `%NAME%` and PowerShell `$NAME`,
-and no quoting stops both. So on Windows, when a name holds `%`, `!`, `$`, a backtick
-or a curly quote, the message adds a sentence that says to check that your shell
-passes the name as it is before you run the commands.
+starts with `-` gets a leading `./` (`.\` on Windows), so neither git nor envdrift
+reads it as an option. Inside double quotes cmd.exe still expands `%NAME%` and
+PowerShell `$NAME`, and no quoting stops both. So on Windows, when a name holds `%`,
+`!`, `$`, a backtick or a curly quote, the message adds a sentence that says to check
+that your shell passes the name as it is before you run the commands.
 
 Leftover dotenvx ciphertext is reported the same way (`it still holds dotenvx
 ciphertext`), which usually means the decryption key is missing or invalid.
