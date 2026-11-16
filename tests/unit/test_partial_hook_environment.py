@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess  # nosec B404
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import patch
@@ -26,6 +27,7 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
+import envdrift
 from envdrift.cli import app
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import (
@@ -259,3 +261,61 @@ def test_pull_partial_in_a_superprojects_hook_protects_the_submodules_secret(
     assert _flag(submodule, "config/.env.secret") == "S"
     assert _flag(superproject, "config/.env.secret", in_the_hook=True) == "H"
     assert "config/.env.secret" not in _git(submodule, "add", "--dry-run", "-A")
+
+
+class _KnownLostMarkError(AssertionError):
+    """The false success #1031 describes; any other failure stays a real test failure."""
+
+
+@pytest.mark.xfail(
+    strict=False,
+    raises=_KnownLostMarkError,
+    reason="a mark made in a partial commit's hook is lost with its index (see #1031)",
+)
+def test_a_mark_a_partial_commit_drops_is_not_called_applied(tmp_path: Path) -> None:
+    """``git commit <path>`` gives its hooks a temporary index, which git discards after.
+
+    A real ``pre-commit`` hook marks the secret file. The mark goes into that index, so
+    envdrift must not call the file protected unless the mark is still there once the
+    commit is done.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "config").mkdir()
+    (repo / "config" / ".env.secret").write_text("API_KEY=x\n", encoding="utf-8")
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "init")
+    hooks = repo / ".git" / "hooks"
+    hooks.mkdir(exist_ok=True)
+    mark = (
+        "from pathlib import Path; "
+        "from envdrift.core.partial_encryption import _git_skip_worktree; "
+        "print('MARKED=' + str(_git_skip_worktree(Path('config/.env.secret').resolve())))"
+    )
+    python = Path(sys.executable).as_posix()
+    (hooks / "pre-commit").write_text(f'#!/bin/sh\nexec "{python}" -c "{mark}"\n', encoding="utf-8")
+    (hooks / "pre-commit").chmod(0o755)
+    (repo / "a.txt").write_text("a\nb\n", encoding="utf-8")
+    env = {key: value for key, value in os.environ.items() if key not in _HOOK_VARIABLES}
+    env["PYTHONPATH"] = str(Path(envdrift.__file__).resolve().parents[1])
+
+    commit = subprocess.run(
+        ["git", "-c", f"core.hooksPath={hooks.as_posix()}", "-c", "user.name=t"]
+        + ["-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+        + ["commit", "-qm", "partial", "a.txt"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    hook_output = commit.stdout + commit.stderr  # git sends a hook's stdout to stderr
+    assert commit.returncode == 0, hook_output
+    assert "MARKED=" in hook_output, hook_output
+    marked = "MARKED=True" in hook_output
+    flag = _flag(repo, "config/.env.secret")
+    if marked and flag == "H":
+        raise _KnownLostMarkError("the hook's mark was called applied; .git/index has H")
+    assert not marked or flag == "S", (hook_output, flag)
