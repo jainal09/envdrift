@@ -32,12 +32,11 @@ import tempfile
 import time as time_module
 import tomllib
 from pathlib import Path
-from typing import Annotated, NamedTuple
+from typing import TYPE_CHECKING, Annotated, NamedTuple
 
 import typer
 from rich.console import Console
 from rich.live import Live
-from rich.markup import escape
 from rich.spinner import Spinner
 from rich.text import Text
 
@@ -65,10 +64,14 @@ from envdrift.scanner.output import (
     format_sarif_error,
 )
 from envdrift.utils.git import without_git_location
-from envdrift.utils.text import strip_ansi
+from envdrift.utils.text import strip_ansi, styled_text
 
-console = Console()
-diagnostic_console = Console(stderr=True)
+if TYPE_CHECKING:
+    from rich.console import RenderableType
+
+# emoji=False so a `:fire:`-like path or finding is printed as it is.
+console = Console(emoji=False)
+diagnostic_console = Console(stderr=True, emoji=False)
 
 # Early-exit prose for the git-discovery branches; emitted only in human mode
 # (machine modes get an empty-findings doc via _emit_empty_or_prose).
@@ -141,11 +144,11 @@ def _emit_error(json_output: bool, sarif: bool, message: str) -> None:
     elif json_output:
         print(json.dumps({"error": message}, indent=2))
     else:
-        # Escape the dynamic message so bracketed literals (e.g. TOML section
-        # names like ``[vault.sync]``) survive Rich markup instead of being
-        # interpreted as console tags and silently dropped (mirrors
+        # The message is literal text, so bracketed literals (e.g. TOML section
+        # names like ``[vault.sync]``, a path like ``cfg[/x]``) and backslashes
+        # print as they are instead of being read as console markup (mirrors
         # output/rich.py print_error). The static label stays markup.
-        diagnostic_console.print(f"[red]Error:[/red] {escape(message)}")
+        diagnostic_console.print(styled_text("[red]Error:[/red] {}", message))
 
 
 def _machine_mode(json_output: bool, sarif: bool) -> bool:
@@ -159,13 +162,14 @@ def _machine_mode(json_output: bool, sarif: bool) -> bool:
     return json_output or sarif
 
 
-def _emit_progress(json_output: bool, sarif: bool, message: str) -> None:
+def _emit_progress(json_output: bool, sarif: bool, message: RenderableType) -> None:
     """Print a human-mode progress/status line, suppressed in machine modes.
 
     A no-op under ``--json``/``--sarif`` so machine-readable stdout never gains
     a stray prose line (#413); otherwise the Rich-styled ``message`` is printed.
-    Keeps the discovery branches flat (no inline ``not json_output and not
-    sarif`` guard at each progress print).
+    A message that names user input (a ``--pr-base`` revision) is passed as
+    ``Text`` so it is printed as it is. Keeps the discovery branches flat (no
+    inline ``not json_output and not sarif`` guard at each progress print).
     """
     if not _machine_mode(json_output, sarif):
         console.print(message)
@@ -496,8 +500,12 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
         base_ref = pr_base.removeprefix("origin/")
         if not base_ref:
             base_ref = pr_base
+        # ``--end-of-options`` (git 2.24+) keeps the base a refspec when it
+        # starts with ``-``: ``git fetch origin --upload-pack=<command>`` runs
+        # the command, and ``origin/--upload-pack=...`` reaches the fetch
+        # without its ``origin/``.
         fetch_result = subprocess.run(  # nosec B603, B607
-            ["git", "fetch", "origin", base_ref],
+            ["git", "fetch", "origin", "--end-of-options", base_ref],
             capture_output=True,
             timeout=30,
         )
@@ -506,9 +514,23 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
             # verbose-gated and swallowed in machine modes, hiding the usual
             # root cause of an unresolvable base ref.
             _warn_stderr(f"could not fetch '{base_ref}' from origin; using local refs")
-        # Get all files changed between base and HEAD
+        # Get all files changed between base and HEAD. ``--end-of-options``
+        # keeps a base that starts with ``-`` a revision: ``-S`` or
+        # ``--output=<file>`` was an option of the diff. The ``--`` makes git
+        # read the range as revisions only: without it a base holding ``*``,
+        # ``?`` or ``[`` that is not a revision is taken as a path pattern.
+        # Either way the diff "succeeded" empty, so the gate passed on a base
+        # git never resolved.
         result = subprocess.run(  # nosec B603, B607
-            ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{pr_base}...HEAD"],
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "--diff-filter=ACMR",
+                "--end-of-options",
+                f"{pr_base}...HEAD",
+                "--",
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -522,11 +544,16 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
         if result.returncode != 0:
             stderr_lines = (result.stderr or "").strip().splitlines()
             reason = stderr_lines[0] if stderr_lines else "unknown git error"
+            # git ends some messages with a full stop and not others (``bad
+            # revision 'x...HEAD'``): end the reason with exactly one. The
+            # suggested fetch keeps a base that starts with ``-`` a ref, as
+            # the fetch above does.
+            end_of_options = "--end-of-options " if base_ref.startswith("-") else ""
             _emit_error(
                 json_output,
                 sarif,
-                f"--pr-base '{pr_base}' could not be diffed against: {reason} "
-                f"Fetch or fix the base ref (e.g. 'git fetch origin {base_ref}').",
+                f"--pr-base '{pr_base}' could not be diffed against: {reason.rstrip('.')}. "
+                f"Fetch or fix the base ref (e.g. 'git fetch origin {end_of_options}{base_ref}').",
             )
             # An unresolvable base ref is an operational failure, not a
             # critical finding: exit 6, never 1 (#526 contract).
@@ -546,7 +573,9 @@ def _collect_pr_base_targets(pr_base: str, json_output: bool, sarif: bool) -> li
             _emit_progress(
                 json_output,
                 sarif,
-                f"[bold]Scanning {len(paths)} file(s) changed since {pr_base}...[/bold]",
+                styled_text(
+                    "[bold]Scanning {} file(s) changed since {}...[/bold]", len(paths), pr_base
+                ),
             )
             return paths
         else:
@@ -832,7 +861,7 @@ def _make_output_console(ci: bool, json_output: bool, sarif: bool) -> Console:
     # Create output console (suppress colors in CI mode or JSON/SARIF output)
     output_console = console
     if ci or _machine_mode(json_output, sarif):
-        output_console = Console(force_terminal=False, no_color=True)
+        output_console = Console(force_terminal=False, no_color=True, emoji=False)
     return output_console
 
 
@@ -882,7 +911,8 @@ def _print_combined_files_warnings(
     if combined_files and not _machine_mode(json_output, sarif):
         security_warnings = engine.check_combined_files_security()
         for warning in security_warnings:
-            diagnostic_console.print(f"[bold red]{warning}[/bold red]")
+            # The warning names a configured path: print it as it is (#957).
+            diagnostic_console.print(Text(warning, style="bold red"))
         if security_warnings:
             diagnostic_console.print()
 
@@ -909,7 +939,8 @@ def _print_scan_header(
                     else "[yellow]not installed[/yellow]"
                 )
                 version = f" (v{info['version']})" if info["version"] else ""
-                output_console.print(f"  - {info['name']}: {status}{version}")
+                # A version is what the tool printed: show it as it is (#957).
+                output_console.print(styled_text("  - {}: " + status + "{}", info["name"], version))
 
 
 def _run_scan_with_progress(

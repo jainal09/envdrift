@@ -23,7 +23,8 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import Progress, ProgressColumn, SpinnerColumn, Task
+from rich.text import Text
 
 from envdrift.cli_commands.agent_utils import parse_agent_running_status, warn_registry_corruption
 from envdrift.install_integrity import (
@@ -33,8 +34,10 @@ from envdrift.install_integrity import (
     sha256_file,
     verification_disabled,
 )
+from envdrift.utils.text import styled_text
 
-console = Console()
+# emoji=False so a `:fire:`-like path is printed as it is.
+console = Console(emoji=False)
 
 # Create the install CLI group
 install_app = typer.Typer(
@@ -170,14 +173,18 @@ def _verify_checksum(file_path: Path, platform_name: str, checksum_url: str) -> 
     try:
         checksums = fetch_checksums(checksum_url)
     except ChecksumVerificationError as e:
-        console.print(f"[red]{e}[/red]")
+        console.print(Text(str(e), style="red"))
         return False
 
     expected_checksum = checksums.get(binary_name)
     if not expected_checksum:
         console.print(
-            f"[red]No checksum entry for {binary_name} in {checksum_url} — "
-            "refusing to install an unverified binary[/red]"
+            styled_text(
+                "[red]No checksum entry for {} in {} — "
+                "refusing to install an unverified binary[/red]",
+                binary_name,
+                checksum_url,
+            )
         )
         return False
 
@@ -187,16 +194,34 @@ def _verify_checksum(file_path: Path, platform_name: str, checksum_url: str) -> 
         # An unreadable staging file (AV quarantine, filesystem error, or the
         # file vanishing mid-flight) must fail closed — refuse the install
         # rather than escape as an unhandled traceback.
-        console.print(f"[red]{e}[/red]")
+        console.print(Text(str(e), style="red"))
         return False
     if actual_checksum != expected_checksum:
         console.print("[red]Checksum mismatch![/red]")
-        console.print(f"  Expected: {expected_checksum}")
-        console.print(f"  Actual:   {actual_checksum}")
+        console.print(Text(f"  Expected: {expected_checksum}"))
+        console.print(Text(f"  Actual:   {actual_checksum}"))
         return False
 
     console.print("[dim]Checksum verified ✓[/dim]")
     return True
+
+
+class _DescriptionColumn(ProgressColumn):
+    """A task's description as literal text, in the style its ``style`` field names.
+
+    A description quotes errors that name paths: Rich's ``TextColumn`` parses it
+    for markup and emoji codes (a path holding ``[/x]`` raised ``MarkupError``
+    while the spinner was drawn), and with ``markup=False`` it gives every
+    description one style, so a failure could no longer be shown in red.
+    """
+
+    def render(self, task: Task) -> Text:
+        return Text(task.description, style=task.fields.get("style", "progress.description"))
+
+
+def _download_progress() -> Progress:
+    """The spinner shown while the agent binary downloads."""
+    return Progress(SpinnerColumn(), _DescriptionColumn(), console=console)
 
 
 def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
@@ -241,16 +266,21 @@ def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
         return True
 
     except urllib.error.HTTPError as e:
-        progress.update(task, description=f"[red]Download failed: HTTP {e.code}[/red]")
-        console.print(f"[red]HTTP Error {e.code}: {e.msg}[/red]")
+        # The progress column prints descriptions literally (they quote errors
+        # that name paths), so a failure is styled by the task's style field.
+        progress.update(task, description=f"Download failed: HTTP {e.code}", style="red")
+        console.print(Text(f"HTTP Error {e.code}: {e.msg}", style="red"))
         return False
     except urllib.error.URLError as e:
-        progress.update(task, description=f"[red]Download failed: {e.reason}[/red]")
-        console.print(f"[red]Network Error: {e.reason}[/red]")
+        progress.update(task, description=f"Download failed: {e.reason}", style="red")
+        console.print(Text(f"Network Error: {e.reason}", style="red"))
         return False
     except OSError as e:
-        progress.update(task, description=f"[red]Installation failed: {e}[/red]")
-        console.print(f"[red]File System Error: {e}[/red]")
+        # shutil.move copies when it cannot rename, and a copy error on Windows
+        # (CopyFile2) names no file, so the message says where the binary was going.
+        reason = str(e) if e.filename else f"{e} (installing to {dest})"
+        progress.update(task, description=f"Installation failed: {reason}", style="red")
+        console.print(Text(f"File System Error: {reason}", style="red"))
         return False
     finally:
         # Clean up temp file if it exists
@@ -282,9 +312,9 @@ def _run_agent_install(binary_path: Path) -> bool:
         console.print("[yellow]Agent installation command timed out after 30 seconds.[/yellow]")
         return False
     except OSError as e:
-        console.print(f"[yellow]Failed to execute agent install command: {e}[/yellow]")
+        console.print(Text(f"Failed to execute agent install command: {e}", style="yellow"))
         if not binary_path.exists():
-            console.print(f"[red]Agent binary not found at: {binary_path}[/red]")
+            console.print(Text(f"Agent binary not found at: {binary_path}", style="red"))
         return False
 
 
@@ -306,7 +336,7 @@ def _register_current_project() -> None:
     try:
         success, message = register_project()
     except RegistryLockError as exc:
-        console.print(f"[red]✗[/red] Could not lock the agent registry: {exc}")
+        console.print(styled_text("[red]✗[/red] Could not lock the agent registry: {}", exc))
         console.print(
             "  The agent binary was installed; run "
             "[bold]envdrift agent register[/bold] to register this project."
@@ -314,9 +344,9 @@ def _register_current_project() -> None:
         raise typer.Exit(1) from exc
     warn_registry_corruption(get_registry(), console)
     if success:
-        console.print(f"[green]✓[/green] {message}")
+        console.print(styled_text("[green]✓[/green] {}", message))
     else:
-        console.print(f"[yellow]⚠[/yellow] {message}")
+        console.print(styled_text("[yellow]⚠[/yellow] {}", message))
 
 
 @install_app.command("agent")
@@ -359,7 +389,7 @@ def install_agent(
     # Check if already installed
     existing = shutil.which("envdrift-agent")
     if existing and not force:
-        console.print(f"[yellow]⚠[/yellow] Agent already installed at: {existing}")
+        console.print(styled_text("[yellow]⚠[/yellow] Agent already installed at: {}", existing))
         console.print("  Use [bold]--force[/bold] to reinstall")
         return
 
@@ -384,7 +414,7 @@ def install_agent(
                     "[yellow]⚠ Warning:[/yellow] Agent is currently running. "
                     "Consider stopping it before reinstalling."
                 )
-                console.print(f"  To stop: [bold]{existing} stop[/bold]")
+                console.print(styled_text("  To stop: [bold]{} stop[/bold]", existing))
         except (subprocess.TimeoutExpired, OSError):
             # Unable to check status; proceed anyway
             pass
@@ -393,20 +423,20 @@ def install_agent(
     try:
         plat = _detect_platform()
     except typer.BadParameter as e:
-        console.print(f"[red]✗[/red] {e}")
+        console.print(styled_text("[red]✗[/red] {}", e))
         raise typer.Exit(1) from None
 
     console.print(f"[dim]Platform: {plat}[/dim]")
 
     # Get install path
     install_path = _get_install_path()
-    console.print(f"[dim]Install path: {install_path}[/dim]")
+    console.print(styled_text("[dim]Install path: {}[/dim]", install_path))
 
     # Resolve latest agent release from GitHub API
     try:
         base_url, _checksum_url = _resolve_agent_release_url()
     except Exception as exc:
-        console.print(f"\n[red]✗[/red] {exc}")
+        console.print(styled_text("\n[red]✗[/red] {}", exc))
         console.print("\n  You can download manually from:")
         console.print(f"  https://github.com/{GITHUB_REPO}/releases")
         raise typer.Exit(code=1) from exc
@@ -421,16 +451,12 @@ def install_agent(
     # unverifiable download must never replace a previously working agent (#490).
     staging_path = install_path.parent / (install_path.name + ".download")
     try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
+        with _download_progress() as progress:
             success = _download_binary(download_url, staging_path, progress)
 
         if not success:
             console.print("\n[red]✗[/red] Failed to download agent binary")
-            console.print(f"  URL: {download_url}")
+            console.print(Text(f"  URL: {download_url}"))
             console.print("\n  You can download manually from:")
             console.print("  https://github.com/jainal09/envdrift/releases")
             raise typer.Exit(1)
@@ -458,7 +484,9 @@ def install_agent(
         try:
             staging_path.replace(install_path)
         except OSError as e:
-            console.print(f"\n[red]✗[/red] Failed to move verified binary into place: {e}")
+            console.print(
+                styled_text("\n[red]✗[/red] Failed to move verified binary into place: {}", e)
+            )
             raise typer.Exit(1) from e
     finally:
         # Cleanup must not mask the real error (e.g. a verification failure): a
@@ -466,7 +494,7 @@ def install_agent(
         with contextlib.suppress(OSError):
             staging_path.unlink(missing_ok=True)
 
-    console.print(f"[green]✓[/green] Installed agent to: {install_path}")
+    console.print(styled_text("[green]✓[/green] Installed agent to: {}", install_path))
 
     # Verify installation (the agent exposes `version` as a subcommand, not a flag)
     try:
@@ -480,7 +508,7 @@ def install_agent(
         )
         if result.returncode == 0:
             version = result.stdout.strip()
-            console.print(f"  Version: {version}")
+            console.print(Text(f"  Version: {version}"))
     except (subprocess.TimeoutExpired, OSError):
         # The agent was installed successfully; failure to get the version is non-critical,
         # so we intentionally ignore errors from this optional check.
@@ -493,7 +521,7 @@ def install_agent(
             console.print("[green]✓[/green] Auto-start configured")
         else:
             console.print("[yellow]⚠[/yellow] Could not configure auto-start")
-            console.print(f"  Run manually: [bold]{install_path} install[/bold]")
+            console.print(styled_text("  Run manually: [bold]{} install[/bold]", install_path))
 
     # Register current project
     if not skip_register:
@@ -509,15 +537,18 @@ def install_agent(
     path_dirs = {Path(p).resolve() for p in path_env.split(os.pathsep) if p}
     if install_dir.resolve() not in path_dirs and install_dir in user_local_dirs:
         console.print(
-            f"\n[yellow]⚠ Note:[/yellow] {install_dir} is not in your PATH environment variable."
+            styled_text(
+                "\n[yellow]⚠ Note:[/yellow] {} is not in your PATH environment variable.",
+                install_dir,
+            )
         )
         console.print("  Add it to your shell configuration (~/.bashrc, ~/.zshrc, etc.):")
-        console.print(f'  [bold]export PATH="{install_dir}:$PATH"[/bold]')
+        console.print(styled_text('  [bold]export PATH="{}:$PATH"[/bold]', install_dir))
 
     # Final instructions
     console.print("\n[bold green]✓ Installation complete![/bold green]")
     console.print("\nTo start the agent now:")
-    console.print(f"  [bold]{install_path} start[/bold]")
+    console.print(styled_text("  [bold]{} start[/bold]", install_path))
     console.print("\nTo check agent status:")
     console.print("  [bold]envdrift agent status[/bold]")
 
@@ -566,13 +597,13 @@ def _print_agent_check(agent_path: str) -> None:
     """
     version, broken_reason = _probe_agent_binary(agent_path)
     if broken_reason is not None:
-        console.print(f"  [red]✗ Broken installation at: {agent_path}[/red]")
-        console.print(f"  The binary cannot run: {broken_reason}")
+        console.print(styled_text("  [red]✗ Broken installation at: {}[/red]", agent_path))
+        console.print(Text(f"  The binary cannot run: {broken_reason}"))
         console.print("  Run: [bold]envdrift install agent --force[/bold] to reinstall")
         return
 
-    console.print(f"  ✓ Installed at: {agent_path}")
-    console.print(f"  Version: {version}" if version else "  Version: unknown")
+    console.print(Text(f"  ✓ Installed at: {agent_path}"))
+    console.print(Text(f"  Version: {version}" if version else "  Version: unknown"))
 
     # Check if running
     try:
@@ -599,7 +630,7 @@ def check_installation() -> None:
 
     # Check Python CLI
     console.print("[bold]Python CLI:[/bold]")
-    console.print(f"  ✓ Installed at: {sys.executable}")
+    console.print(Text(f"  ✓ Installed at: {sys.executable}"))
     try:
         from envdrift._version import __version__
 
@@ -623,10 +654,10 @@ def check_installation() -> None:
     registry = get_registry()
     if registry.path.exists():
         projects = registry.projects
-        console.print(f"  ✓ Registry at: {registry.path}")
+        console.print(Text(f"  ✓ Registry at: {registry.path}"))
         console.print(f"  Registered projects: {len(projects)}")
     else:
-        console.print(f"  [dim]Not created yet: {registry.path}[/dim]")
+        console.print(styled_text("  [dim]Not created yet: {}[/dim]", registry.path))
 
 
 # Export the app

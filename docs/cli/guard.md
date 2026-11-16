@@ -73,6 +73,13 @@ reported under the link has a higher severity, or is verified when the severitie
 line, or the same secret on two lines, stay separate findings, and so do the reports of two scanners, which
 name the rule differently.
 
+The human report prints paths, rule ids, descriptions, previews, scanner errors, skip reasons and
+warnings as literal text: square brackets and `:name:` codes in them are not read as terminal styling,
+so a path such as `cfg[prod]/.env` or a Next.js `[id]/` route is shown as it is. The table may still
+shorten a long value to fit the terminal; `--json` holds every value in full. envdrift 11.1.7 and
+earlier crashed on a closing tag such as `cfg[/x]/a.env` and dropped a tag Rich knows, such as
+`[bold]`, so the report could name a file that does not exist.
+
 The path shown is not always the path in a gitleaks or Infisical fingerprint. `envdrift guard` with
 no path and absolute paths are fingerprinted by absolute path; see
 [gitleaks and Infisical ignore files](#gitleaks-and-infisical-ignore-files).
@@ -567,7 +574,15 @@ Scan only files changed since the specified base branch. Useful for CI/CD PR che
 If the base ref cannot be resolved (typo, or a shallow CI clone that never fetched it), guard exits
 with an error instead of treating the failed diff as "no changed files" — a misconfigured base must
 never pass the secret gate green. A failed `git fetch` of the base is reported as a warning on
-stderr.
+stderr. This holds for a base holding `*`, `?` or `[` too, such as `release/*`: envdrift 11.1.7 and
+earlier let git read such a base as a path pattern, and reported "No changed files" with exit 0. A
+revision expression that git resolves, such as `HEAD^{/fix [abc]}`, is scanned, and shown as written.
+
+A base that starts with `-` is a revision too, never a git option. envdrift 11.1.7 and earlier passed
+`--pr-base=-S` or `--pr-base=--output=<file>` to `git diff` as an option, which found nothing or wrote
+the diff to that file, and reported "No changed files" with exit 0; `--pr-base=--upload-pack=<command>`
+(or `origin/--upload-pack=<command>`) reached `git fetch` as an option, and git ran the command.
+`--pr-base` needs git 2.24 or later, which reads such a base as a ref.
 
 ```bash
 envdrift guard --pr-base origin/main
