@@ -166,12 +166,6 @@ def test_a_failed_listing_does_not_replace_the_timeout(
         _stop(beat)
 
 
-@pytest.mark.xfail(
-    sys.platform != "linux",
-    strict=False,
-    raises=AssertionError,
-    reason="only Linux lists the processes that hold the tool's output (see #925)",
-)
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="the tool is a shell script that starts its child in the background",
@@ -180,7 +174,7 @@ def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
     """A tool that exits at once, leaving its child running with the tool's output pipe open.
 
     The child was re-parented when the tool exited, out of the walk's reach, and ran on (#922).
-    It is found by the pipe it holds. A setup that goes wrong fails the test, not the xfail.
+    It is found by the pipe it holds: in /proc on Linux, with libproc on macOS (#925).
     """
     beat = tmp_path / "beat"
     heartbeat = tmp_path / "heartbeat.py"
@@ -198,6 +192,70 @@ def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
         assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
     finally:
         _stop(beat)
+
+
+# A tool that starts a child, which never ends, and exits at once, leaving the child its output.
+LEAVER = """
+import subprocess, sys
+
+subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]])
+"""
+
+
+def test_a_child_that_outlived_a_tool_ends_with_it_on_every_platform(tmp_path: Path) -> None:
+    """The child of a tool that exited holds the tool's output open, and must end with it (#925).
+
+    On Windows ``taskkill /T`` walks the tree from the tool, which had exited: the child ran
+    on, and ``communicate()`` waited for it after the kill. The tool now runs in a job object,
+    which holds the child too. On Linux and macOS the child is found by the pipe it holds.
+    """
+    beat = tmp_path / "beat"
+    heartbeat = tmp_path / "heartbeat.py"
+    heartbeat.write_text(HEARTBEAT)
+    returned, rescued = threading.Event(), threading.Event()
+
+    def rescue() -> None:
+        """End the child if run_tool still waits on it a minute past the timeout: fail, not hang."""
+        if not returned.wait(CHILD_TIMEOUT_SECONDS + 60):
+            rescued.set()
+            _stop(beat)
+
+    threading.Thread(target=rescue, daemon=True).start()
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_tool(
+                [sys.executable, "-c", LEAVER, str(heartbeat), str(beat)],
+                capture_output=True,
+                timeout=CHILD_TIMEOUT_SECONDS,
+            )
+        returned.set()
+
+        assert not rescued.is_set(), "after the kill, run_tool waited for the child's output"
+        if not beat.exists():
+            pytest.fail("the tool's child never started")
+        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
+    finally:
+        returned.set()
+        _stop(beat)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS lists a process's files with libproc")
+def test_libproc_finds_the_processes_that_hold_a_tools_output() -> None:
+    """Each process but this one that holds an end of the tool's output pipe, and no other."""
+    sleep = [sys.executable, "-c", "import time; time.sleep(60)"]
+    holder = subprocess.Popen(sleep, stdout=subprocess.PIPE)
+    other = subprocess.Popen(sleep)
+    try:
+        pipes = process_tree._output_pipes(holder)
+        assert len(pipes) == 2, f"both ends of the one pipe: {pipes}"
+        holders = process_tree._pipe_holders(pipes, time.monotonic() + 30)
+        assert holder.pid in holders
+        assert os.getpid() not in holders, "this process reads the pipe: it is not killed"
+        assert other.pid not in holders
+    finally:
+        for process in (holder, other):
+            process.kill()
+            process.wait()
 
 
 class InterruptError(Exception):
