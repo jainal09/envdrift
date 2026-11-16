@@ -623,11 +623,14 @@ envdrift guard --staged
 git exports `GIT_DIR`, `GIT_INDEX_FILE` and the like to its hooks: on every
 commit in a linked worktree, and for `git commit -a` or `git commit <path>`,
 where `GIT_INDEX_FILE` is the index git is about to commit. guard runs every
-scanner without `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and
-`GIT_COMMON_DIR`, and so does the git it runs to find a scanned path's
-repository. A scan from a hook reads the repository each scanned path is in, and
-leaves the index git is committing alone. `--staged` still reads the staged
-files from the index the hook was given, the one being committed.
+scanner without `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`
+and the other variables git lists as local to a repository
+(`git rev-parse --local-env-vars`), such as the `GIT_OBJECT_DIRECTORY` that a
+`git push` hook gets; it keeps your `git -c` configuration. So does the git it
+runs to find a scanned path's repository. A scan from a hook reads the
+repository each scanned path is in, and leaves the index git is committing
+alone. `--staged` still reads the staged files from the index the hook was
+given, the one being committed.
 
 ### CI/CD PR scanning
 

@@ -730,15 +730,26 @@ def _resolve_pull_backend(config: Path | None) -> tuple[EncryptionBackend, Encry
     return backend, provider
 
 
-def _normalize_pull_target(request: VaultPullRequest, target: Path, env_keys_path: Path) -> None:
-    """Give a custom dotenvx file's key its canonical name, or stop before decrypting."""
+def _normalize_pull_target(request: VaultPullRequest, target: Path, env_keys_path: Path) -> bytes:
+    """Give a custom dotenvx file's key its canonical name, or stop before decrypting.
+
+    Returns the bytes ``target`` had before its header was rewritten, so a failed
+    decrypt can put them back too (``_undo_header_rewrite``). A keys file that
+    holds a different key under the canonical name is refused with both files
+    left as they were (#938).
+    """
     from envdrift.integrations.dotenvx import DotenvxError, normalize_dotenvx_metadata
 
     try:
+        before = target.read_bytes()
         normalize_dotenvx_metadata(target, env_keys_path, request.environment)
-    except (DotenvxError, OSError, ValueError) as e:
+    except OSError as e:
+        print_error(f"Failed to decrypt {target}: {e}. Nothing was decrypted.")
+        raise typer.Exit(code=1) from None
+    except (DotenvxError, ValueError) as e:
         print_error(f"Not decrypting {target}: {e}")
         raise typer.Exit(code=1) from None
+    return before
 
 
 def _decrypt_pull_target(
@@ -746,7 +757,13 @@ def _decrypt_pull_target(
     target: Path,
     env_keys_path: Path,
 ) -> None:
-    """Normalize custom dotenvx metadata and decrypt the target file."""
+    """Normalize custom dotenvx metadata and decrypt the target file.
+
+    A failed decrypt leaves the file as it was before this command. The backend
+    restores the bytes it had before dotenvx ran and says it "was left as it
+    was"; for ``--env-file`` those bytes already had a rewritten header, so the
+    header rewrite is undone too.
+    """
     from envdrift.encryption import (
         EncryptionBackendError,
         EncryptionNotFoundError,
@@ -754,17 +771,38 @@ def _decrypt_pull_target(
     )
 
     backend, provider = _resolve_pull_backend(request.connection.config)
+    before: bytes | None = None
     if provider == EncryptionProvider.DOTENVX and request.env_file is not None:
-        _normalize_pull_target(request, target, env_keys_path)
+        before = _normalize_pull_target(request, target, env_keys_path)
     try:
         result = backend.decrypt(target.resolve(), keys_file=env_keys_path.resolve())
     except (EncryptionNotFoundError, EncryptionBackendError) as e:
-        print_error(f"Failed to decrypt {target}: {e}")
+        print_error(f"Failed to decrypt {target}: {e}{_undo_header_rewrite(target, before)}")
         raise typer.Exit(code=1) from None
     if not result.success:
-        print_error(f"Failed to decrypt {target}: {result.message}")
+        message = f"{result.message}{_undo_header_rewrite(target, before)}"
+        print_error(f"Failed to decrypt {target}: {message}")
         raise typer.Exit(code=1)
     print_success(f"Decrypted {target}")
+
+
+def _undo_header_rewrite(target: Path, before: bytes | None) -> str:
+    """Put back the bytes ``target`` had before its header was rewritten.
+
+    Returns what to add to the error: nothing, unless the write failed and the
+    rewritten header (only the header: the backend already put back every
+    value) is still there. The bytes go back whole or not at all (a temp file
+    renamed over the file a write to ``target`` lands in): written in place, a
+    write that failed part way left the file cut short.
+    """
+    from envdrift.sync.operations import atomic_write
+
+    try:
+        if before is not None and target.read_bytes() != before:
+            atomic_write(target.resolve(), before)
+    except OSError as e:
+        return f"\nenvdrift could not put back the dotenvx header it rewrote in {target}: {e}"
+    return ""
 
 
 def execute_vault_pull(request: VaultPullRequest) -> None:

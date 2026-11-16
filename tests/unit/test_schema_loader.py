@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import warnings
 from textwrap import dedent
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from pydantic import AliasChoices, AliasPath, Field
+from pydantic import AliasChoices, AliasPath, Field, model_validator, root_validator
+from pydantic.warnings import PydanticDeprecatedSince20
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.schema import FieldMetadata, SchemaLoader, SchemaLoadError, SchemaMetadata
@@ -147,6 +149,136 @@ def test_extract_metadata_with_config_object_and_typing():
     assert schema.extra_policy == "forbid"
     assert "items" in schema.fields
     assert schema.fields["items"].annotation
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        SettingsConfigDict(str_min_length=1),
+        SettingsConfigDict(str_max_length=20),
+        SettingsConfigDict(str_max_length=0),
+    ],
+    ids=["minimum", "maximum", "zero-maximum"],
+)
+def test_model_string_limits_require_constraint_validation(config: SettingsConfigDict):
+    """#952: plain string fields still need the model's configured length checks."""
+
+    class Settings(BaseSettings):
+        model_config = config
+        NAME: str
+
+    schema = SchemaLoader().extract_metadata(Settings)
+
+    assert schema.has_constraints is True
+
+
+def test_plain_strings_without_model_limits_keep_the_type_only_path():
+    """A schema with no configured string limits still needs only its type check."""
+
+    class Settings(BaseSettings):
+        NAME: str
+
+    assert SchemaLoader().extract_metadata(Settings).has_constraints is False
+
+
+def _settings_with(check: str) -> type[BaseSettings]:
+    """A Settings class whose only model-level check is ``check``."""
+    if check == "after":
+
+        class After(BaseSettings):
+            NAME: str = ""
+
+            @model_validator(mode="after")
+            def check(self):
+                return self
+
+        return After
+    if check == "wrap":
+
+        class Wrap(BaseSettings):
+            NAME: str = ""
+
+            @model_validator(mode="wrap")
+            @classmethod
+            def check(cls, data, handler):
+                return handler(data)
+
+        return Wrap
+    if check == "post-init":
+
+        class PostInit(BaseSettings):
+            NAME: str = ""
+
+            def model_post_init(self, context, /):
+                pass
+
+        return PostInit
+    if check == "before":
+
+        class Before(BaseSettings):
+            NAME: str = ""
+
+            @model_validator(mode="before")
+            @classmethod
+            def check(cls, data):
+                return data
+
+        return Before
+    if check == "root":
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PydanticDeprecatedSince20)
+
+            class Root(BaseSettings):
+                NAME: str = ""
+
+                @root_validator(skip_on_failure=True)
+                @classmethod
+                def check_root(cls, values):
+                    return values
+
+        return Root
+    if check == "root-pre":
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PydanticDeprecatedSince20)
+
+            class RootPre(BaseSettings):
+                NAME: str = ""
+
+                @root_validator(pre=True)
+                @classmethod
+                def check_root(cls, values):
+                    return values
+
+        return RootPre
+
+    class Plain(BaseSettings):
+        NAME: str = ""
+
+    return Plain
+
+
+@pytest.mark.parametrize(
+    ("check", "expected"),
+    [
+        ("after", True),
+        ("wrap", True),
+        ("post-init", True),
+        ("root", True),
+        ("before", False),
+        ("root-pre", False),
+        ("none", False),
+    ],
+)
+def test_checks_after_fields_names_the_checks_a_failed_field_stops(check: str, expected: bool):
+    """Pydantic runs after/wrap model validators and model_post_init only once every field is
+    valid; a before validator runs first, so a failed field does not stop it."""
+    schema = SchemaLoader().extract_metadata(_settings_with(check))
+
+    assert schema.checks_after_fields is expected
+
+
+def test_checks_after_fields_without_a_model_class():
+    assert SchemaMetadata(class_name="S", module_path="m").checks_after_fields is False
 
 
 def test_extract_metadata_alias_path_uses_first_component_without_prefix():

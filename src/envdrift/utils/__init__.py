@@ -10,6 +10,7 @@ from envdrift.utils.git import (
     is_file_tracked,
     is_git_repo,
     restore_file_from_git,
+    unignored_paths,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "is_git_repo",
     "normalize_max_workers",
     "restore_file_from_git",
+    "unignored_paths",
 ]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess  # nosec B404
 import sys
 from pathlib import Path, PureWindowsPath
@@ -42,6 +41,14 @@ class TestIsGitRepo:
         with patch("subprocess.run", side_effect=FileNotFoundError):
             assert is_git_repo(tmp_path) is False
 
+    def test_returns_false_for_a_path_below_a_regular_file(self, tmp_path: Path):
+        """git cannot run in a parent that is a file: not NotADirectoryError."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        regular_file = tmp_path / "notes.txt"
+        regular_file.write_text("x\n", encoding="utf-8")
+
+        assert is_git_repo(regular_file / "child") is False
+
 
 class TestGetGitRoot:
     """Tests for get_git_root function."""
@@ -56,6 +63,18 @@ class TestGetGitRoot:
     def test_returns_none_for_non_git_directory(self, tmp_path: Path):
         """Should return None when not in a git repo."""
         assert get_git_root(tmp_path) is None
+
+    def test_returns_none_for_a_path_below_a_regular_file(self, tmp_path: Path):
+        """git cannot run in a parent that is a file: no root, not NotADirectoryError.
+
+        push asked for the root of ``<secrets_dir>/.env.keys`` with a secrets_dir that
+        was a regular file, and the traceback ended the command.
+        """
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        regular_file = tmp_path / ".env.secrets"
+        regular_file.write_text("A=1\n", encoding="utf-8")
+
+        assert get_git_root(regular_file / ".env.keys") is None
 
 
 class TestHasGitHead:
@@ -360,6 +379,52 @@ class TestEnsureGitignoreEntries:
         assert added == []
         assert gitignore.read_text().splitlines() == [".env.*"]
 
+    @pytest.mark.parametrize(
+        ("path", "decoy"),
+        [
+            ("config/[prod]/.env.keys", "config/p/.env.keys"),
+            ("a*b/.env.keys", "aXb/.env.keys"),
+            ("q?/.env.keys", "qz/.env.keys"),
+            ("back\\slash/.env.keys", None),
+            ("!bang/.env.keys", None),
+            ("#hash/.env.keys", None),
+            ("trailing  ", "trailing"),
+        ],
+    )
+    def test_entry_matches_exactly_its_own_path(
+        self, tmp_path: Path, path: str, decoy: str | None
+    ) -> None:
+        """A path with gitignore syntax in it is ignored, and nothing else is.
+
+        Written raw, ``config/[prod]/.env.keys`` is a character class: it ignores
+        ``config/p/.env.keys`` but not the private key in the folder ``[prod]``.
+        """
+        if sys.platform == "win32" and _not_a_windows_file_name(path):
+            pytest.skip("not a valid Windows file name")
+        repo = tmp_path.resolve()  # git's own spelling of the root (macOS: /private/var)
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+
+        added = ensure_gitignore_entries([repo / path], git_root=repo)
+
+        assert len(added) == 1, added
+        assert _check_ignore(repo, path) == 0, (repo / ".gitignore").read_text()
+        if decoy is not None:
+            assert _check_ignore(repo, decoy) == 1, (repo / ".gitignore").read_text()
+        # A second run finds it ignored and writes nothing.
+        assert ensure_gitignore_entries([repo / path], git_root=repo) == []
+
+
+def _not_a_windows_file_name(path: str) -> bool:
+    """``*``, ``?`` and ``\\`` cannot be in a Windows file name, nor can a trailing space."""
+    return any(ch in path for ch in "*?\\") or path.endswith(" ")
+
+
+def _check_ignore(repo: Path, path: str) -> int:
+    """``git check-ignore``'s exit code for ``path``: 0 ignored, 1 not."""
+    return subprocess.run(
+        ["git", "check-ignore", "-q", "--no-index", "--", path], cwd=repo, capture_output=True
+    ).returncode
+
 
 class TestGitUtilsExceptions:
     """Tests for exception handling in git utilities."""
@@ -454,43 +519,3 @@ class TestNonAsciiLocaleSafety:
         assert "Traceback" not in result.stderr, result.stderr
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == repo.name
-
-
-@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
-class TestEnsureGitignoreGlob:
-    """N2: backups of ``.env.keys`` are ignored by a folder-scoped glob."""
-
-    @staticmethod
-    def _repo(tmp_path: Path) -> Path:
-        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # nosec B603 B607
-        return tmp_path
-
-    def test_outside_a_repository_nothing_changes(self, tmp_path: Path):
-        from envdrift.utils.git import ensure_gitignore_glob
-
-        assert ensure_gitignore_glob(tmp_path / ".env.keys.backup.1", ".env.keys.backup.*") is None
-        assert not (tmp_path / ".gitignore").exists()
-
-    def test_root_folder_entry_has_no_prefix(self, tmp_path: Path):
-        from envdrift.utils.git import ensure_gitignore_glob
-
-        repo = self._repo(tmp_path)
-        (repo / ".gitignore").write_text("node_modules", encoding="utf-8")  # no trailing newline
-
-        added = ensure_gitignore_glob(repo / ".env.keys.backup.1", ".env.keys.backup.*")
-
-        assert added == ".env.keys.backup.*"
-        assert (repo / ".gitignore").read_text(encoding="utf-8") == (
-            "node_modules\n.env.keys.backup.*\n"
-        )
-
-    def test_an_already_ignored_name_adds_nothing(self, tmp_path: Path):
-        from envdrift.utils.git import ensure_gitignore_glob
-
-        repo = self._repo(tmp_path)
-        (repo / ".gitignore").write_text("*.backup.*\n", encoding="utf-8")
-
-        assert (
-            ensure_gitignore_glob(repo / "svc" / ".env.keys.backup.1", ".env.keys.backup.*") is None
-        )
-        assert (repo / ".gitignore").read_text(encoding="utf-8") == "*.backup.*\n"
