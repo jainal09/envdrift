@@ -1,5 +1,20 @@
 # Changelog
 
+## [11.1.8](https://github.com/jainal09/envdrift/compare/v11.1.7...v11.1.8) (2026-11-16)
+
+
+### Bug Fixes
+
+* **decrypt:** reject directories before backend and vault setup ([#1002](https://github.com/jainal09/envdrift/issues/1002)) ([39eefd6](https://github.com/jainal09/envdrift/commit/39eefd6eac67e03c32552f60d61f678f74c4d8ed)), closes [#960](https://github.com/jainal09/envdrift/issues/960)
+* **hooks:** preserve existing hooks without a final newline ([#1003](https://github.com/jainal09/envdrift/issues/1003)) ([a89f2b3](https://github.com/jainal09/envdrift/commit/a89f2b38df31942e722d6ea2e6f1c43ba0bebcaa))
+* **init:** omit sensitive defaults and preserve leading zeros ([#1005](https://github.com/jainal09/envdrift/issues/1005)) ([587d845](https://github.com/jainal09/envdrift/commit/587d845dc9d8ceec771d2bee5c8138065247aeac))
+* **keys:** encrypt with the dotenvx key a folder already holds, and fail closed when it cannot ([#1018](https://github.com/jainal09/envdrift/issues/1018)) ([cea2650](https://github.com/jainal09/envdrift/commit/cea265075ef554958df9202142be1fa0b4870e3b))
+* **output:** print paths, names and errors literally instead of as Rich markup ([#1021](https://github.com/jainal09/envdrift/issues/1021)) ([cdc5836](https://github.com/jainal09/envdrift/commit/cdc5836d481131280c14f493df4fe3240b06c016))
+* **partial:** restore partly decrypted files and name the secrets git cannot protect ([#1025](https://github.com/jainal09/envdrift/issues/1025)) ([06ba435](https://github.com/jainal09/envdrift/commit/06ba4359caffd29140ddffc7970616b392e0f629)), closes [#948](https://github.com/jainal09/envdrift/issues/948) [#961](https://github.com/jainal09/envdrift/issues/961) [#962](https://github.com/jainal09/envdrift/issues/962) [#963](https://github.com/jainal09/envdrift/issues/963) [#998](https://github.com/jainal09/envdrift/issues/998) [#999](https://github.com/jainal09/envdrift/issues/999)
+* **sync:** validate non-identifier dotenv aliases ([#1001](https://github.com/jainal09/envdrift/issues/1001)) ([af05a8c](https://github.com/jainal09/envdrift/commit/af05a8cab41fab989b6f48b4db2a54c0a382e637)), closes [#965](https://github.com/jainal09/envdrift/issues/965)
+* **validate:** enforce model-level string length limits ([#1013](https://github.com/jainal09/envdrift/issues/1013)) ([6685307](https://github.com/jainal09/envdrift/commit/66853071b2eb1fb72f8cae13b65bcdab71721f66)), closes [#952](https://github.com/jainal09/envdrift/issues/952)
+* **validate:** render diagnostic values as literal text ([#1012](https://github.com/jainal09/envdrift/issues/1012)) ([ad084ce](https://github.com/jainal09/envdrift/commit/ad084ceb98a110d41b8afad0ea9277e8517a6d28))
+
 ## [11.1.7](https://github.com/jainal09/envdrift/compare/v11.1.6...v11.1.7) (2026-11-14)
 
 
