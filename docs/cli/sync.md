@@ -131,7 +131,13 @@ instead of silently succeeding.
 
 ### `--validate-schema`
 
-Run schema validation after sync.
+Run schema validation after sync. Like `envdrift validate`, this accepts dotenv keys
+such as `2FA_ENABLED`, `X-FEATURE-ENABLED`, and non-ASCII names and validates their
+values against the schema's aliases instead of silently skipping them. It also follows
+`[validation].strict_extra` as `envdrift validate` does: with `strict_extra = false`, a
+variable the schema does not declare is not an error. The setting comes from the TOML
+config sync runs with, else from the `envdrift.toml` that `validate` finds. If that
+config cannot be read, sync keeps the check for undeclared variables.
 
 ### `--schema`, `-s`
 

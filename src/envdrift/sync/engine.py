@@ -96,6 +96,9 @@ class SyncMode:
     service_dir: Path | None = None
     # Sync-capable workflows can promise verification without becoming read-only.
     verify_skipped_secrets: bool = False
+    # ``[validation].strict_extra``: False skips the check for undeclared variables, as in validate.
+    # Last, so a positional SyncMode(...) call keeps its meaning.
+    check_extra: bool = True
 
 
 class _ServiceSyncContext(NamedTuple):
@@ -674,9 +677,9 @@ class SyncEngine:
 
             # Parse env file and validate
             parser = EnvParser()
-            env_file = parser.parse(env_file_path)
+            env_file = parser.parse(env_file_path, lenient=True)
             validator = Validator()
-            result = validator.validate(env_file, schema)
+            result = validator.validate(env_file, schema, check_extra=self.mode.check_extra)
 
             return result.valid
 

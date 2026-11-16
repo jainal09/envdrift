@@ -87,6 +87,25 @@ def _load_sync_context(request: SyncRequest, runtime: SyncRuntime) -> _SyncConte
     )
 
 
+def _strict_extra(config_file: Path | None) -> bool:
+    """``[validation].strict_extra`` from the config sync runs with, as ``validate`` reads it.
+
+    That is the TOML file sync was given, else the one ``validate`` finds. With it false,
+    validate skips the check for variables the schema does not declare, and sync's schema
+    check failed a file that validate passed. A config that cannot be read keeps the check.
+    """
+    from envdrift.config import ConfigLoadError, ConfigNotFoundError, find_config, load_config
+
+    is_toml = config_file is not None and config_file.suffix.lower() == ".toml"
+    config_path = config_file if is_toml else find_config()
+    if config_path is None:
+        return True
+    try:
+        return load_config(config_path).validation.strict_extra
+    except (ConfigLoadError, ConfigNotFoundError, OSError, ValueError):
+        return True
+
+
 def _new_sync_engine(request: SyncRequest, context: _SyncContext):
     from envdrift.sync.engine import SyncEngine, SyncMode
 
@@ -97,6 +116,7 @@ def _new_sync_engine(request: SyncRequest, context: _SyncContext):
         validate_schema=request.validate_schema,
         schema_path=request.schema,
         service_dir=request.service_dir,
+        check_extra=_strict_extra(request.config_file) if request.validate_schema else True,
     )
 
     def progress_callback(message: str) -> None:
