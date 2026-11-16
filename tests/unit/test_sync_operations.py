@@ -17,6 +17,7 @@ from envdrift.sync.operations import (
     atomic_write,
     redact_value,
 )
+from tests.helpers import DOTENVX_KEY_PAIRS
 
 
 def _fake_private_key(seed: str) -> str:
@@ -305,6 +306,15 @@ class TestEnvKeysFile:
 
 class TestAtomicWrite:
     """Tests for atomic file writing."""
+
+    def test_atomic_write_writes_bytes_and_text_byte_for_byte(self, tmp_path: Path) -> None:
+        """Bytes go as given; text goes as UTF-8 with its line ends kept, CRLF included."""
+        raw = tmp_path / "raw"
+        atomic_write(raw, b"A=1\r\nB=caf\xe9\n")
+        assert raw.read_bytes() == b"A=1\r\nB=caf\xe9\n"
+        text = tmp_path / "text"
+        atomic_write(text, "A=1\r\nB=café\n")
+        assert text.read_bytes() == "A=1\r\nB=café\n".encode()
 
     def test_atomic_write_creates_file(self, tmp_path: Path) -> None:
         """Test atomic_write creates file."""
@@ -746,25 +756,31 @@ def test_read_key_reads_dotenvx_utf8_file_under_ascii_locale(tmp_path: Path) -> 
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_find_stale_private_key_name_reads_utf8_under_ascii_locale(tmp_path: Path) -> None:
-    """_find_stale_private_key_name must decode dotenvx UTF-8 keys files (#474).
+def test_relabel_reads_utf8_keys_file_under_ascii_locale(tmp_path: Path) -> None:
+    """lock's key re-label must decode dotenvx UTF-8 keys files (#474, #938).
 
-    Same family as the EnvKeysFile fixes: the helper scans raw .env.keys lines
-    for a stale ``DOTENV_PRIVATE_KEY_*`` name, and its bare ``read_text()``
-    raised UnicodeDecodeError on the non-ASCII header under LC_ALL=C.
+    Same family as the EnvKeysFile fixes: the helper reads the whole keys file
+    (with the non-ASCII header) to find which key the renamed file uses, and a
+    locale-codec ``read_text()`` raised UnicodeDecodeError under LC_ALL=C.
     """
+    private_key, public_key = DOTENVX_KEY_PAIRS[0]
     keys_path = tmp_path / ".env.keys"
     keys_path.write_bytes(
-        (DOTENVX_HEADER + "\n\n# .env.local\nDOTENV_PRIVATE_KEY_LOCAL=" + "a" * 64 + "\n").encode(
-            "utf-8"
-        )
+        (
+            DOTENVX_HEADER + "\n\n# .env.local\nDOTENV_PRIVATE_KEY_LOCAL=" + private_key + "\n"
+        ).encode("utf-8")
+    )
+    env_path = tmp_path / ".env.localenv"
+    env_path.write_text(
+        f'DOTENV_PUBLIC_KEY_LOCAL="{public_key}"\nA=encrypted:x\n', encoding="utf-8"
     )
     body = (
         "from pathlib import Path\n"
-        "from envdrift.cli_commands.sync import _find_stale_private_key_name\n"
-        f"stale = _find_stale_private_key_name(Path(r{str(keys_path)!r}), "
-        '"DOTENV_PRIVATE_KEY_LOCALENV")\n'
-        'assert stale == "DOTENV_PRIVATE_KEY_LOCAL", stale\n'
+        "from envdrift.cli_commands.sync_lock_relabel import relabel_dotenvx_key\n"
+        f"outcome = relabel_dotenvx_key(Path(r{str(env_path)!r}), Path(r{str(keys_path)!r}), "
+        '"DOTENV_PRIVATE_KEY_LOCALENV", apply=False)\n'
+        'assert outcome.action == "planned", outcome\n'
+        'assert outcome.old_name == "DOTENV_PRIVATE_KEY_LOCAL", outcome\n'
     )
 
     result = _run_under_ascii_locale(body)
