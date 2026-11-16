@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from tests.helpers import DOTENVX_KEY_PAIRS
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -354,14 +355,15 @@ environment = "staging"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        # Create .env.keys with the key to push
-        key_value = "staging-private-key-abc123xyz"
+        # Create .env.keys with the key to push: a real dotenvx key, because
+        # vault-push --all does not publish a key the file is not encrypted with.
+        key_value, public_key = DOTENVX_KEY_PAIRS[0]
         env_keys_content = f"DOTENV_PRIVATE_KEY_STAGING={key_value}\n"
         (work_dir / ".env.keys").write_text(env_keys_content)
 
         # Create encrypted env file
         (work_dir / ".env.staging").write_text(
-            'DOTENV_PUBLIC_KEY_STAGING="pub"\nSECRET="encrypted:..."\n'
+            f'DOTENV_PUBLIC_KEY_STAGING="{public_key}"\nSECRET="encrypted:..."\n'
         )
 
         env = aws_test_env.copy()
@@ -725,10 +727,12 @@ folder_path = "."
 environment = "staging"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
-        # The new local key value, different from what is in the vault.
-        (work_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_STAGING=NEWKEY-from-local\n")
+        # The new local key value, different from what is in the vault. It is a
+        # real dotenvx key: vault-push --all does not publish one that is not.
+        new_key, public_key = DOTENVX_KEY_PAIRS[0]
+        (work_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_STAGING={new_key}\n")
         (work_dir / ".env.staging").write_text(
-            'DOTENV_PUBLIC_KEY_STAGING="pub"\nSECRET="encrypted:abc"\n'
+            f'DOTENV_PUBLIC_KEY_STAGING="{public_key}"\nSECRET="encrypted:abc"\n'
         )
 
         env = aws_test_env.copy()
@@ -750,7 +754,7 @@ environment = "staging"
 
             after_first = aws_secrets_client.get_secret_value(SecretId=secret_name)
             assert after_first["SecretString"] == old_value
-            assert "NEWKEY" not in after_first["SecretString"]
+            assert new_key not in after_first["SecretString"]
 
             # Second run: --force overwrites with the new local value.
             second = subprocess.run(
@@ -765,7 +769,7 @@ environment = "staging"
             assert "pushed" in (second.stdout + second.stderr).lower(), second.stdout
 
             after_second = aws_secrets_client.get_secret_value(SecretId=secret_name)
-            assert after_second["SecretString"] == "DOTENV_PRIVATE_KEY_STAGING=NEWKEY-from-local"
+            assert after_second["SecretString"] == f"DOTENV_PRIVATE_KEY_STAGING={new_key}"
             assert after_second["VersionId"] != old_version
         finally:
             _force_delete(aws_secrets_client, secret_name)
@@ -796,7 +800,9 @@ environment = "staging"
             "[[vault.sync.mappings]]\n"
             f'secret_name = "{secret_name}"\nfolder_path = "."\nenvironment = "staging"\n'
         )
-        (work_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_STAGING=NEWKEY-from-local\n")
+        # A real dotenvx key: vault-push --all does not publish one that is not.
+        local_key = DOTENVX_KEY_PAIRS[0][0]
+        (work_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_STAGING={local_key}\n")
 
         env = aws_test_env.copy()
         env["PYTHONPATH"] = integration_pythonpath
@@ -814,7 +820,7 @@ environment = "staging"
             assert ".env.keys not found" not in out, out
             assert result.returncode == 0, out
             stored = aws_secrets_client.get_secret_value(SecretId=secret_name)["SecretString"]
-            assert stored == "DOTENV_PRIVATE_KEY_STAGING=NEWKEY-from-local"
+            assert stored == f"DOTENV_PRIVATE_KEY_STAGING={local_key}"
         finally:
             _force_delete(aws_secrets_client, secret_name)
 

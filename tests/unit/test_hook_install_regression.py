@@ -24,6 +24,7 @@ from typer.testing import CliRunner
 from envdrift.cli import app
 from envdrift.integrations.precommit import (
     HOOK_CONFIG,
+    PrecommitConfigError,
     install_hooks,
     uninstall_hooks,
     verify_hooks_installed,
@@ -145,6 +146,45 @@ class TestInstallPreservesYaml:
         assert "envdrift-encryption" in hook_ids
         assert "envdrift-guard" in hook_ids
 
+    @pytest.mark.parametrize(
+        "last_lines",
+        [
+            "      - id: black",
+            "      - id: black  # keep this hook in its own repo",
+            "      - id: black\n        args: [--check]",
+            "      - id: black\n        args:\n          - --check",
+            "      - id: black\n    # trailing comment",
+        ],
+        ids=["hook-id", "inline-comment", "flow-args", "block-args", "trailing-comment"],
+    )
+    @pytest.mark.parametrize("final_newline", ["", "\n"], ids=["no-newline", "newline"])
+    def test_install_preserves_existing_repositories_at_eof(
+        self, tmp_path: Path, last_lines: str, final_newline: str
+    ):
+        """An unterminated last line must stay in the original repository (#941)."""
+        original = (
+            "repos:\n"
+            "  - repo: https://github.com/psf/black\n"
+            "    rev: 24.3.0\n"
+            "    hooks:\n" + last_lines + final_newline
+        )
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_text(original, encoding="utf-8")
+        original_repos = yaml.safe_load(original)["repos"]
+
+        assert install_hooks(config_path=config_file) is True
+
+        updated = config_file.read_text(encoding="utf-8")
+        updated_repos = yaml.safe_load(updated)["repos"]
+        assert updated_repos[:-1] == original_repos
+        assert [hook["id"] for hook in updated_repos[-1]["hooks"]] == [
+            "envdrift-encryption",
+            "envdrift-guard",
+        ]
+        assert updated.startswith(original.rstrip("\n") + "\n")
+        assert install_hooks(config_path=config_file) is False
+        assert config_file.read_text(encoding="utf-8") == updated
+
     def test_install_inserts_inside_repos_when_repos_is_not_last(self, tmp_path: Path):
         original = textwrap.dedent(
             """\
@@ -169,6 +209,48 @@ class TestInstallPreservesYaml:
         hook_ids = _active_hook_ids(updated)
         assert "envdrift-encryption" in hook_ids
         assert "envdrift-guard" in hook_ids
+
+    @pytest.mark.parametrize(
+        "case", [("|", True), (">", True), ("|+", True), (">+", True), ("|-", False), (">-", False)]
+    )
+    @pytest.mark.parametrize("final_newline", ["", "\n"])
+    def test_install_preserves_block_scalar_args(
+        self, tmp_path: Path, case: tuple[str, bool], final_newline: str
+    ):
+        indicator, needs_final_newline = case
+        original = (
+            "repos:\n"
+            "  - repo: local\n"
+            "    hooks:\n"
+            "      - id: existing\n"
+            "        name: existing\n"
+            "        entry: echo\n"
+            "        language: system\n"
+            "        args:\n"
+            f"          - {indicator}\n"
+            "            --config=pyproject.toml" + final_newline
+        )
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_bytes(original.encode())
+
+        if needs_final_newline and not final_newline:
+            with pytest.raises(PrecommitConfigError, match="existing configuration would change"):
+                install_hooks(config_file)
+            assert config_file.read_bytes() == original.encode()
+        else:
+            assert install_hooks(config_file) is True
+            updated = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+            assert updated["repos"][:-1] == yaml.safe_load(original)["repos"]
+
+    @pytest.mark.parametrize("indicator", ["|", ">"])
+    def test_install_preserves_block_scalar_without_repos(self, tmp_path: Path, indicator: str):
+        original = f"exclude: {indicator}\n  ^vendor/"
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_bytes(original.encode())
+
+        with pytest.raises(PrecommitConfigError, match="existing configuration would change"):
+            install_hooks(config_file)
+        assert config_file.read_bytes() == original.encode()
 
     def test_install_into_empty_flow_repos(self, tmp_path: Path):
         config_file = tmp_path / ".pre-commit-config.yaml"

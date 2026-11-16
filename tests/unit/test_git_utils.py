@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess  # nosec B404
 import sys
 from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
+
+import pytest
 
 from envdrift.utils.git import (
     ensure_gitignore_entries,
@@ -451,3 +454,43 @@ class TestNonAsciiLocaleSafety:
         assert "Traceback" not in result.stderr, result.stderr
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == repo.name
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+class TestEnsureGitignoreGlob:
+    """N2: backups of ``.env.keys`` are ignored by a folder-scoped glob."""
+
+    @staticmethod
+    def _repo(tmp_path: Path) -> Path:
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)  # nosec B603 B607
+        return tmp_path
+
+    def test_outside_a_repository_nothing_changes(self, tmp_path: Path):
+        from envdrift.utils.git import ensure_gitignore_glob
+
+        assert ensure_gitignore_glob(tmp_path / ".env.keys.backup.1", ".env.keys.backup.*") is None
+        assert not (tmp_path / ".gitignore").exists()
+
+    def test_root_folder_entry_has_no_prefix(self, tmp_path: Path):
+        from envdrift.utils.git import ensure_gitignore_glob
+
+        repo = self._repo(tmp_path)
+        (repo / ".gitignore").write_text("node_modules", encoding="utf-8")  # no trailing newline
+
+        added = ensure_gitignore_glob(repo / ".env.keys.backup.1", ".env.keys.backup.*")
+
+        assert added == ".env.keys.backup.*"
+        assert (repo / ".gitignore").read_text(encoding="utf-8") == (
+            "node_modules\n.env.keys.backup.*\n"
+        )
+
+    def test_an_already_ignored_name_adds_nothing(self, tmp_path: Path):
+        from envdrift.utils.git import ensure_gitignore_glob
+
+        repo = self._repo(tmp_path)
+        (repo / ".gitignore").write_text("*.backup.*\n", encoding="utf-8")
+
+        assert (
+            ensure_gitignore_glob(repo / "svc" / ".env.keys.backup.1", ".env.keys.backup.*") is None
+        )
+        assert (repo / ".gitignore").read_text(encoding="utf-8") == "*.backup.*\n"
