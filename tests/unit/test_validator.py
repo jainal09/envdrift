@@ -6,7 +6,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader
-from envdrift.core.validator import Validator
+from envdrift.core.validator import MODEL_ERROR_KEY, Validator
+
+
+class _KnownModelDefaultError(AssertionError):
+    """A model validator rejected an encrypted value's default (#1032)."""
 
 
 class _PrefixedSensitiveSettings(BaseSettings):
@@ -458,6 +462,40 @@ NEW_FEATURE_FLAG=enabled
         assert "API_KEY" not in result.type_errors, result.type_errors
         assert "NOTES" in result.type_errors  # empty plaintext: the app sees ''
         assert "ABSENT" in result.type_errors  # the app validates this default too
+
+    @pytest.mark.xfail(
+        raises=_KnownModelDefaultError,
+        strict=False,
+        reason="a model validator judges an encrypted value by its default (see #1032)",
+    )
+    def test_model_validator_does_not_judge_an_encrypted_value_by_its_default(self, tmp_path):
+        """A ``@model_validator`` sees the default of a value that is encrypted.
+
+        The constraint pass leaves the encrypted value out, so the model fills in
+        the field's default, the validator rejects it, and ``validate --ci`` fails
+        a file whose real value it never saw. The error has no ``loc``, so dropping
+        the errors of fields left out as ciphertext does not catch it.
+        """
+
+        class Settings(BaseSettings):
+            API_KEY: str = ""
+
+            @model_validator(mode="after")
+            def need_key(self):
+                if not self.API_KEY:
+                    raise ValueError("API_KEY is required")
+                return self
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=encrypted:BAAAexample\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        if "API_KEY is required" in result.type_errors.get(MODEL_ERROR_KEY, ""):
+            raise _KnownModelDefaultError(result.type_errors)
+        assert result.valid is True, result.type_errors
 
     def test_constraint_pass_skips_empty_when_env_ignore_empty(self, tmp_path):
         """With env_ignore_empty=True the env source drops '' (the field is
