@@ -821,25 +821,28 @@ def test_guard_pr_base_with_no_changed_files(tmp_path: Path, monkeypatch):
 def test_guard_pr_base_unresolvable_ref_errors(tmp_path: Path, monkeypatch):
     """A failing ``git diff <base>...HEAD`` is an error, not "no changes" (#476).
 
-    git exits 128 for an unknown revision; guard must exit 1 with an error that
+    git exits 128 for an unknown revision; guard must exit 6 with an error that
     names the base ref instead of passing green with "No changed files to scan".
+    Real git: with ``--`` after the range, git names an unknown base ``bad
+    revision 'nope...HEAD'``, with no full stop, and the error still reads as
+    two sentences.
     """
-    import subprocess
+    if shutil.which("git") is None:
+        pytest.skip("git binary not available")
 
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
-
-    def mock_run(cmd, *args, **kwargs):
-        if "diff" in cmd:
-            return subprocess.CompletedProcess(
-                cmd,
-                128,
-                stdout="",
-                stderr="fatal: ambiguous argument 'nope...HEAD': unknown revision\n",
-            )
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr("subprocess.run", mock_run)
+    identity = ["-c", "user.name=envdrift", "-c", "user.email=envdrift@example.invalid"]
+    identity += ["-c", "commit.gpgsign=false"]
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", *identity, "commit", "-q", "--allow-empty", "-m", "base"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    # git translates its messages: pin the untranslated one asserted below.
+    monkeypatch.setenv("LC_ALL", "C")
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["guard", "--pr-base", "nope"])
@@ -847,8 +850,10 @@ def test_guard_pr_base_unresolvable_ref_errors(tmp_path: Path, monkeypatch):
     # Operational error (unresolvable base ref) is exit 6, not critical's 1 (#526).
     assert result.exit_code == 6, out
     assert "Error" in out, out
-    assert "'nope'" in out, out
-    assert "unknown revision" in out, out
+    assert (
+        "--pr-base 'nope' could not be diffed against: fatal: bad revision 'nope...HEAD'. "
+        "Fetch or fix the base ref (e.g. 'git fetch origin nope')."
+    ) in out, out
     assert "no changed files" not in out.lower(), out
 
 
