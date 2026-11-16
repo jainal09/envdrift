@@ -9,6 +9,7 @@ gitleaks reports them from ``git log -p``; the engine's filters run for real.
 
 from __future__ import annotations
 
+import shutil
 import subprocess  # nosec B404
 import sys
 from pathlib import Path
@@ -39,6 +40,7 @@ def repo(tmp_path: Path) -> Path:
 
 def _commit(repo: Path, name: str, second_line: str) -> str:
     """Commit ``name`` with ``second_line`` as its line 2; return the commit."""
+    (repo / name).parent.mkdir(parents=True, exist_ok=True)
     (repo / name).write_text(f"SETTING_1=value1\n{second_line}\nSETTING_3=value3\n")
     _git(repo, "add", "-f", "--", name)
     _git(repo, "commit", "-q", "-m", f"line 2 of {name}")
@@ -178,6 +180,21 @@ def test_a_symlink_made_later_does_not_choose_the_file_a_history_finding_is_judg
     (repo / ".env.production").symlink_to("decoy.env")
 
     assert _reported(repo, [_finding(repo, plaintext)]) == [plaintext]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a symbolic link needs a privilege on Windows")
+def test_a_folder_linked_elsewhere_later_does_not_choose_the_file_either(repo: Path):
+    """``prod/app.env`` is read as the commit held it, though ``prod`` links to ``decoy`` today.
+
+    The folder was resolved through today's link: the commit's ``decoy/app.env``, whose line 2
+    is encrypted, was read in place of the plaintext ``prod/app.env``.
+    """
+    _commit(repo, "decoy/app.env", f'SETTING_2="{_CIPHERTEXT}"')
+    plaintext = _commit(repo, "prod/app.env", f"AWS_ACCESS_KEY_ID={_KEY}")
+    shutil.rmtree(repo / "prod")
+    (repo / "prod").symlink_to("decoy", target_is_directory=True)
+
+    assert _reported(repo, [_finding(repo, plaintext, name="prod/app.env")]) == [plaintext]
 
 
 def test_only_the_last_files_read_are_kept_in_memory(repo: Path):

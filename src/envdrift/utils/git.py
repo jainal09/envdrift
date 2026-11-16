@@ -393,29 +393,42 @@ def _git_entry_above(path: Path) -> Path | None:
 def file_at_commit(file_path: Path, commit: str) -> str | None:
     """The text of ``file_path`` as ``commit`` holds it; None when git cannot show it.
 
-    The file is named by its path in the repository: a symbolic link there today is not
-    followed, as the commit may hold a file at that path, or another link (#1014). Its folder
-    is resolved, as git names the repository by its real path.
+    The file is named by its path in the repository, taken from the path as given: no symbolic
+    link on the way is followed, at the file or at a folder, as the commit may hold a file at
+    that path where a link is today (#1014).
     """
-    folder = file_path.parent.resolve()
-    git_root = get_git_root(folder)
-    if not git_root:
+    located = _in_work_tree(file_path)
+    if located is None:
         return None
+    root, relative_path = located
     try:
-        relative_path = (folder / file_path.name).relative_to(git_root)
         result = run_tool(
             ["git", "show", f"{commit}:{relative_path.as_posix()}"],
-            cwd=str(git_root),
-            env=_hook_env(git_root),
+            cwd=str(root),
+            env=_hook_env(root),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="surrogateescape",
             timeout=10,
         )
-    except (subprocess.TimeoutExpired, OSError, ValueError):
+    except (subprocess.TimeoutExpired, OSError):
         return None
     return result.stdout if result.returncode == 0 else None
+
+
+def _in_work_tree(file_path: Path) -> tuple[Path, Path] | None:
+    """The root of the work tree ``file_path`` is in and its path there, both as written.
+
+    No link is resolved: the root is the nearest folder above the file, on its absolute path as
+    given, that holds a ``.git`` (a repository, or the file that names one).
+    """
+    # normpath folds "a/../b" without resolving a link, as Path.resolve() would.
+    path = Path(os.path.normpath(Path(file_path).absolute()))
+    for folder in path.parents:
+        if (folder / ".git").exists():
+            return folder, path.relative_to(folder)
+    return None
 
 
 def _literal_pathspec(relative_path: Path) -> str:
