@@ -14,7 +14,9 @@ import importlib.util
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,18 +34,33 @@ pytestmark = [
 PRODUCTION = "DOTENV_PRIVATE_KEY_PRODUCTION"
 
 
-def _verify_vault(work_dir: Path, env: dict[str, str], pythonpath: str, vault_url: str, path: str):
-    run_env = dict(env, PYTHONPATH=pythonpath)
-    args = ["decrypt", ".env.production", "--verify-vault", "-p", "hashicorp"]
-    args += ["--vault-url", vault_url, "--secret", path]
-    return subprocess.run(
-        [sys.executable, "-m", "envdrift.cli", *args],
-        cwd=work_dir,
-        env=run_env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+@dataclass
+class _VaultCli:
+    """The live HashiCorp Vault container, and the real CLI run against it."""
+
+    client: Any
+    url: str
+    env: dict[str, str]
+
+    def verify(self, work_dir: Path, path: str) -> subprocess.CompletedProcess[str]:
+        args = ["decrypt", ".env.production", "--verify-vault", "-p", "hashicorp"]
+        args += ["--vault-url", self.url, "--secret", path]
+        return subprocess.run(
+            [sys.executable, "-m", "envdrift.cli", *args],
+            cwd=work_dir,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+
+@pytest.fixture
+def vault_cli(
+    vault_endpoint: str, vault_client, vault_test_env: dict[str, str], integration_pythonpath: str
+) -> _VaultCli:
+    env = dict(vault_test_env, PYTHONPATH=integration_pythonpath)
+    return _VaultCli(client=vault_client, url=vault_endpoint, env=env)
 
 
 @pytest.mark.vault
@@ -53,12 +70,7 @@ def _verify_vault(work_dir: Path, env: dict[str, str], pythonpath: str, vault_ur
 )
 @pytest.mark.parametrize("header", [False, True], ids=["plaintext", "decrypted-dotenvx-file"])
 def test_verify_vault_fails_a_file_with_no_encrypted_value(
-    vault_endpoint: str,
-    vault_client,
-    work_dir: Path,
-    vault_test_env: dict[str, str],
-    integration_pythonpath: str,
-    header: bool,
+    vault_cli: _VaultCli, work_dir: Path, header: bool
 ) -> None:
     """The vault's key was never used, so the check must not say the keys are in sync.
 
@@ -70,18 +82,15 @@ def test_verify_vault_fails_a_file_with_no_encrypted_value(
     lines = [f'DOTENV_PUBLIC_KEY_PRODUCTION="{public}"'] if header else []
     (work_dir / ".env.production").write_text("\n".join([*lines, "API_TOKEN=value", ""]))
     path = f"test/verify-nothing-to-decrypt-{'header' if header else 'plain'}"
-    vault_client.secrets.kv.v2.create_or_update_secret(
+    kv = vault_cli.client.secrets.kv.v2
+    kv.create_or_update_secret(
         path=path, secret={"value": f"{PRODUCTION}={other_private}"}, mount_point="secret"
     )
     try:
-        result = _verify_vault(
-            work_dir, vault_test_env, integration_pythonpath, vault_endpoint, path
-        )
+        result = vault_cli.verify(work_dir, path)
     finally:
         with contextlib.suppress(Exception):
-            vault_client.secrets.kv.v2.delete_metadata_and_all_versions(
-                path=path, mount_point="secret"
-            )
+            kv.delete_metadata_and_all_versions(path=path, mount_point="secret")
 
     output = " ".join((result.stdout + result.stderr).split())
     assert "keys are in sync" not in output, output
