@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from envdrift.utils.process_tree import kill_process_tree
+from envdrift.utils.win_job import Job, job_for
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,9 @@ def _run(
     """``subprocess.run``, but a timeout or an interrupt kills the processes the tool started too.
 
     ``subprocess.run`` kills only the process it started (#911). This follows its code, with
-    ``_kill_tree`` where it calls ``process.kill()``.
+    ``_kill_tree`` where it calls ``process.kill()``. On Windows the tool is put in a job object
+    as soon as it starts, so that the kill reaches a process it left running when it exited
+    (#925).
     """
     if input is not None:
         if kwargs.get("stdin") is not None:
@@ -142,10 +145,11 @@ def _run(
             raise ValueError("stdout and stderr arguments may not be used with capture_output.")
         kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
     with subprocess.Popen(args, **kwargs) as process:  # nosec B603
+        job = job_for(process)
         try:
             stdout, stderr = process.communicate(input, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            _kill_tree(process)
+            _kill_tree(process, job)
             if sys.platform == "win32":
                 # Windows reads the output on threads: collect it after the kill.
                 exc.stdout, exc.stderr = process.communicate()
@@ -154,8 +158,11 @@ def _run(
                 process.wait()
             raise
         except BaseException:  # KeyboardInterrupt included, as in subprocess.run
-            _kill_tree(process)
+            _kill_tree(process, job)
             raise
+        finally:
+            if job is not None:
+                job.close()
         returncode = process.wait()  # it has exited: communicate() returned
         if check and returncode:
             raise subprocess.CalledProcessError(
@@ -164,13 +171,13 @@ def _run(
     return subprocess.CompletedProcess(process.args, returncode, stdout, stderr)
 
 
-def _kill_tree(process: subprocess.Popen) -> None:
+def _kill_tree(process: subprocess.Popen, job: Job | None = None) -> None:
     """``kill_process_tree`` while the runner handles a timeout or an interrupt.
 
     The tool and the processes stopped so far are killed even when listing the processes fails.
     That error is logged, not raised: the caller must see the timeout or interrupt it handles.
     """
     try:
-        kill_process_tree(process)
+        kill_process_tree(process, job)
     except OSError as exc:
         logger.warning("Could not kill every process that %s started: %s", process.args, exc)
