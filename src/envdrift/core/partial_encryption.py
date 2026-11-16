@@ -823,39 +823,50 @@ class DecryptSnapshot:
                 f"{self.path} was left as it was: envdrift restored the bytes it had "
                 "before the decrypt."
             )
-        lead = (
-            f"envdrift could not restore {self.path} ({failure}), so it may now hold "
-            "decrypted plaintext values"
-        )
-        if _through_symlink(self.path):
-            lead += f" (through a symlink, they are in {_shown(written)})"
-        # The commands act on that file, in the repository the mark was set in.
-        git, name = _git_for_written_file(self.path)
-        if _git_skip_worktree(self.path):
-            # git checkout refuses a skip-worktree path, so lift the bit first.
-            return (
-                f"{lead}. It is marked skip-worktree, so a plain `git add .` won't stage it. "
-                f"To restore it, run `{git} update-index --no-skip-worktree {name}` and "
-                f"then `{git} checkout -- {name}`."
-            )
-        # The advice depends on why the mark failed: git checkout can restore
-        # only a file git has a copy of.
-        reason = unprotected_reason(self.path)
-        if reason.startswith("untracked"):
-            return (
-                f"{lead}, and git does not track it, so a plain `git add .` WILL stage "
-                "it and git has no copy to restore. Re-encrypt it with "
-                f"`envdrift encrypt {self.path}` before you commit."
-            )
-        if reason.startswith("outside a git repository"):
-            return (
-                f"{lead}. It is outside a git repository, so git cannot stage it or "
-                f"restore it: re-encrypt it with `envdrift encrypt {self.path}`."
-            )
+        return _unrestored_advice(self.path, written, failure)
+
+
+def _unrestored_advice(path: Path, written: Path, failure: str) -> str:
+    """The sentence for a failed decrypt of ``path`` that ``restore`` could not undo.
+
+    ``written`` is the file the bytes are in (``_written_file``), and ``failure`` says why
+    the write back failed. The file may hold decrypted plaintext, so it is marked
+    skip-worktree, and the sentence says whether that protection worked and how to
+    recover the file.
+    """
+    lead = (
+        f"envdrift could not restore {path} ({failure}), so it may now hold "
+        "decrypted plaintext values"
+    )
+    if _through_symlink(path):
+        lead += f" (through a symlink, they are in {_shown(written)})"
+    # The commands act on that file, in the repository the mark was set in.
+    git, name = _git_for_written_file(path)
+    if _git_skip_worktree(path):
+        # git checkout refuses a skip-worktree path, so lift the bit first.
         return (
-            f"{lead}, and it could not be marked skip-worktree: a plain `git add .` "
-            f"WILL stage it. Run `{git} checkout -- {name}` before you commit."
+            f"{lead}. It is marked skip-worktree, so a plain `git add .` won't stage it. "
+            f"To restore it, run `{git} update-index --no-skip-worktree {name}` and "
+            f"then `{git} checkout -- {name}`."
         )
+    # The advice depends on why the mark failed: git checkout can restore
+    # only a file git has a copy of.
+    reason = unprotected_reason(path)
+    if reason.startswith("untracked"):
+        return (
+            f"{lead}, and git does not track it, so a plain `git add .` WILL stage "
+            "it and git has no copy to restore. Re-encrypt it with "
+            f"`envdrift encrypt {path}` before you commit."
+        )
+    if reason.startswith("outside a git repository"):
+        return (
+            f"{lead}. It is outside a git repository, so git cannot stage it or "
+            f"restore it: re-encrypt it with `envdrift encrypt {path}`."
+        )
+    return (
+        f"{lead}, and it could not be marked skip-worktree: a plain `git add .` "
+        f"WILL stage it. Run `{git} checkout -- {name}` before you commit."
+    )
 
 
 def _leftover_ciphertext(file_path: Path) -> str | None:
