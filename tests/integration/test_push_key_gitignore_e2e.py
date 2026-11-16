@@ -95,23 +95,29 @@ def _write_combine_config(directory: Path, folder: str = "config") -> None:
 
 
 class TestPushIgnoresTheRealKeyFile:
-    def test_combine_mode_from_a_repository_subdirectory(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    @pytest.mark.parametrize("folder", ["app", ""], ids=["from-a-subdirectory", "from-the-root"])
+    def test_combine_mode_ignores_the_key_file_next_to_the_secret_file(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str], folder: str
     ) -> None:
-        app = git_repo / "app"
-        app.mkdir()
-        _write_combine_config(app)
+        """Run from a subdirectory, ``./.env.keys`` missed the key dotenvx writes (#961).
+
+        From the repository root, the case that used to hide the bug, it still works.
+        """
+        cwd = git_repo / folder
+        cwd.mkdir(exist_ok=True)
+        _write_combine_config(cwd)
+        key_file = (Path(folder) / "config" / ".env.keys").as_posix()
 
         result = _run_envdrift(
             ["push"],
-            cwd=app,
+            cwd=cwd,
             integration_pythonpath=integration_pythonpath,
             envdrift_cmd=envdrift_cmd,
         )
 
         assert result.returncode == 0, _flat(result)
-        assert "app/config/.env.keys" in _flat(result)
-        _assert_ignored(git_repo, "app/config/.env.keys")
+        assert key_file in _flat(result)
+        _assert_ignored(git_repo, key_file)
 
     def test_secrets_only_recursive_pattern_from_a_subdirectory(
         self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
@@ -147,22 +153,6 @@ class TestPushIgnoresTheRealKeyFile:
             "sub/secrets/db/.env.keys",
         ):
             _assert_ignored(git_repo, key_file)
-
-    def test_combine_mode_from_the_repository_root(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
-    ) -> None:
-        """Non-regression: the case that used to hide the bug still works."""
-        _write_combine_config(git_repo)
-
-        result = _run_envdrift(
-            ["push"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
-
-        assert result.returncode == 0, _flat(result)
-        _assert_ignored(git_repo, "config/.env.keys")
 
     def test_folder_named_with_gitignore_syntax(
         self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]

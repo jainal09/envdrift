@@ -400,7 +400,7 @@ class TestEnsureGitignoreEntries:
         Written raw, ``config/[prod]/.env.keys`` is a character class: it ignores
         ``config/p/.env.keys`` but not the private key in the folder ``[prod]``.
         """
-        if sys.platform == "win32" and (any(ch in path for ch in "*?\\") or path.endswith(" ")):
+        if sys.platform == "win32" and _not_a_windows_file_name(path):
             pytest.skip("not a valid Windows file name")
         repo = tmp_path.resolve()  # git's own spelling of the root (macOS: /private/var)
         subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
@@ -413,6 +413,11 @@ class TestEnsureGitignoreEntries:
             assert _check_ignore(repo, decoy) == 1, (repo / ".gitignore").read_text()
         # A second run finds it ignored and writes nothing.
         assert ensure_gitignore_entries([repo / path], git_root=repo) == []
+
+
+def _not_a_windows_file_name(path: str) -> bool:
+    """``*``, ``?`` and ``\\`` cannot be in a Windows file name, nor can a trailing space."""
+    return any(ch in path for ch in "*?\\") or path.endswith(" ")
 
 
 def _check_ignore(repo: Path, path: str) -> int:
