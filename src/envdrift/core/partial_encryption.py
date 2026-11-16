@@ -8,15 +8,21 @@ This module implements a simple build pattern for partial encryption:
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shlex
 import subprocess  # nosec B404
 from pathlib import Path
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, TypedDict
 
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.env_files import _is_excluded_env_file
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError, DotenvxWrapper
 from envdrift.sync.operations import atomic_write
+from envdrift.utils.git import git_location_for
+
+if TYPE_CHECKING:
+    from types import TracebackType
 
 logger = logging.getLogger(__name__)
 
@@ -170,9 +176,41 @@ class PartialEncryptionError(Exception):
         return cls(f"Failed to encrypt {path}: {cause}")
 
     @classmethod
-    def decrypt_failed(cls, path: Path, cause: Exception) -> PartialEncryptionError:
-        """Create error for decryption failure."""
-        return cls(f"Failed to decrypt {path}: {cause}")
+    def decrypt_failed(cls, path: Path, cause: Exception, note: str = "") -> PartialEncryptionError:
+        """Create error for decryption failure.
+
+        ``note`` says what happened to the file (``DecryptSnapshot.restore``).
+        """
+        message = f"Failed to decrypt {path}: {cause}"
+        return cls(f"{message}\n{note}" if note else message)
+
+    @classmethod
+    def still_encrypted(cls, path: Path, ciphertext: str, note: str) -> PartialEncryptionError:
+        """Create error for a decrypt that exited 0 but left ciphertext (#963).
+
+        ``ciphertext`` names the format still in the file (``_leftover_ciphertext``).
+        """
+        if ciphertext == "SOPS":
+            # Shared by pull-partial and pull. `envdrift decrypt` alone left the
+            # plaintext in a tracked file that `git add .` staged: mark it first, in the
+            # repository that tracks the file. Run from the superproject, the mark for a
+            # file in a submodule failed: the superproject tracks only the gitlink.
+            git, name = _git_for_written_file(path)
+            word = _command_word(str(path))
+            reason = (
+                "it still holds SOPS ciphertext. Partial encryption decrypts with "
+                "dotenvx, which does not read SOPS files. To move it to dotenvx, run "
+                f"`{git} update-index --skip-worktree {name}` so `git add .` cannot stage "
+                "its plaintext (git can mark only a tracked file), then "
+                f"`envdrift decrypt {word} --backend sops`, then `envdrift push` before "
+                "you stage anything: push encrypts it with dotenvx and lifts the mark."
+            ) + _expansion_note(git, name, word)
+        else:
+            reason = (
+                "it still holds dotenvx ciphertext after the decrypt. The decryption "
+                "key may be missing or invalid."
+            )
+        return cls(f"Failed to decrypt {path}: {reason}\n{note}")
 
     @classmethod
     def file_not_found(cls, path: Path) -> PartialEncryptionError:
@@ -219,6 +257,46 @@ class PartialEncryptionError(Exception):
             "scaffold. Restore the source files or fix the paths in "
             "envdrift.toml."
         )
+
+
+class SecretsOnlyPullError(PartialEncryptionError):
+    """A secrets-only pull stopped at a file it could not decrypt (#948).
+
+    The files decrypted before the failure are plaintext on disk, so the error
+    carries the tally for callers to report: ``pull-partial`` and ``pull`` count
+    them, and both warn about the ones git skip-worktree could not protect.
+    ``protected`` and ``unprotected`` cover only files this pull decrypted (#998).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        decrypted: int,
+        already_decrypted: int,
+        protected: int,
+        unprotected: list[Path] | None = None,
+    ) -> None:
+        """Store the message and the counts reached before the failure."""
+        super().__init__(message)
+        self.decrypted = decrypted
+        self.already_decrypted = already_decrypted
+        self.protected = protected
+        self.unprotected = list(unprotected or [])
+
+
+class SecretsOnlyPullResult(TypedDict):
+    """Outcome of a secrets-only pull (``pull_secrets_only``).
+
+    ``protected`` counts the files this pull decrypted and marked skip-worktree;
+    ``unprotected`` lists the ones it decrypted but could not mark. A file that
+    was plaintext already is in neither (#998).
+    """
+
+    decrypted: int
+    already_decrypted: int
+    protected: int
+    unprotected: list[Path]
 
 
 def _is_quote_wrapped(v: str) -> bool:
@@ -531,22 +609,56 @@ def combine_files(
     }
 
 
+def _written_file(path: Path) -> Path:
+    """The file a write to ``path`` lands in: ``path`` with every symlink resolved.
+
+    dotenvx writes through a symlinked secret file into its target. Marking the
+    link skip-worktree protected nothing: the plaintext landed in the tracked
+    target, which `git add .` staged, while pull-partial called it protected. A
+    symlinked directory on the way sends the write elsewhere the same way.
+    """
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):  # a symlink loop: no file to write either
+        return path
+
+
 def _run_git_update_index(flag: str, path: Path) -> bool:
-    """Run ``git update-index <flag> <path>`` and report whether it succeeded.
+    """Run ``git update-index <flag>`` on the file ``path`` writes to; report success.
+
+    That is the target of a symlinked ``path`` (``_written_file``), so the bit is
+    set on, and lifted from, the file that holds the plaintext. git runs in the
+    repository that tracks that file (``git_location_for``): run from the
+    superproject, git could not mark a file in a submodule, and run from the
+    superproject's git hook, it marked the superproject's file at the same path
+    and exited 0, so a pull called the submodule's plaintext protected.
 
     Returns True only when git exits 0. A non-zero exit (e.g. the file is not
     tracked) is logged as a warning rather than failing silently; git being
     unavailable is logged at debug level. Either way the caller gets False so it
     can avoid claiming protection that was never applied.
     """
+    # The file's path is not logged: git's own message names the file ("fatal: Unable
+    # to mark file <path>"), and CodeQL reads a secret file's path as the secret
+    # (py/clear-text-logging-sensitive-data).
     try:
+        # In the try too: the lookup runs git, and its failure means no mark, not a crash
+        # (pull_secrets_only marks each file outside its own error handling).
+        target = _written_file(path)
+        folder, env = git_location_for(target)
         result = subprocess.run(  # nosec B603, B607
-            ["git", "update-index", flag, str(path)],
+            ["git", "-C", str(folder), "update-index", flag, "--", str(target)],
             capture_output=True,
             timeout=10,
+            env=env,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        logger.debug("git update-index %s not applied to %s: %s", flag, path, exc)
+    except subprocess.TimeoutExpired as exc:
+        # Not ``exc`` itself: its text is the whole command, the file's path included.
+        logger.debug("git update-index %s not applied: timed out after %ss", flag, exc.timeout)
+        return False
+    except (OSError, RuntimeError) as exc:  # git could not start, or a path could not resolve
+        reason = getattr(exc, "strerror", None) or type(exc).__name__
+        logger.debug("git update-index %s not applied: %s", flag, reason)
         return False
     if result.returncode != 0:
         stderr = result.stderr
@@ -557,15 +669,9 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
         # is simply not applicable there, so log it at debug like git-unavailable
         # (otherwise `push`/`pull` in a non-repo dir print scary git noise).
         if "not a git repository" in message.lower():
-            logger.debug("git update-index %s skipped (not a git repo): %s", flag, path)
+            logger.debug("git update-index %s skipped (not a git repo): %s", flag, message)
             return False
-        logger.warning(
-            "git update-index %s failed for %s (exit %s): %s",
-            flag,
-            path,
-            result.returncode,
-            message,
-        )
+        logger.warning("git update-index %s failed (exit %s): %s", flag, result.returncode, message)
         return False
     return True
 
@@ -586,6 +692,314 @@ def _git_unskip_worktree(path: Path) -> bool:
     Best-effort: returns False (and logs) if git is unavailable or the file is not tracked.
     """
     return _run_git_update_index("--no-skip-worktree", path)
+
+
+def unprotected_reason(path: Path) -> str:
+    """Say why ``git update-index --skip-worktree`` could not protect ``path`` (#998).
+
+    Asks git, by exit code rather than by its (translated) messages, whether the
+    file the protection was for (``_written_file``) is in the index, in the
+    repository and index the protection ran in (``git_location_for``):
+    ``untracked`` (exit 1), ``outside a git repository`` (exit 128), else
+    ``skip-worktree failed`` (a tracked file, for example while another git
+    process holds the index lock). The name is a literal pathspec: as a glob,
+    ``[prod]`` could match another, tracked file and call an untracked one
+    tracked. When a symlink sends ``path`` elsewhere, the reason names the file
+    the plaintext is in.
+    """
+    target = _written_file(path)
+    try:
+        # In the try: the lookup fails where it failed for the mark (_run_git_update_index),
+        # and the notice that names the plaintext file must still print.
+        folder, env = git_location_for(target)
+        listed = subprocess.run(  # nosec B603, B607
+            [
+                "git",
+                "-C",
+                str(folder),
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                f":(literal){target.relative_to(folder).as_posix()}",
+            ],
+            capture_output=True,
+            timeout=10,
+            env=env,
+        )
+    except FileNotFoundError:
+        return "skip-worktree failed: git is not installed"
+    except (subprocess.TimeoutExpired, OSError, RuntimeError) as exc:
+        return f"skip-worktree failed: {exc}"
+    if listed.returncode == 1:
+        reason = "untracked"
+    elif listed.returncode != 0:
+        reason = "outside a git repository"
+    else:
+        reason = "skip-worktree failed"
+    if _through_symlink(path):
+        reason += f"; through a symlink, the plaintext is in {_shown(target)}"
+    return reason
+
+
+def _through_symlink(path: Path) -> bool:
+    """Whether ``path``, or a directory on the way to it, is a symlink."""
+    return any(part.is_symlink() for part in (path, *path.parents))
+
+
+def _shown(path: Path) -> Path:
+    """``path`` relative to the working directory, or in full when it is not under it."""
+    try:
+        return path.relative_to(Path.cwd().resolve())
+    except (ValueError, OSError):
+        return path
+
+
+def _git_for_written_file(path: Path) -> tuple[str, str]:
+    """The ``git`` to type, and the file to name, to act on the file ``path`` writes to.
+
+    The skip-worktree mark is set on that file, by git run in the repository that
+    tracks it (``_run_git_update_index``): for a symlinked ``path`` the link's
+    target, and for a file in a submodule the submodule's repository. Recovery
+    advice that named ``path`` from the working directory unmarked and checked out
+    the link, or was refused in the superproject, so the plaintext stayed. The
+    commands run git in that file's directory (``git -C``), where git finds that
+    repository, unless it is the working directory, where a file not reached
+    through a symlink keeps the name it was given.
+    """
+    target = _written_file(path)
+    folder = _shown(target.parent)
+    git = "git" if folder == Path() else f"git -C {_command_word(str(folder))}"
+    if folder == Path() and not _through_symlink(path):
+        return git, _command_word(str(path))
+    return git, _command_word(target.name)
+
+
+def _command_word(text: str) -> str:
+    """``text`` as one word of a command the user pastes into a shell.
+
+    A path with a space, ``secrets/my app/.env.a`` say, split into two arguments, so
+    the printed command failed or acted on the wrong file. POSIX shells read
+    ``shlex.quote``; Windows shells read ``_windows_word``. A word that starts with ``-``
+    is given a leading ``./`` (``.\\`` on Windows), the same file: git read ``-prod.env`` as
+    an option and refused the command, and envdrift's own commands would too.
+    """
+    if text.startswith("-"):
+        text = f"{os.curdir}{os.sep}{text}"  # not Path: it drops a leading "."
+    if os.name == "nt":
+        return _windows_word(text)
+    return shlex.quote(text)
+
+
+def _windows_word(text: str) -> str:
+    """``text`` as one word for cmd.exe and PowerShell alike.
+
+    A word of only letters, digits and ``_.:\\/~-`` means nothing else to either shell,
+    so it stays as it is (``C:\\Users\\RUNNER~1\\...``). Any other word is put in double
+    quotes, which both read: a space or ``&`` there split the command in two, and
+    ``|``, ``<``, ``>``, ``^``, ``(``, ``)``, ``;``, ``,`` and ``@`` are each special to one
+    of them. A Windows file name cannot hold a double quote, so none needs escaping.
+    """
+    if re.fullmatch(r"[\w.:\\/~-]+", text):
+        return text
+    return f'"{text}"'
+
+
+# Read even inside double quotes: cmd.exe expands %NAME% (and !NAME! with delayed expansion), and
+# PowerShell expands $NAME, escapes with a backtick and ends a string at a curly double quote.
+_READ_IN_DOUBLE_QUOTES = frozenset("%!$`\u201c\u201d\u201e")
+
+
+def _expansion_note(*words: str, windows: bool = os.name == "nt") -> str:
+    """A warning when a printed Windows command word holds what a shell still changes, else "".
+
+    Double quotes (``_windows_word``) keep a space or ``&`` in one word, but no quoting keeps
+    ``%NAME%`` from cmd.exe and ``$NAME`` from PowerShell alike. A command that names such a file
+    acts on another path: the SOPS advice's mark misses the file, and the decrypt after it leaves
+    plaintext that `git add .` stages. POSIX words (``shlex.quote``) keep every character.
+    """
+    if not windows or not _READ_IN_DOUBLE_QUOTES.intersection("".join(words)):
+        return ""
+    return (
+        " A file name in these commands holds `%`, `!`, `$`, a backtick or a curly quote, which "
+        "cmd.exe or PowerShell can change even in double quotes: check that your shell passes "
+        "it as it is (in PowerShell, put it in single quotes) before you run them."
+    )
+
+
+class DecryptSnapshot:
+    """The exact bytes of a file about to be decrypted in place by dotenvx.
+
+    dotenvx decrypts value by value. When one value is encrypted under another
+    key (after a merge, or through key drift), it writes the values it could
+    decrypt to the file and then exits 1, so a failed decrypt left plaintext
+    secrets in a tracked file (#948, #962). Take the snapshot before dotenvx
+    runs; ``restore`` writes it back when the decrypt fails, or exits 0 but
+    leaves ciphertext behind, if the file changed (byte for byte, so CRLF line
+    endings survive the wrapper's LF normalization).
+
+    Used as a context manager, it restores the file on any exception from the
+    body and keeps the outcome in ``note`` for the caller's error message. The
+    pull-partial paths and the dotenvx backend (decrypt, pull and vault-pull)
+    share it.
+    """
+
+    def __init__(self, path: Path) -> None:
+        """Read ``path``'s bytes; an ``OSError`` means nothing can be restored."""
+        self.path = path
+        self.original = path.read_bytes()
+        self.note = ""
+
+    def __enter__(self) -> DecryptSnapshot:
+        """Return the snapshot; the body runs the decrypt."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Restore the file when the decrypt raised; the exception propagates."""
+        if exc_type is not None:
+            self.note = self.restore()
+
+    def restore(self) -> str:
+        """Put the original bytes back if the file changed; return what happened.
+
+        The bytes go back whole or not at all: to a temp file next to the file
+        the write lands in (``_written_file``, so a symlink stays a symlink),
+        synced, then renamed over it with its mode kept. Written in place, a
+        write that failed part way (a full disk, a file size limit) left the
+        file cut short, with neither the values dotenvx decrypted nor the
+        ciphertext it left, and an untracked file had no copy anywhere.
+
+        The returned sentence ends the caller's error message. When the write
+        itself fails the file is as dotenvx left it and may hold decrypted
+        plaintext, so it is marked skip-worktree and the sentence says whether
+        that protection worked, and how to recover the file.
+        """
+        try:
+            changed = self.path.read_bytes() != self.original
+        except OSError:
+            changed = True  # Unreadable now: write the original back to be safe.
+        if not changed:
+            return f"{self.path} was left as it was."
+        written = _written_file(self.path)
+        try:
+            atomic_write(written, self.original)
+            failure = "" if self.path.read_bytes() == self.original else "its bytes still differ"
+        except OSError as exc:
+            failure = str(exc)
+        if not failure:
+            return (
+                f"{self.path} was left as it was: envdrift restored the bytes it had "
+                "before the decrypt."
+            )
+        return _unrestored_advice(self.path, written, failure)
+
+
+def _unrestored_advice(path: Path, written: Path, failure: str) -> str:
+    """The sentence for a failed decrypt of ``path`` that ``restore`` could not undo.
+
+    ``written`` is the file the bytes are in (``_written_file``), and ``failure`` says why
+    the write back failed. The file may hold decrypted plaintext, so it is marked
+    skip-worktree, and the sentence says whether that protection worked and how to
+    recover the file.
+    """
+    lead = (
+        f"envdrift could not restore {path} ({failure}), so it may now hold "
+        "decrypted plaintext values"
+    )
+    if _through_symlink(path):
+        lead += f" (through a symlink, they are in {_shown(written)})"
+    # The commands act on that file, in the repository the mark was set in.
+    git, name = _git_for_written_file(path)
+    if _git_skip_worktree(path):
+        # git checkout refuses a skip-worktree path, so lift the bit first.
+        return (
+            f"{lead}. It is marked skip-worktree, so a plain `git add .` won't stage it. "
+            f"To restore it, run `{git} update-index --no-skip-worktree {name}` and "
+            f"then `{git} checkout -- {name}`."
+        ) + _expansion_note(git, name)
+    # The advice depends on why the mark failed: git checkout can restore
+    # only a file git has a copy of.
+    reason = unprotected_reason(path)
+    word = _command_word(str(path))
+    if reason.startswith("untracked"):
+        return (
+            f"{lead}, and git does not track it, so a plain `git add .` WILL stage "
+            "it and git has no copy to restore. Re-encrypt it with "
+            f"`envdrift encrypt {word}` before you commit."
+        ) + _expansion_note(word)
+    if reason.startswith("outside a git repository"):
+        return (
+            f"{lead}. It is outside a git repository, so git cannot stage it or "
+            f"restore it: re-encrypt it with `envdrift encrypt {word}`."
+        ) + _expansion_note(word)
+    return (
+        f"{lead}, and it could not be marked skip-worktree: a plain `git add .` "
+        f"WILL stage it. Run `{git} checkout -- {name}` before you commit."
+    ) + _expansion_note(git, name)
+
+
+def _leftover_ciphertext(file_path: Path) -> str | None:
+    """Name the ciphertext format still in ``file_path``, or None when it has none.
+
+    SOPS ciphertext carries the ``ENC[AES256_GCM,`` marker, which never occurs in
+    dotenvx ciphertext (base64 after ``encrypted:``), so its presence tells the
+    two formats apart.
+    """
+    if not is_file_encrypted(file_path):
+        return None
+    content = file_path.read_text(encoding="utf-8", errors="replace")
+    return "SOPS" if _SOPS_CIPHERTEXT_PREFIX in content else "dotenvx"
+
+
+def _decrypt_in_place(dotenvx: DotenvxWrapper, file: Path) -> None:
+    """Decrypt ``file`` in place, leaving it as it was if the decrypt fails.
+
+    A value under another key makes dotenvx write the values it could decrypt
+    and exit 1; without the snapshot that plaintext stayed in the tracked file,
+    unprotected, because the caller raised before marking it skip-worktree
+    (#948). The error keeps dotenvx's reason, which names the value.
+
+    The exit code alone is not trusted either: on a SOPS-encrypted file dotenvx
+    finds nothing to decrypt, prints "no change" and exits 0, and it can exit 0
+    leaving its own ciphertext when the key is missing or invalid. The file is
+    read back, and if it still holds ciphertext it is put back as it was and
+    reported, so the caller neither counts it as decrypted nor marks it
+    skip-worktree (#963).
+
+    Any failure, not only a ``DotenvxError`` (dotenvx missing, the read-back
+    failing), is a ``PartialEncryptionError`` that says what became of the file,
+    so a secrets-only pull can report the files it decrypted before it.
+    """
+    try:
+        snapshot = DecryptSnapshot(file)
+    except OSError as e:
+        raise PartialEncryptionError.decrypt_failed(file, e, f"{file} was left as it was.") from e
+    try:
+        with snapshot:
+            dotenvx.decrypt(file)
+            # Inside the snapshot, so a read-back that fails restores the file too.
+            ciphertext = _leftover_ciphertext(file)
+    except Exception as e:
+        raise PartialEncryptionError.decrypt_failed(file, e, snapshot.note) from e
+    if ciphertext:
+        raise PartialEncryptionError.still_encrypted(file, ciphertext, snapshot.restore())
+
+
+def _holds_ciphertext(file: Path) -> bool:
+    """``is_file_encrypted``, with a file that cannot be read refused as a failed decrypt.
+
+    An unreadable secret file raised a bare ``PermissionError``: pull-partial
+    called it an "Unexpected error", ``envdrift pull`` crashed, and a
+    secrets-only pull lost the tally of the files it had decrypted before it.
+    """
+    try:
+        return is_file_encrypted(file)
+    except OSError as e:
+        raise PartialEncryptionError.decrypt_failed(file, e, f"{file} was left as it was.") from e
 
 
 def _encrypt_and_verify(dotenvx: DotenvxWrapper, file: Path) -> None:
@@ -662,7 +1076,7 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> bool:
         True if the file was successfully marked skip-worktree, False otherwise.
 
     Raises:
-        PartialEncryptionError: If decryption fails
+        PartialEncryptionError: If decryption fails. The file is left as it was.
     """
     secret_file = Path(env_config.secret_file)
 
@@ -670,16 +1084,12 @@ def decrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> bool:
         raise PartialEncryptionError.file_not_found(secret_file)
 
     # Check if already decrypted
-    if not is_file_encrypted(secret_file):
+    if not _holds_ciphertext(secret_file):
         # Already plaintext on disk — still protect it from accidental commit.
         return _git_skip_worktree(secret_file)
 
-    # Decrypt using dotenvx
-    dotenvx = DotenvxWrapper()
-    try:
-        dotenvx.decrypt(secret_file)
-    except DotenvxError as e:
-        raise PartialEncryptionError.decrypt_failed(secret_file, e) from e
+    # Decrypt using dotenvx; a failed decrypt leaves the file as it was (#948).
+    _decrypt_in_place(DotenvxWrapper(), secret_file)
 
     # Prevent accidental commit of the now-plaintext secret file.
     # git update-index --skip-worktree hides local changes from git add / git status
@@ -805,6 +1215,46 @@ def _is_pushable_secret_file(file: Path) -> bool:
     return file.is_file() and not _is_excluded_env_file(file.name)
 
 
+def dotenvx_key_files(env_config: PartialEncryptionEnvironmentConfig) -> list[Path]:
+    """Return the ``.env.keys`` files dotenvx writes for one environment (#961).
+
+    ``DotenvxWrapper`` passes ``-fk`` with the ``.env.keys`` next to the file it
+    encrypts, so the private key lands beside the secret file, not in the
+    working directory. Combine mode has one key file, next to ``secret_file``.
+    Secrets-only mode has one in ``secrets_dir`` and one in every folder its
+    ``pattern`` reaches (a recursive pattern reaches nested folders).
+    """
+    if not env_config.secrets_only:
+        secret_file = env_config.secret_file.strip()
+        return [Path(secret_file).parent / ".env.keys"] if secret_file else []
+    raw_dir = env_config.secrets_dir.strip()
+    if not raw_dir:
+        return []
+    keys: list[Path] = []
+    for folder in _secrets_only_key_folders(Path(raw_dir), env_config.pattern):
+        key_file = folder / ".env.keys"
+        if key_file not in keys:
+            keys.append(key_file)
+    return keys
+
+
+def _secrets_only_key_folders(secrets_dir: Path, pattern: str) -> list[Path]:
+    """``secrets_dir``, then the folder of every secret file ``pattern`` matches in it."""
+    if secrets_dir.exists() and not secrets_dir.is_dir():
+        # push and pull refuse it for this environment, so dotenvx writes no key
+        # under it; a path below a regular file made git crash the whole command.
+        return []
+    if not secrets_dir.is_dir():
+        return [secrets_dir]
+    try:
+        matched = sorted(secrets_dir.glob(pattern))
+    except (ValueError, NotImplementedError, OSError):
+        # Path.glob raises ValueError for an empty pattern and NotImplementedError
+        # for an absolute one; the push/pull step reports either for this environment.
+        matched = []
+    return [secrets_dir, *(file.parent for file in matched if _is_pushable_secret_file(file))]
+
+
 def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bool) -> bool:
     """Encrypt a single secrets-only file in place; return True if it was (re)encrypted.
 
@@ -841,7 +1291,7 @@ def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bo
     return True
 
 
-def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[str, int]:
+def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> SecretsOnlyPullResult:
     """
     Secrets-only pull: decrypt all matching files in secrets_dir in place.
 
@@ -855,11 +1305,15 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
         env_config: Environment configuration with secrets_only=True
 
     Returns:
-        Dict with counts: {"decrypted": N, "already_decrypted": M, "protected": P}
-        where ``protected`` is the number of files successfully marked skip-worktree.
+        ``{"decrypted": N, "already_decrypted": M, "protected": P, "unprotected": [...]}``.
+        ``protected`` counts the files this pull decrypted and marked skip-worktree,
+        and ``unprotected`` lists the ones it decrypted but could not mark. Files that
+        were plaintext already are still marked, but counted in neither (#998).
 
     Raises:
-        PartialEncryptionError: If the secrets_dir does not exist or decryption fails
+        PartialEncryptionError: If the secrets_dir does not exist.
+        SecretsOnlyPullError: If a file fails to decrypt. That file is left as it
+            was; the error carries the counts for the files handled before it.
     """
     secrets_dir = _resolve_secrets_dir(env_config)
 
@@ -867,39 +1321,61 @@ def pull_secrets_only(env_config: PartialEncryptionEnvironmentConfig) -> dict[st
     decrypted = 0
     already_decrypted = 0
     protected = 0
+    unprotected: list[Path] = []
     dotenvx = DotenvxWrapper()
 
     for file in files:
-        if not file.is_file():
-            continue
-        if _is_excluded_env_file(file.name):
-            # Never decrypt companion files (.example/.sample/.template) or the
-            # dotenvx key file (.keys), even if they match the glob pattern (#358).
-            continue
-        if not is_file_encrypted(file):
-            # Already plaintext on disk — still protect it from accidental commit.
-            if _git_skip_worktree(file):
-                protected += 1
-            already_decrypted += 1
-            continue
         try:
-            dotenvx.decrypt(file)
-            decrypted += 1
-        except DotenvxError as e:
-            raise PartialEncryptionError.decrypt_failed(file, e) from e
+            if not file.is_file():
+                continue
+            if _is_excluded_env_file(file.name):
+                # Never decrypt companion files (.example/.sample/.template) or the
+                # dotenvx key file (.keys), even if they match the glob pattern (#358).
+                continue
+            if not _holds_ciphertext(file):
+                # Already plaintext on disk — still protect it from accidental commit.
+                # This pull did not decrypt it, so it does not count as protected:
+                # counting it let the notice call an unprotected set protected (#998).
+                _git_skip_worktree(file)
+                already_decrypted += 1
+                continue
+            _decrypt_in_place(dotenvx, file)
+        except Exception as e:
+            # Whatever failed, the files decrypted before this one are plaintext
+            # now: report them instead of an environment that looks untouched (#948).
+            message = str(e)
+            if not isinstance(e, PartialEncryptionError):
+                message = f"Failed to decrypt {file}: {message}"
+            raise SecretsOnlyPullError(
+                message,
+                decrypted=decrypted,
+                already_decrypted=already_decrypted,
+                protected=protected,
+                unprotected=unprotected,
+            ) from e
+        decrypted += 1
         # Prevent accidental commit of the now-plaintext secret file until
         # push_secrets_only re-encrypts it and lifts the protection.
         if _git_skip_worktree(file):
             protected += 1
+        else:
+            unprotected.append(file)
 
-    return {"decrypted": decrypted, "already_decrypted": already_decrypted, "protected": protected}
+    return {
+        "decrypted": decrypted,
+        "already_decrypted": already_decrypted,
+        "protected": protected,
+        "unprotected": unprotected,
+    }
 
 
 class PullPartialResult(NamedTuple):
     """Outcome of a combine-mode pull for a single environment."""
 
     was_decrypted: bool  # True if the file was encrypted before this pull (i.e. got decrypted)
-    protected: bool  # True if the file is now marked skip-worktree
+    # True if the file is now marked skip-worktree. Callers count it only for a
+    # file this pull decrypted: one that was plaintext already proves nothing (#998).
+    protected: bool
 
 
 def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> PullPartialResult:
@@ -924,7 +1400,7 @@ def pull_partial_encryption(env_config: PartialEncryptionEnvironmentConfig) -> P
     if not secret_file.exists():
         raise PartialEncryptionError.file_not_found(secret_file)
 
-    was_encrypted = is_file_encrypted(secret_file)
+    was_encrypted = _holds_ciphertext(secret_file)
 
     # Decrypt secret file
     protected = decrypt_secret_file(env_config)

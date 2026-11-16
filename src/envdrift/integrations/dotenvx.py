@@ -210,6 +210,22 @@ def _sibling_env_keys_file(env_file: Path, env_keys_file: Path | str | None) -> 
     return env_keys_file
 
 
+# The status line dotenvx ends a run with: "◇ decrypted <file> (...) via .env.keys"
+# (v2; "◈ encrypted ..." for an encrypt, "✔ decrypted" in v1). It is printed even
+# when the run failed on a value.
+_STATUS_LINE_RE = re.compile(r"^\s*[\u2714\u25c7\u25c8]\s+(?:de|en)crypted\b")
+
+
+def _without_status_lines(output: str) -> str:
+    """dotenvx's ``output`` for an error message, without its "decrypted" status line.
+
+    A decrypt that fails on one value still prints ``◇ decrypted <file>``. In the
+    error it read as a success, right before "<file> was left as it was".
+    """
+    lines = (line for line in output.splitlines() if not _STATUS_LINE_RE.match(line))
+    return "\n".join(lines).strip()
+
+
 # A public-key assignment at the start of an env-file line, as dotenvx parses
 # one: optional leading whitespace or BOM, optional ``export``, then the name.
 _PUBLIC_KEY_NAME_LINE_RE = re.compile(
@@ -1291,11 +1307,11 @@ class DotenvxWrapper:
         combined_output = (result.stdout or "") + (result.stderr or "")
         for pattern in self.ENCRYPT_ERROR_PATTERNS:
             if pattern.lower() in combined_output.lower():
-                clean_output = self._clean_output(combined_output).strip()
+                clean_output = _without_status_lines(self._clean_output(combined_output))
                 raise DotenvxError(f"dotenvx {action} failed: {clean_output}")
 
         if result.returncode != 0:
-            clean_stderr = self._clean_output(result.stderr or "").strip()
+            clean_stderr = _without_status_lines(self._clean_output(result.stderr or ""))
             raise DotenvxError(f"dotenvx command failed (exit {result.returncode}): {clean_stderr}")
 
     def encrypt(

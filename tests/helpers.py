@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import re
+import stat
+import sys
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+
+import pytest
 
 from envdrift.encryption.base import EncryptionResult
 
@@ -152,3 +158,111 @@ def write_checksums_for(
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     checksums_path.write_text(f"{digest}  {name}\n", encoding="utf-8")
     return checksums_path.resolve().as_uri()
+
+
+def native_path(posix: str) -> str:
+    """``posix``, a relative path with ``/`` separators, as envdrift prints it here.
+
+    envdrift shows a path the way this platform writes it (``secrets\\.env.db`` on
+    Windows), while git always prints ``/``, so only assertions on envdrift's own output
+    need this.
+    """
+    return str(Path(posix))
+
+
+@contextlib.contextmanager
+def unreadable_file(path: Path) -> Iterator[None]:
+    """Make the file ``path`` really unreadable to this process while the block runs.
+
+    ``chmod 000`` is enough for a normal user. root reads any file whatever its mode,
+    so as root the block runs with the effective uid of ``nobody``, and ``path`` must
+    be in a directory ``nobody`` can search (the ``searchable_tmp_path`` fixture).
+    Skips where neither works: on Windows, which has no such mode bits, or as root
+    without a ``nobody`` account.
+    """
+    if sys.platform == "win32":
+        pytest.skip("Windows has no POSIX mode bits to make a file unreadable")
+    mode = stat.S_IMODE(path.stat().st_mode)
+    path.chmod(0)
+    try:
+        with _as_nobody_if_root():
+            path.stat()  # still reachable: only reading it is refused
+            try:
+                path.open("rb").close()
+            except PermissionError:
+                pass
+            else:
+                pytest.skip("this process reads a chmod 000 file (CAP_DAC_OVERRIDE?)")
+            yield
+    finally:
+        path.chmod(mode)
+
+
+@contextlib.contextmanager
+def _as_nobody_if_root() -> Iterator[None]:
+    """Run the block with the effective uid of ``nobody`` when this process is root."""
+    if sys.platform == "win32" or os.geteuid() != 0:
+        yield
+        return
+    import pwd
+
+    try:
+        nobody = pwd.getpwnam("nobody").pw_uid
+    except KeyError:
+        pytest.skip("running as root, with no 'nobody' account to drop privileges to")
+    try:
+        os.seteuid(nobody)
+    except OSError as exc:  # a container without CAP_SETUID, for one
+        pytest.skip(f"running as root, but cannot drop privileges to 'nobody': {exc}")
+    try:
+        yield
+    finally:
+        os.seteuid(0)
+
+
+@contextlib.contextmanager
+def file_size_limit(size: int) -> Iterator[None]:
+    """Make every write past ``size`` bytes of a file fail, for real (``RLIMIT_FSIZE``).
+
+    The kernel refuses the write with ``EFBIG``, as a full disk refuses one with
+    ``ENOSPC``; with ``SIGXFSZ`` ignored the process gets the error instead of being
+    killed. Skips where the limit is not available (Windows) or cannot be set that low.
+    """
+    resource = pytest.importorskip("resource", reason="RLIMIT_FSIZE is POSIX only")
+    import signal
+
+    if not hasattr(signal, "SIGXFSZ"):
+        pytest.skip("no SIGXFSZ on this platform")
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    if hard != resource.RLIM_INFINITY and hard < size:
+        pytest.skip(f"the hard file size limit ({hard}) is below {size} bytes")
+    previous = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    try:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (size, hard))
+        try:
+            yield
+        finally:
+            resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGXFSZ, previous)
+
+
+def honest_decrypt_in_place(path: Path) -> None:
+    """Stand-in for a SUCCESSFUL dotenvx decrypt: ciphertext values -> plaintext.
+
+    #963 added a post-decrypt read-back (``is_file_encrypted``) to the pull
+    seam: a decrypt that exits 0 but leaves ciphertext (a SOPS file dotenvx
+    cannot read, a missing key) is now a failure. A bare ``MagicMock`` no-op
+    "decrypt" leaves the ciphertext in place and so correctly trips it. Mocks
+    that simulate a successful decrypt must therefore actually decrypt the file
+    ("make the mock honest"); only the dotenvx subprocess seam is faked.
+    """
+    lines = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        key, sep, value = raw.partition("=")
+        if sep and value.strip().strip('"').strip("'").startswith("encrypted:"):
+            lines.append(f"{key}=decrypted-stub")
+        else:
+            lines.append(raw)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")

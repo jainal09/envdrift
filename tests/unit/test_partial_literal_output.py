@@ -86,7 +86,9 @@ def test_pull_partial_names_the_environment_and_files_as_written(project: Path) 
 
     assert result.exit_code == 0, result.output
     out = _flat(result.output)
-    assert "Updated .gitignore: cfg[/x]/.env.prod, .env.keys" in out
+    # The entries as written to .gitignore: escaped so `[` is not a glob, and the key
+    # file dotenvx writes next to the secret file (#961).
+    assert "Updated .gitignore: cfg\\[/x]/.env.prod, cfg\\[/x]/.env.keys" in out
     assert "→ p[/x]" in out
     assert "= cfg[/x]/.env.prod.secret (already decrypted)" in out
 
