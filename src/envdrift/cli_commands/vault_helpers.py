@@ -791,13 +791,17 @@ def _undo_header_rewrite(target: Path, before: bytes | None) -> str:
 
     Returns what to add to the error: nothing, unless the write failed and the
     rewritten header (only the header: the backend already put back every
-    value) is still there.
+    value) is still there. The bytes go back whole or not at all (a temp file
+    renamed over the file a write to ``target`` lands in): written in place, a
+    write that failed part way left the file cut short.
     """
+    from envdrift.sync.operations import atomic_write
+
     if before is None:
         return ""
     try:
         if target.read_bytes() != before:
-            target.write_bytes(before)
+            atomic_write(target.resolve(), before)
     except OSError as e:
         return f"\nenvdrift could not put back the dotenvx header it rewrote in {target}: {e}"
     return ""

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import typer
 
-from tests.helpers import unreadable_file
+from tests.helpers import file_size_limit, unreadable_file
 
 
 def _undo(target: Path, before: bytes | None) -> str:
@@ -38,6 +38,24 @@ class TestUndoHeaderRewrite:
 
         assert _undo(target, b"# custom.env\r\nK=v\r\n") == ""
         assert target.read_bytes() == b"# custom.env\r\nK=v\r\n"  # CRLF too
+
+    def test_a_put_back_that_fails_part_way_leaves_the_file_as_it_was(self, tmp_path: Path) -> None:
+        """The read succeeds and the write fails (a full disk, a file size limit).
+
+        Written in place, the file was truncated first and then cut short at the limit,
+        so it held neither the rewritten header nor its own bytes.
+        """
+        target = tmp_path / "custom.env"
+        rewritten = b"# .env.production\n" + b"API_TOKEN=encrypted:QUJD\n" * 100
+        target.write_bytes(rewritten)
+        before = b"# custom.env\n" + b"API_TOKEN=encrypted:QUJD\n" * 4000
+
+        with file_size_limit(len(before) // 2):
+            note = _undo(target, before)
+
+        assert note.startswith("\nenvdrift could not put back the dotenvx header it rewrote in ")
+        assert target.read_bytes() == rewritten
+        assert [p.name for p in tmp_path.iterdir()] == ["custom.env"]
 
     def test_a_put_back_that_fails_is_reported(self, tmp_path: Path) -> None:
         target = tmp_path / "custom.env"
