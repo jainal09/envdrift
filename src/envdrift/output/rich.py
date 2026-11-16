@@ -76,8 +76,12 @@ def print_validation_result(
     console.print()
     console.print(
         Panel(
-            f"[bold]Validating:[/bold] {escape(str(env_path))}\n"
-            f"[bold]Schema:[/bold] {escape(schema.module_path)}:{escape(schema.class_name)}",
+            styled_text(
+                "[bold]Validating:[/bold] {}\n[bold]Schema:[/bold] {}:{}",
+                env_path,
+                schema.module_path,
+                schema.class_name,
+            ),
             title="envdrift validate",
         )
     )
@@ -96,14 +100,14 @@ def print_validation_result(
         for var in sorted(result.missing_required):
             field_meta = schema.fields.get(var)
             desc = f" - {field_meta.description}" if field_meta and field_meta.description else ""
-            console.print(f"  [red]*[/red] {escape(var + desc)}")
+            console.print(styled_text("  [red]*[/red] {}", var + desc))
         console.print()
 
     # Extra variables
     if result.extra_vars:
         console.print("[bold yellow]EXTRA VARIABLES (not in schema):[/bold yellow]")
         for var in sorted(result.extra_vars):
-            console.print(f"  [yellow]*[/yellow] {escape(var)}")
+            console.print(styled_text("  [yellow]*[/yellow] {}", var))
         console.print()
 
     # Unencrypted secrets (warning, not error)
@@ -111,7 +115,7 @@ def print_validation_result(
         console.print("[bold yellow]UNENCRYPTED SECRETS (warning):[/bold yellow]")
         for var in sorted(result.unencrypted_secrets):
             console.print(
-                f"  [yellow]*[/yellow] {escape(var)} (marked sensitive but not encrypted)"
+                styled_text("  [yellow]*[/yellow] {} (marked sensitive but not encrypted)", var)
             )
         console.print("[dim]  Run 'envdrift encrypt --check' for strict enforcement[/dim]")
         console.print()
@@ -121,14 +125,14 @@ def print_validation_result(
         console.print("[bold red]TYPE ERRORS:[/bold red]")
         for var, error in sorted(result.type_errors.items()):
             label = "Model validation" if var == MODEL_ERROR_KEY else var
-            console.print(f"  [red]*[/red] {escape(label)}: {escape(error)}")
+            console.print(styled_text("  [red]*[/red] {}: {}", label, error))
         console.print()
 
     # Warnings
     if result.warnings:
         console.print("[bold yellow]WARNINGS:[/bold yellow]")
         for warning in result.warnings:
-            console.print(f"  [yellow]*[/yellow] {escape(warning)}")
+            console.print(styled_text("  [yellow]*[/yellow] {}", warning))
         console.print()
 
     # Missing optional (verbose only)
@@ -140,7 +144,7 @@ def print_validation_result(
                 default = f" (default: {field_meta.default})"
             else:
                 default = ""
-            console.print(f"  [dim]*[/dim] {escape(var + default)}")
+            console.print(styled_text("  [dim]*[/dim] {}", var + default))
         console.print()
 
     # Summary (show if there are any issues)

@@ -63,7 +63,16 @@ def test_validation_preserves_bracketed_values_and_pydantic_patterns(
 
 
 @pytest.mark.parametrize("section", ["error", "warning"])
-@pytest.mark.parametrize("message", ["Unexpected '[/api, /health]'", "Pattern '^[a-z]+$'"])
+# rich.markup.escape() dropped the backslash in front of `[2024]` and doubled a trailing one.
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Unexpected '[/api, /health]'",
+        "Pattern '^[a-z]+$'",
+        "Path 'C:\\[2024]\\x'",
+        "ends with \\",
+    ],
+)
 def test_validation_diagnostics_render_literal_text(
     monkeypatch: pytest.MonkeyPatch, section: str, message: str
 ) -> None:
@@ -78,10 +87,10 @@ def test_validation_diagnostics_render_literal_text(
 
     rich_output.print_validation_result(result, Path(".env"), schema)
 
-    rendered = " ".join(output.getvalue().split())
-    assert message in rendered
-    if section == "error":
-        assert "FIELD[tag]" in rendered
+    # The whole line, so a doubled trailing backslash cannot pass as a substring.
+    lines = [line.strip() for line in output.getvalue().splitlines()]
+    expected = f"* FIELD[tag]: {message}" if section == "error" else f"* {message}"
+    assert expected in lines, lines
 
 
 def test_validation_metadata_is_literal_in_every_report_section(

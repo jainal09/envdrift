@@ -65,7 +65,7 @@ error documents on stdout rather than replacing them with human diagnostics.
 
 The `[OK]`, `[ERROR]` and `[WARN]` messages, and the human output of `diff`,
 `encrypt`, `decrypt`, `guard`, `hook`, `sync`, `pull`, `lock`, `push`,
-`pull-partial`, `vault-push`, `vault-pull`, `agent` and `install`, show paths,
+`pull-partial`, `validate`, `vault-push`, `vault-pull`, `agent` and `install`, show paths,
 variable and secret names, values and error messages exactly as they are: square
 brackets and backslashes in them are never read as terminal styling, so
 `cfg[prod]/.env` or `C:\[2024]\.env` is printed as written. No command turns a
