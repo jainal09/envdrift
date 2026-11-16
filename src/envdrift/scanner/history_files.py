@@ -122,9 +122,9 @@ def _lines(text: str) -> list[str]:
 
     A history finding names the line its commit holds it on, so a lone ``\\r`` stays in its
     line here, where ``split_lines`` would break it. The ``\\r`` of a ``\\r\\n`` is no part of
-    the line it ends. As with ``split_lines``, a line break at the end starts no empty line.
+    the line it ends; a final ``\\r`` with no ``\\n`` after it ends no line, and stays. As with
+    ``split_lines``, a line break at the end starts no empty line.
     """
-    lines = text.split("\n")
-    if lines[-1] == "":
-        lines.pop()
-    return [line.removesuffix("\r") for line in lines]
+    *ended, last = text.split("\n")
+    lines = [line.removesuffix("\r") for line in ended]
+    return [*lines, last] if last else lines

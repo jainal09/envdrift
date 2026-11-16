@@ -332,6 +332,8 @@ def test_the_lines_of_a_commit_are_counted_at_lf_only():
     assert history_files._lines("A=1\r\nB=2\rC=3\nD=4\n") == ["A=1", "B=2\rC=3", "D=4"]
     assert history_files._lines("A=1") == ["A=1"]
     assert history_files._lines("") == []
+    # A final \r with no \n after it ends no line: it stays, as git keeps it.
+    assert history_files._lines("A=1\r\nB=2\r") == ["A=1", "B=2\r"]
 
 
 def test_a_value_encrypted_in_a_crlf_commit_is_still_dropped(repo: Path):
