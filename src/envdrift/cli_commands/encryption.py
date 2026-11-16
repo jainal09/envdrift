@@ -366,6 +366,9 @@ def _encrypt_one_file(
     result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
     if not result.success:
         print_error(result.message)
+        # dotenvx may have written a new private key before the outcome check
+        # failed: gitignore it before exiting, or `git add .` stages it (#950).
+        _protect_private_keys(env_file)
         raise typer.Exit(code=1)
     if result.changed:
         print_success(f"Encrypted {env_file} using {encryption_backend.name}")

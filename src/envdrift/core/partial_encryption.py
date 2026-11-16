@@ -299,13 +299,19 @@ class SecretsOnlyPullResult(TypedDict):
     unprotected: list[Path]
 
 
+# The quote styles dotenvx reads and keeps around the ciphertext it writes. dotenv and
+# SOPS emit ``"`` and ``'``; dotenvx also takes a backtick-quoted value as quoted and
+# writes ``KEY=`encrypted:...` `` (#950).
+_VALUE_QUOTES = ('"', "'", "`")
+
+
 def _is_quote_wrapped(v: str) -> bool:
     """Return True if ``v`` is wrapped in a single matching pair of quotes.
 
-    Recognises both ``"..."`` and ``'...'`` (the two quote styles dotenv/SOPS
-    emit). A bare ``"`` or unbalanced quotes are not wrapped.
+    Recognises ``"..."``, ``'...'`` and ``` `...` ``` (``_VALUE_QUOTES``). A bare
+    quote or unbalanced quotes are not wrapped.
     """
-    return len(v) >= 2 and v[0] in ('"', "'") and v[-1] == v[0]
+    return len(v) >= 2 and v[0] in _VALUE_QUOTES and v[-1] == v[0]
 
 
 def _strip_inline_comment_after_quoted_value(value: str) -> str:
@@ -315,7 +321,7 @@ def _strip_inline_comment_after_quoted_value(value: str) -> str:
     ``#`` comment follows the closing quote. Keeping any other suffix makes the
     whole value non-quoted, so malformed assignments remain fail-closed.
     """
-    if not value or value[0] not in ('"', "'"):
+    if not value or value[0] not in _VALUE_QUOTES:
         return value
 
     quote = value[0]
@@ -341,10 +347,11 @@ def _unquote_value(value: str) -> str:
     """Strip surrounding whitespace and a single layer of matching quotes.
 
     SOPS emits ``KEY="ENC[AES256_GCM,...]"`` (quoted) while dotenvx emits an
-    unquoted ``KEY=encrypted:...``; quoted empty placeholders appear as
-    ``KEY=""`` / ``KEY=''``. Callers compare the returned bare value against the
-    ciphertext prefixes or test it for emptiness, so both quote styles and
-    surrounding whitespace must be removed first.
+    unquoted ``KEY=encrypted:...``, or keeps the quotes the value had, backticks
+    included; quoted empty placeholders appear as ``KEY=""`` / ``KEY=''``.
+    Callers compare the returned bare value against the ciphertext prefixes or
+    test it for emptiness, so the quotes and surrounding whitespace must be
+    removed first.
     """
     v = value.strip()
     v = _strip_inline_comment_after_quoted_value(v)

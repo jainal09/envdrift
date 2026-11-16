@@ -30,7 +30,8 @@ With the **dotenvx** backend, if the target file has no encrypted values
 values.`) instead of claiming a decryption happened. The file is left
 byte-for-byte untouched — dotenvx is not invoked at all — so a plaintext file
 (including one with CRLF line endings) or a non-`.env` binary file is never
-silently rewritten or corrupted.
+silently rewritten or corrupted. Ciphertext counts in any quote style dotenvx
+writes it in, backticks included (`` API_KEY=`encrypted:...` ``).
 
 ### Refuses the key store and companion files
 

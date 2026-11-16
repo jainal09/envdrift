@@ -22,6 +22,20 @@ class EncryptionStatus(Enum):
     EMPTY = "empty"  # No value (KEY= or KEY="")
 
 
+def strip_backtick_quotes(value: str) -> str:
+    """Return ``value`` without one surrounding pair of backticks, as dotenvx reads it.
+
+    dotenvx takes ``KEY=`value` `` as a quoted value and keeps the backticks around
+    the ciphertext it writes (``KEY=`encrypted:...` ``). python-dotenv, and so
+    ``EnvParser``, keeps them as part of the value, which is what a
+    pydantic-settings app loads. Checks about encryption look inside them, as
+    dotenvx does (#950, #964).
+    """
+    if len(value) >= 2 and value[0] == "`" and value[-1] == "`":
+        return value[1:-1]
+    return value
+
+
 @dataclass
 class EnvVar:
     """Parsed environment variable."""
@@ -895,8 +909,9 @@ class EnvParser:
         if not value:
             return EncryptionStatus.EMPTY, None
 
-        # Check for dotenvx encrypted format
-        if self.DOTENVX_ENCRYPTED_PATTERN.match(value):
+        # Check for dotenvx encrypted format, inside the backticks dotenvx keeps
+        # around a backtick-quoted value's ciphertext (#950)
+        if self.DOTENVX_ENCRYPTED_PATTERN.match(strip_backtick_quotes(value)):
             return EncryptionStatus.ENCRYPTED, "dotenvx"
 
         # Check for SOPS encrypted format

@@ -55,6 +55,13 @@ exit code (dotenvx can exit `0` without encrypting):
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails
   loudly instead of printing `[OK]`.
+- **Reads ciphertext in every quote style dotenvx keeps.** dotenvx keeps a value's
+  quotes around its ciphertext, backticks included (`` API_KEY=`encrypted:...` ``), so
+  the outcome check, `encrypt --check` and `decrypt` read ciphertext inside `"`, `'` or
+  backticks alike, instead of calling a backtick-quoted encryption a key problem.
+- **Gitignores the key file on failure too.** `.env.keys` is added to `.gitignore`
+  after a run that fails its outcome check as well, since dotenvx may already have
+  written a new private key to it.
 - **Encrypts with the key the folder already holds.** dotenvx 2.x creates a brand-new
   key whenever a file has no `DOTENV_PUBLIC_KEY` header, even when `.env.keys` already
   holds the file's key, and the file then needs a key only this machine has. So before
