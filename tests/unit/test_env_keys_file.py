@@ -160,6 +160,26 @@ def test_write_key_does_not_replace_a_key_written_while_it_writes(
     assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]
 
 
+def test_write_key_does_not_recreate_a_keys_file_deleted_while_it_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The keys file is deleted while envdrift writes its new copy: it is not put back."""
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=old\n", encoding="utf-8")
+    real_fsync = os.fsync
+
+    def other_writer_deletes(fd: int) -> None:
+        real_fsync(fd)
+        keys_path.unlink()
+
+    monkeypatch.setattr(os, "fsync", other_writer_deletes)
+
+    with pytest.raises(ValueError, match="changed while envdrift was working on it"):
+        EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=["old"])
+
+    assert list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
 def test_write_key_keeps_the_mode_of_the_file_it_rewrites(tmp_path: Path) -> None:
     keys_path = tmp_path / ".env.keys"
@@ -245,6 +265,36 @@ def test_write_key_keeps_a_key_written_into_its_new_file_without_hard_links(
 
     assert keys_path.read_text(encoding="utf-8") == theirs
     assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]
+
+
+def test_write_key_closes_its_new_file_when_checking_it_fails_without_hard_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check that the new file is still empty raises: the file is not left open."""
+    keys_path = tmp_path / ".env.keys"
+    real_open, real_fstat = os.open, os.fstat
+    opened: list[int] = []
+
+    def tracking_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if Path(path) == keys_path:
+            opened.append(fd)
+        return fd
+
+    def failing_fstat(fd: int):
+        if fd in opened:
+            raise OSError(errno.EIO, "Input/output error")
+        return real_fstat(fd)
+
+    monkeypatch.setattr(os, "link", _no_hard_links)
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "fstat", failing_fstat)
+
+    with pytest.raises(OSError, match="Input/output error"):
+        EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=[])
+
+    with pytest.raises(OSError):
+        real_fstat(opened[0])  # closed by write_key
 
 
 def test_write_key_leaves_no_part_of_a_key_it_failed_to_write_without_hard_links(

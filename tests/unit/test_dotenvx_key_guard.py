@@ -24,6 +24,7 @@ from envdrift.integrations.dotenvx import (
     normalize_dotenvx_metadata,
 )
 from envdrift.integrations.dotenvx_keys import public_key_values
+from envdrift.sync.operations import EnvKeysFile
 from tests.helpers import DOTENVX_KEY_PAIRS
 
 K1, PUB1 = DOTENVX_KEY_PAIRS[0]
@@ -174,25 +175,50 @@ def test_a_restore_that_cannot_write_says_so(tmp_path: Path):
         wrapper.encrypt(env_file)
 
 
+def _replace_key_and_env_file(env: Path, keys: Path) -> None:
+    """A dotenvx run that replaces the held key, and an env file nothing can write back."""
+    keys.write_text(f"{NAME}={K2}\n", encoding="utf-8")
+    env.unlink()
+    env.mkdir()
+
+
 def test_an_env_file_that_cannot_be_put_back_does_not_keep_the_keys_file_from_it(
     tmp_path: Path,
 ):
-    """dotenvx replaced the held key: it is put back although the env file cannot be."""
+    """dotenvx replaced the held key: it is put back although the env file cannot be.
+
+    The env file may now hold values encrypted with the key dotenvx wrote, so the
+    keys file dotenvx wrote is kept in a backup first: no key is deleted.
+    """
     env_file, keys_file = _setup(tmp_path, keys=f"{NAME}={K1}\n")
-
-    def replace_key_and_env_file(env: Path, keys: Path) -> None:
-        keys.write_text(f"{NAME}={K2}\n", encoding="utf-8")
-        env.unlink()
-        env.mkdir()
-
-    wrapper, _ = _wrapper(replace_key_and_env_file)
+    wrapper, _ = _wrapper(_replace_key_and_env_file)
 
     with pytest.raises(DotenvxError, match="Could not put") as excinfo:
         wrapper.encrypt(env_file)
 
     assert keys_file.read_text(encoding="utf-8") == f"{NAME}={K1}\n"
+    backups = sorted(tmp_path.glob(".env.keys.backup.*"))
+    assert [backup.read_text(encoding="utf-8") for backup in backups] == [f"{NAME}={K2}\n"]
     assert str(env_file) in str(excinfo.value)
-    assert str(keys_file) not in str(excinfo.value)
+    assert str(backups[0]) in str(excinfo.value)
+
+
+def test_a_keys_file_that_cannot_be_backed_up_is_left_as_dotenvx_wrote_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """With no backup, putting the keys file back could delete the key the env file needs."""
+    env_file, keys_file = _setup(tmp_path, keys=f"{NAME}={K1}\n")
+
+    def no_backup(self: EnvKeysFile) -> Path:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(EnvKeysFile, "create_backup", no_backup)
+    wrapper, _ = _wrapper(_replace_key_and_env_file)
+
+    with pytest.raises(DotenvxError, match="left as dotenvx wrote it"):
+        wrapper.encrypt(env_file)
+
+    assert keys_file.read_text(encoding="utf-8") == f"{NAME}={K2}\n"
 
 
 def test_a_file_that_cannot_be_written_is_a_clean_error(tmp_path: Path, monkeypatch):

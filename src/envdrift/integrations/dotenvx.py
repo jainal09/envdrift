@@ -591,26 +591,42 @@ class _EncryptSnapshot:
         """Put both files back exactly as they were (a created keys file goes).
 
         Each file is put back on its own, so one that cannot be put back does
-        not keep the other from it: the keys file can hold the only copy of a key.
+        not keep the other from it: the keys file can hold the only copy of a
+        key. An env file that cannot be put back may hold values dotenvx
+        encrypted with a key it wrote to the keys file. That keys file is then
+        saved to a gitignored backup before it is put back, or left as dotenvx
+        wrote it when no backup can be made. No key is deleted either way.
 
         Raises:
             DotenvxError: A file could not be put back; the message says which.
         """
-        failures: list[tuple[Path, OSError]] = []
-        for path, put_back in (
-            (self.env_file, self._put_back_env_file),
-            (self.keys_file, self._put_back_keys_file),
-        ):
-            try:
-                put_back()
-            except OSError as exc:
-                failures.append((path, exc))
+        failures: list[str] = []
+        try:
+            self._put_back_env_file()
+        except OSError as exc:
+            failures.append(f"{self.env_file} ({exc})")
+        try:
+            if failures:
+                failures.extend(self._save_keys_dotenvx_wrote())
+            self._put_back_keys_file()
+        except OSError as exc:
+            failures.append(f"{self.keys_file} is left as dotenvx wrote it ({exc})")
         if failures:
-            names = " and ".join(str(path) for path, _ in failures)
-            reasons = "; ".join(str(exc) for _, exc in failures)
             raise DotenvxError(
-                f"Could not put {names} back after a failed encryption: {reasons}"
-            ) from failures[0][1]
+                f"Could not put everything back after a failed encryption: {'; '.join(failures)}"
+            )
+
+    def _save_keys_dotenvx_wrote(self) -> list[str]:
+        """Back up the keys file when dotenvx changed it, and say where it went."""
+        if _read_bytes_or_none(self.keys_file) in (None, self.keys_bytes):
+            return []
+        from envdrift.sync.operations import EnvKeysFile
+
+        backup = EnvKeysFile(self.keys_file).create_backup()
+        return [
+            f"the keys file dotenvx wrote, whose key {self.env_file.name} may now need, "
+            f"is saved in {backup}"
+        ]
 
     def _put_back_env_file(self) -> None:
         if _read_bytes_or_none(self.env_file) != self.env_bytes:

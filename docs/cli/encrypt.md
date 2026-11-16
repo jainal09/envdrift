@@ -75,6 +75,9 @@ exit code (dotenvx can exit `0` without encrypting):
   whose private key was not saved, both files are put back byte for byte (line endings
   included) and the command fails instead of printing `[OK]`. Each file is put back on its
   own: when one cannot be, the other still is, and the error names the one that could not.
+  An env file that cannot be put back may hold values encrypted with a key dotenvx wrote, so
+  the keys file dotenvx wrote is first saved as a gitignored `.env.keys.backup.<timestamp>`.
+  If no backup can be made, the keys file is left as dotenvx wrote it: no key is deleted.
 - **Keeps a renamed file's header.** A header block under another name is removed only
   when the file's own header is also there. On its own it still holds the public key the
   file's values were encrypted with, so `.env.staging` renamed to `.env.production` keeps

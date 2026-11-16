@@ -132,36 +132,48 @@ class EnvKeysFile:
         """
         self.require_readable_value(key_name, value)
         if self.path.exists():
-            # UTF-8 like dotenvx itself, regardless of the platform locale (#474).
-            raw = self.path.read_bytes()
-            content = raw.decode("utf-8")
-            self._require_unchanged(key_name, content, expected)
-            new_lines, key_found = _rewrite_key_lines(content.splitlines(), key_name, value)
-
-            if not key_found:
-                # Add environment comment if not present
-                env_comment = f"# .env.{environment}"
-                if env_comment not in content:
-                    new_lines.append(env_comment)
-                new_lines.append(f"{key_name}={value}")
-
-            new_content = "\n".join(new_lines)
-            if not new_content.endswith("\n"):
-                new_content += "\n"
-
-            self._require_only_value(key_name, value, content, new_content)
-            if not replace_if_unchanged(self.path, raw, new_content):
-                raise self._changed_error(key_name)
+            self._rewrite_key(key_name, value, environment, expected)
         else:
-            self._require_unchanged(key_name, "", expected)
-            # Create new file with header. dotenvx leaves a blank line between
-            # the header block and the first "# .env.<environment>" comment —
-            # reproduce its layout byte-for-byte (#474).
-            content = f"{DOTENVX_HEADER}\n\n# .env.{environment}\n{key_name}={value}\n"
-            try:
-                create_new_file(self.path, content)
-            except FileExistsError:
-                raise self._changed_error(key_name) from None
+            self._create_with_key(key_name, value, environment, expected)
+
+    def _rewrite_key(
+        self, key_name: str, value: str, environment: str, expected: list[str] | None
+    ) -> None:
+        """:meth:`write_key` for a keys file that is there: rewrite its ``key_name``."""
+        # UTF-8 like dotenvx itself, regardless of the platform locale (#474).
+        raw = self.path.read_bytes()
+        content = raw.decode("utf-8")
+        self._require_unchanged(key_name, content, expected)
+        new_lines, key_found = _rewrite_key_lines(content.splitlines(), key_name, value)
+
+        if not key_found:
+            # Add environment comment if not present
+            env_comment = f"# .env.{environment}"
+            if env_comment not in content:
+                new_lines.append(env_comment)
+            new_lines.append(f"{key_name}={value}")
+
+        new_content = "\n".join(new_lines)
+        if not new_content.endswith("\n"):
+            new_content += "\n"
+
+        self._require_only_value(key_name, value, content, new_content)
+        if not replace_if_unchanged(self.path, raw, new_content):
+            raise self._changed_error(key_name)
+
+    def _create_with_key(
+        self, key_name: str, value: str, environment: str, expected: list[str] | None
+    ) -> None:
+        """:meth:`write_key` for a keys file that is not there yet: create it."""
+        self._require_unchanged(key_name, "", expected)
+        # Create new file with header. dotenvx leaves a blank line between
+        # the header block and the first "# .env.<environment>" comment —
+        # reproduce its layout byte-for-byte (#474).
+        content = f"{DOTENVX_HEADER}\n\n# .env.{environment}\n{key_name}={value}\n"
+        try:
+            create_new_file(self.path, content)
+        except FileExistsError:
+            raise self._changed_error(key_name) from None
 
     def _require_unchanged(self, key_name: str, content: str, expected: list[str] | None) -> None:
         """Refuse when ``content`` no longer holds the ``expected`` values of ``key_name``.
@@ -443,9 +455,13 @@ def _write_new_file(path: Path, data: bytes, permissions: int) -> None:
     """
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     fd = os.open(path, flags, permissions)
-    if os.fstat(fd).st_size:
+    try:
+        if os.fstat(fd).st_size:
+            raise FileExistsError(f"{path} was written by another writer as envdrift created it")
+    except BaseException:
+        # What is there may be the other writer's: close the file, leave it.
         os.close(fd)
-        raise FileExistsError(f"{path} was written by another writer as envdrift created it")
+        raise
     try:
         _write_fd(fd, data, permissions)
     except BaseException:
