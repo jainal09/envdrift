@@ -515,3 +515,54 @@ def test_a_windows_command_word_is_quoted_unless_no_shell_reads_it(text: str, wo
     from envdrift.core.partial_encryption import _windows_word
 
     assert _windows_word(text) == (text if word is None else word)
+
+
+@pytest.mark.parametrize(
+    ("name", "warned"),
+    [
+        ("a%HOMEPATH%.env", True),
+        ("a!x!.env", True),
+        ("a$HOME.env", True),
+        ("a`b.env", True),
+        ("a\u201cb\u201d.env", True),
+        ("prod&secrets.env", False),
+        ("prod secrets.env", False),
+    ],
+)
+def test_a_windows_word_that_a_shell_still_changes_comes_with_a_warning(name: str, warned: bool):
+    """Double quotes keep ``&`` in one word, but not ``%NAME%`` from cmd.exe or ``$NAME`` from
+    PowerShell, and no quoting keeps them from both.
+
+    The SOPS advice's mark then named another file, and nothing said so: the decrypt after
+    it left plaintext that `git add .` staged. POSIX single quotes keep every character.
+    """
+    import shlex
+
+    from envdrift.core.partial_encryption import _expansion_note, _windows_word
+
+    note = _expansion_note(_windows_word(name), windows=True)
+    assert ("can change even in double quotes" in note) is warned, note
+    assert _expansion_note(shlex.quote(name), windows=False) == ""
+
+
+def test_the_recovery_advice_warns_about_a_name_a_windows_shell_changes(monkeypatch, tmp_path):
+    """Both kinds of recovery advice carry the warning when a command names such a file."""
+    import functools
+
+    from envdrift.core import partial_encryption
+
+    monkeypatch.setattr(
+        partial_encryption,
+        "_expansion_note",
+        functools.partial(partial_encryption._expansion_note, windows=True),
+    )
+    error = partial_encryption.PartialEncryptionError
+
+    sops_advice = " ".join(str(error.still_encrypted(Path("a$HOME.env"), "SOPS", "")).split())
+    assert "can change even in double quotes" in sops_advice, sops_advice
+    plain_advice = " ".join(str(error.still_encrypted(Path("prod.env"), "SOPS", "")).split())
+    assert "double quotes" not in plain_advice, plain_advice
+
+    secret = tmp_path / "a$HOME.env"
+    restore_advice = " ".join(partial_encryption._unrestored_advice(secret, secret, "x").split())
+    assert "can change even in double quotes" in restore_advice, restore_advice

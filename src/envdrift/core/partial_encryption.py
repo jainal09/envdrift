@@ -201,7 +201,7 @@ class PartialEncryptionError(Exception):
                 "its plaintext (git can mark only a tracked file), then "
                 f"`envdrift decrypt {word} --backend sops`, then `envdrift push` before "
                 "you stage anything: push encrypts it with dotenvx and lifts the mark."
-            )
+            ) + _expansion_note(word)
         else:
             reason = (
                 "it still holds dotenvx ciphertext after the decrypt. The decryption "
@@ -797,6 +797,28 @@ def _windows_word(text: str) -> str:
     return f'"{text}"'
 
 
+# Read even inside double quotes: cmd.exe expands %NAME% (and !NAME! with delayed expansion), and
+# PowerShell expands $NAME, escapes with a backtick and ends a string at a curly double quote.
+_READ_IN_DOUBLE_QUOTES = frozenset("%!$`\u201c\u201d\u201e")
+
+
+def _expansion_note(*words: str, windows: bool = os.name == "nt") -> str:
+    """A warning when a printed Windows command word holds what a shell still changes, else "".
+
+    Double quotes (``_windows_word``) keep a space or ``&`` in one word, but no quoting keeps
+    ``%NAME%`` from cmd.exe and ``$NAME`` from PowerShell alike. A command that names such a file
+    acts on another path: the SOPS advice's mark misses the file, and the decrypt after it leaves
+    plaintext that `git add .` stages. POSIX words (``shlex.quote``) keep every character.
+    """
+    if not windows or not _READ_IN_DOUBLE_QUOTES.intersection("".join(words)):
+        return ""
+    return (
+        " A file name in these commands holds `%`, `!`, `$`, a backtick or a curly quote, which "
+        "cmd.exe or PowerShell can change even in double quotes: check that your shell passes "
+        "it as it is (in PowerShell, put it in single quotes) before you run them."
+    )
+
+
 class DecryptSnapshot:
     """The exact bytes of a file about to be decrypted in place by dotenvx.
 
@@ -891,25 +913,26 @@ def _unrestored_advice(path: Path, written: Path, failure: str) -> str:
             f"{lead}. It is marked skip-worktree, so a plain `git add .` won't stage it. "
             f"To restore it, run `{git} update-index --no-skip-worktree {name}` and "
             f"then `{git} checkout -- {name}`."
-        )
+        ) + _expansion_note(git, name)
     # The advice depends on why the mark failed: git checkout can restore
     # only a file git has a copy of.
     reason = unprotected_reason(path)
+    word = _command_word(str(path))
     if reason.startswith("untracked"):
         return (
             f"{lead}, and git does not track it, so a plain `git add .` WILL stage "
             "it and git has no copy to restore. Re-encrypt it with "
-            f"`envdrift encrypt {_command_word(str(path))}` before you commit."
-        )
+            f"`envdrift encrypt {word}` before you commit."
+        ) + _expansion_note(word)
     if reason.startswith("outside a git repository"):
         return (
             f"{lead}. It is outside a git repository, so git cannot stage it or "
-            f"restore it: re-encrypt it with `envdrift encrypt {_command_word(str(path))}`."
-        )
+            f"restore it: re-encrypt it with `envdrift encrypt {word}`."
+        ) + _expansion_note(word)
     return (
         f"{lead}, and it could not be marked skip-worktree: a plain `git add .` "
         f"WILL stage it. Run `{git} checkout -- {name}` before you commit."
-    )
+    ) + _expansion_note(git, name)
 
 
 def _leftover_ciphertext(file_path: Path) -> str | None:

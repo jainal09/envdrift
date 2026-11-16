@@ -208,6 +208,13 @@ The mark comes first because `envdrift decrypt` does not set it: decrypted on it
 own, the file is plaintext that a plain `git add .` stages. `envdrift pull` gives
 the same message for its partial-encryption step.
 
+A file name that needs quotes is quoted for the shell you paste the commands into:
+in single quotes on Linux and macOS, and in double quotes on Windows. Inside double
+quotes cmd.exe still expands `%NAME%` and PowerShell `$NAME`, and no quoting stops
+both. So on Windows, when a name holds `%`, `!`, `$`, a backtick or a curly quote,
+the message adds a sentence that says to check that your shell passes the name as it
+is before you run the commands.
+
 Leftover dotenvx ciphertext is reported the same way (`it still holds dotenvx
 ciphertext`), which usually means the decryption key is missing or invalid.
 
