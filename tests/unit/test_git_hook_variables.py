@@ -4,6 +4,7 @@ for the path's own repository (#915, #919)."""
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess  # nosec B404
 import sys
 from pathlib import Path
@@ -18,8 +19,11 @@ from envdrift.utils.git import (
     has_git_head,
     is_file_tracked,
     is_git_repo,
+    unignored_paths,
     without_git_location,
 )
+
+_needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -34,7 +38,7 @@ class TestHookGitVariables:
     the index the hook was given unless it is passed ``without_git_location()``.
     """
 
-    def test_without_git_location_drops_the_location_variables_only(self):
+    def test_without_git_location_drops_the_repository_variables_only(self):
         environ = {
             "GIT_DIR": "/hook/.git",
             "GIT_WORK_TREE": "/hook",
@@ -54,6 +58,88 @@ class TestHookGitVariables:
 
         assert "GIT_INDEX_FILE" not in environ
         assert environ["ENVDRIFT_TEST_PROBE"] == "kept"
+
+    @_needs_git
+    def test_without_git_location_drops_each_variable_git_counts_as_a_repositorys(
+        self, tmp_path: Path
+    ):
+        """``git rev-parse --local-env-vars`` lists them. To run in another repository, git drops
+        them all but the command-line configuration, which it keeps."""
+        listed = subprocess.run(
+            ["git", "rev-parse", "--local-env-vars"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        configuration = {"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"}
+
+        kept = without_git_location(dict.fromkeys(listed, "x"))
+
+        assert "GIT_OBJECT_DIRECTORY" in listed, listed
+        assert set(kept) == configuration & set(listed)
+
+    @_needs_git
+    def test_lookups_answer_for_another_repository_from_a_push_hook(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """git runs a hook of ``git push`` (pre-receive, update) in the receiving repository, with
+        GIT_DIR=. and the objects being received: GIT_OBJECT_DIRECTORY, and the repository's own
+        as GIT_ALTERNATE_OBJECT_DIRECTORIES. Inherited, they made git read another repository's
+        objects from there, where it found no HEAD commit and no file."""
+        receiving = tmp_path / "receiving.git"
+        _git(tmp_path, "init", "-q", "--bare", str(receiving))
+        incoming = receiving / "objects" / "tmp_objdir-incoming-test"
+        incoming.mkdir()
+        other = tmp_path / "other"
+        other.mkdir()
+        _git(other, "init", "-q")
+        (other / "app.txt").write_text("hello\n")
+        _git(other, "add", "app.txt")
+        _git(other, "commit", "-qm", "init")
+        monkeypatch.setenv("GIT_DIR", ".")
+        monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(incoming))
+        monkeypatch.setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", str(receiving / "objects"))
+        monkeypatch.setenv("GIT_QUARANTINE_PATH", str(incoming))
+        monkeypatch.chdir(receiving)
+
+        assert has_git_head(other) is True
+        assert get_file_from_git(other / "app.txt") == "hello\n"
+
+    @_needs_git
+    @pytest.mark.parametrize("exported", ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE"])
+    def test_a_submodules_key_file_is_ignored_in_the_submodule_from_a_superproject_hook(
+        self, tmp_path: Path, monkeypatch, exported: str
+    ):
+        """Each key file's entry goes in, and is checked in, the repository that would stage it:
+        the submodule, which the superproject's hook variables do not name."""
+        upstream = tmp_path / "upstream"
+        upstream.mkdir()
+        _git(upstream, "init", "-q")
+        _git(upstream, "commit", "-q", "--allow-empty", "-m", "init")
+        superproject = tmp_path / "super"
+        superproject.mkdir()
+        _git(superproject, "init", "-q")
+        allow_local = ("-c", "protocol.file.allow=always")
+        _git(superproject, *allow_local, "submodule", "add", "-q", "../upstream", "sub")
+        superproject = superproject.resolve()
+        submodule = superproject / "sub"
+        key_file = submodule / "config" / ".env.keys"
+        key_file.parent.mkdir()
+        key_file.write_text("DOTENV_PRIVATE_KEY=k\n")
+        git_dir = superproject / ".git"
+        if exported == "GIT_INDEX_FILE":  # git commit -a in the superproject
+            monkeypatch.setenv("GIT_INDEX_FILE", str(git_dir / "index"))
+        else:
+            monkeypatch.setenv("GIT_DIR", str(git_dir))
+            if exported == "GIT_WORK_TREE":
+                monkeypatch.setenv("GIT_WORK_TREE", str(superproject))
+        monkeypatch.chdir(superproject)
+
+        assert ensure_gitignore_entries([key_file]) == ["config/.env.keys"]
+        assert (submodule / ".gitignore").read_text() == "config/.env.keys\n"
+        assert not (superproject / ".gitignore").exists()
+        assert unignored_paths([key_file]) == []
 
     def test_lookups_in_a_linked_worktree_answer_for_the_worktree(
         self, tmp_path: Path, monkeypatch

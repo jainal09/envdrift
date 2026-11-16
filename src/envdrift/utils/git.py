@@ -20,6 +20,25 @@ from envdrift.utils.deadline import run_tool
 # work tree instead of that path's, or writes there (#915, #916).
 GIT_LOCATION_VARIABLES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
 
+# The other variables git counts as local to a repository (``git rev-parse --local-env-vars``),
+# but for the command-line configuration (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT): to run in
+# another repository, a submodule say, git drops them with the location variables and keeps that
+# configuration. A hook of ``git push`` (pre-receive, update) gets GIT_OBJECT_DIRECTORY and
+# GIT_ALTERNATE_OBJECT_DIRECTORIES with GIT_DIR. Inherited, they had git look for another
+# repository's objects among the hook repository's: it found no HEAD commit there, and no file.
+_OTHER_REPOSITORY_VARIABLES = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+)
+_REPOSITORY_VARIABLES = frozenset((*GIT_LOCATION_VARIABLES, *_OTHER_REPOSITORY_VARIABLES))
+
 # Every subprocess call in this module pins ``encoding="utf-8"`` with
 # ``errors="surrogateescape"``: ``text=True`` alone decodes git's output with the
 # platform locale codec — cp1252 on Windows, US-ASCII under LC_ALL=C — which
@@ -45,13 +64,14 @@ class GitignoreOverrideError(OSError):
 
 
 def without_git_location(environ: Mapping[str, str] | None = None) -> dict[str, str]:
-    """``environ`` (``os.environ`` when None) without the git location variables.
+    """``environ`` (``os.environ`` when None) without the variables that tie git to a repository.
 
-    It is the environment for a git, or a tool that runs git, that must find the repository of
-    the path it is given.
+    Those are the git location variables, and the other variables git counts as local to a
+    repository (``_OTHER_REPOSITORY_VARIABLES``). It is the environment for a git, or a tool that
+    runs git, that must find the repository of the path it is given.
     """
     source = os.environ if environ is None else environ
-    return {key: value for key, value in source.items() if key not in GIT_LOCATION_VARIABLES}
+    return {key: value for key, value in source.items() if key not in _REPOSITORY_VARIABLES}
 
 
 def _hook_env(git_root: Path) -> dict[str, str] | None:
@@ -251,6 +271,29 @@ def get_git_root(path: Path) -> Path | None:
     # escaped and crashed push before any environment ran.
     except (subprocess.TimeoutExpired, OSError):
         return None
+
+
+def git_location_for(path: Path) -> tuple[Path, dict[str, str] | None]:
+    """The folder to run git in (``git -C``) for the file ``path``, and the environment.
+
+    git finds the repository that tracks the file from the file's folder, unless it inherits
+    the location variables a git hook gets (githooks(5)), which beat ``-C``. From a
+    superproject's hook, git marked the superproject's file at the same path skip-worktree, or
+    failed, for a file in a submodule; from a linked worktree's hook, whose GIT_DIR makes git
+    take the folder it runs in for the top of the work tree, a tracked file in a subdirectory
+    read as untracked. So with them exported, git runs at the top of the work tree of the
+    file's own repository, and with them only when they name that repository (``_hook_env``):
+    a hook there marks the index it is about to commit. Outside every repository, git runs in
+    the file's folder without them. With none exported, it runs in the file's folder, and the
+    environment is None: this process's own.
+    """
+    folder = path.parent
+    if not any(name in os.environ for name in GIT_LOCATION_VARIABLES):
+        return folder, None
+    root = get_git_root(folder)
+    if root is None or not path.is_relative_to(root):
+        return folder, without_git_location()
+    return root, _hook_env(root)
 
 
 def has_git_head(path: Path) -> bool:

@@ -156,6 +156,12 @@ warning names the link and where the plaintext is:
 shared/production.secret)`. A secret file in a git submodule is marked in the
 submodule, the repository that tracks it.
 
+That holds in a git hook too (a superproject's `pre-commit`, or a linked
+worktree's `post-checkout`, say), though git exports `GIT_DIR`, `GIT_INDEX_FILE`
+and the like to its hooks. A secret file of the hook's own repository is marked in
+the index the hook is about to commit, and one of another repository, such as a
+submodule, in that repository's own index. `push` lifts the mark the same way.
+
 ## When a decrypt fails
 
 dotenvx decrypts value by value. When one value was encrypted under another key

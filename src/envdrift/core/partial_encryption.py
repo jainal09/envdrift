@@ -18,6 +18,7 @@ from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.env_files import _is_excluded_env_file
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError, DotenvxWrapper
 from envdrift.sync.operations import atomic_write
+from envdrift.utils.git import git_location_for
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -621,9 +622,11 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
     """Run ``git update-index <flag>`` on the file ``path`` writes to; report success.
 
     That is the target of a symlinked ``path`` (``_written_file``), so the bit is
-    set on, and lifted from, the file that holds the plaintext. git runs in that
-    file's own directory, so it uses the repository that tracks the file: run
-    from the superproject, git could not mark a file in a submodule.
+    set on, and lifted from, the file that holds the plaintext. git runs in the
+    repository that tracks that file (``git_location_for``): run from the
+    superproject, git could not mark a file in a submodule, and run from the
+    superproject's git hook, it marked the superproject's file at the same path
+    and exited 0, so a pull called the submodule's plaintext protected.
 
     Returns True only when git exits 0. A non-zero exit (e.g. the file is not
     tracked) is logged as a warning rather than failing silently; git being
@@ -631,11 +634,13 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
     can avoid claiming protection that was never applied.
     """
     target = _written_file(path)
+    folder, env = git_location_for(target)
     try:
         result = subprocess.run(  # nosec B603, B607
-            ["git", "-C", str(target.parent), "update-index", flag, "--", str(target)],
+            ["git", "-C", str(folder), "update-index", flag, "--", str(target)],
             capture_output=True,
             timeout=10,
+            env=env,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         logger.debug("git update-index %s not applied to %s: %s", flag, path, exc)
@@ -684,28 +689,31 @@ def unprotected_reason(path: Path) -> str:
     """Say why ``git update-index --skip-worktree`` could not protect ``path`` (#998).
 
     Asks git, by exit code rather than by its (translated) messages, whether the
-    file the protection was for (``_written_file``) is in the index, in that
-    file's own directory as the protection ran: ``untracked`` (exit 1),
-    ``outside a git repository`` (exit 128), else ``skip-worktree failed`` (a
-    tracked file, for example while another git process holds the index lock).
-    The name is a literal pathspec: as a glob, ``[prod]`` could match another,
-    tracked file and call an untracked one tracked. When a symlink sends ``path``
-    elsewhere, the reason names the file the plaintext is in.
+    file the protection was for (``_written_file``) is in the index, in the
+    repository and index the protection ran in (``git_location_for``):
+    ``untracked`` (exit 1), ``outside a git repository`` (exit 128), else
+    ``skip-worktree failed`` (a tracked file, for example while another git
+    process holds the index lock). The name is a literal pathspec: as a glob,
+    ``[prod]`` could match another, tracked file and call an untracked one
+    tracked. When a symlink sends ``path`` elsewhere, the reason names the file
+    the plaintext is in.
     """
     target = _written_file(path)
+    folder, env = git_location_for(target)
     try:
         listed = subprocess.run(  # nosec B603, B607
             [
                 "git",
                 "-C",
-                str(target.parent),
+                str(folder),
                 "ls-files",
                 "--error-unmatch",
                 "--",
-                f":(literal){target.name}",
+                f":(literal){target.relative_to(folder).as_posix()}",
             ],
             capture_output=True,
             timeout=10,
+            env=env,
         )
     except FileNotFoundError:
         return "skip-worktree failed: git is not installed"
@@ -738,13 +746,14 @@ def _shown(path: Path) -> Path:
 def _git_for_written_file(path: Path) -> tuple[str, str]:
     """The ``git`` to type, and the file to name, to act on the file ``path`` writes to.
 
-    The skip-worktree mark is set on that file, by git run in its own directory
-    (``_run_git_update_index``): for a symlinked ``path`` the link's target, and
-    for a file in a submodule the submodule's repository. Recovery advice that
-    named ``path`` from the working directory unmarked and checked out the link,
-    or was refused in the superproject, so the plaintext stayed. The commands run
-    git in that directory too (``git -C``) unless it is the working directory,
-    where a file not reached through a symlink keeps the name it was given.
+    The skip-worktree mark is set on that file, by git run in the repository that
+    tracks it (``_run_git_update_index``): for a symlinked ``path`` the link's
+    target, and for a file in a submodule the submodule's repository. Recovery
+    advice that named ``path`` from the working directory unmarked and checked out
+    the link, or was refused in the superproject, so the plaintext stayed. The
+    commands run git in that file's directory (``git -C``), where git finds that
+    repository, unless it is the working directory, where a file not reached
+    through a symlink keeps the name it was given.
     """
     target = _written_file(path)
     folder = _shown(target.parent)
