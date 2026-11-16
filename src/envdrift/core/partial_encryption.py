@@ -645,8 +645,12 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
             timeout=10,
             env=env,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        logger.debug("git update-index %s not applied: %s", flag, exc)
+    except subprocess.TimeoutExpired as exc:
+        # Not ``exc`` itself: its text is the whole command, the file's path included.
+        logger.debug("git update-index %s not applied: timed out after %ss", flag, exc.timeout)
+        return False
+    except OSError as exc:  # git not found, or it could not start
+        logger.debug("git update-index %s not applied: %s", flag, exc.strerror or exc)
         return False
     if result.returncode != 0:
         stderr = result.stderr

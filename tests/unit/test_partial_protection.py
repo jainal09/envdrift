@@ -399,3 +399,38 @@ def test_a_symlink_loop_is_not_protected_and_does_not_crash(repo: Path) -> None:
 
     assert _git_skip_worktree(Path("a.secret")) is False
     assert _reason(Path("a.secret")).startswith("untracked")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        subprocess.TimeoutExpired(cmd=["git", "update-index"], timeout=10),
+        FileNotFoundError(2, "No such file or directory", "git"),
+    ],
+    ids=["git-timed-out", "git-missing"],
+)
+def test_a_failed_update_index_does_not_log_the_file_path(tmp_path: Path, caplog, failure):
+    """The path of a secret file stays out of the log, even in a git timeout's text.
+
+    ``TimeoutExpired`` formats the whole command, the path included, so logging the
+    exception itself put the path back into the debug log. The log still says why.
+    """
+    import logging
+
+    from envdrift.core.partial_encryption import _git_skip_worktree
+
+    secret = tmp_path / "config" / "production.secret"
+    if isinstance(failure, subprocess.TimeoutExpired):
+        failure.cmd = ["git", "update-index", "--skip-worktree", "--", str(secret)]
+    with (
+        patch("envdrift.core.partial_encryption.subprocess.run", side_effect=failure),
+        caplog.at_level(logging.DEBUG, logger="envdrift.core.partial_encryption"),
+    ):
+        assert _git_skip_worktree(secret) is False
+
+    assert "production.secret" not in caplog.text, caplog.text
+    assert "not applied" in caplog.text
+    if isinstance(failure, subprocess.TimeoutExpired):
+        assert "timed out after 10s" in caplog.text
+    else:
+        assert "No such file or directory" in caplog.text
