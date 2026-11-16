@@ -434,3 +434,40 @@ def test_a_failed_update_index_does_not_log_the_file_path(tmp_path: Path, caplog
         assert "timed out after 10s" in caplog.text
     else:
         assert "No such file or directory" in caplog.text
+
+
+def test_a_failed_repository_lookup_leaves_the_file_unmarked_without_raising(tmp_path: Path):
+    """The mark is best effort: a lookup that fails means no mark, not an exception.
+
+    ``_run_git_update_index`` found the file's repository before its ``try``, so an
+    OSError there escaped ``_git_skip_worktree``, which ``pull_secrets_only`` calls for
+    each decrypted file outside its own error handling: the tally and the list of
+    unprotected files were lost.
+    """
+    from envdrift.core.partial_encryption import _git_skip_worktree
+
+    with patch(
+        "envdrift.core.partial_encryption.git_location_for",
+        side_effect=PermissionError(13, "Permission denied"),
+    ):
+        assert _git_skip_worktree(tmp_path / "production.secret") is False
+
+
+def test_the_sops_advice_takes_a_path_with_a_space_as_one_argument():
+    """Each command in the advice for a file still holding SOPS ciphertext names the file once.
+
+    Unquoted, ``git update-index --skip-worktree secrets/my app/.env.a`` marked nothing,
+    and ``envdrift decrypt`` then left the plaintext stageable.
+    """
+    import re
+    import shlex
+
+    from envdrift.core.partial_encryption import PartialEncryptionError
+
+    path = Path("secrets") / "my app" / ".env.a"
+    message = str(PartialEncryptionError.still_encrypted(path, "SOPS", ""))
+
+    commands = [c for c in re.findall(r"`([^`]+)`", " ".join(message.split())) if "my app" in c]
+    assert len(commands) == 2, message
+    for command in commands:
+        assert str(path) in shlex.split(command), command

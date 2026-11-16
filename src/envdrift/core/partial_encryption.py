@@ -8,6 +8,7 @@ This module implements a simple build pattern for partial encryption:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shlex
 import subprocess  # nosec B404
@@ -192,12 +193,13 @@ class PartialEncryptionError(Exception):
         if ciphertext == "SOPS":
             # Shared by pull-partial and pull. `envdrift decrypt` alone left the
             # plaintext in a tracked file that `git add .` staged: mark it first.
+            word = _command_word(str(path))
             reason = (
                 "it still holds SOPS ciphertext. Partial encryption decrypts with "
                 "dotenvx, which does not read SOPS files. To move it to dotenvx, run "
-                f"`git update-index --skip-worktree {path}` so `git add .` cannot stage "
+                f"`git update-index --skip-worktree {word}` so `git add .` cannot stage "
                 "its plaintext (git can mark only a tracked file), then "
-                f"`envdrift decrypt {path} --backend sops`, then `envdrift push` before "
+                f"`envdrift decrypt {word} --backend sops`, then `envdrift push` before "
                 "you stage anything: push encrypts it with dotenvx and lifts the mark."
             )
         else:
@@ -633,12 +635,14 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
     unavailable is logged at debug level. Either way the caller gets False so it
     can avoid claiming protection that was never applied.
     """
-    target = _written_file(path)
-    folder, env = git_location_for(target)
     # The file's path is not logged: git's own message names the file ("fatal: Unable
     # to mark file <path>"), and CodeQL reads a secret file's path as the secret
     # (py/clear-text-logging-sensitive-data).
     try:
+        # In the try too: the lookup runs git, and its failure means no mark, not a crash
+        # (pull_secrets_only marks each file outside its own error handling).
+        target = _written_file(path)
+        folder, env = git_location_for(target)
         result = subprocess.run(  # nosec B603, B607
             ["git", "-C", str(folder), "update-index", flag, "--", str(target)],
             capture_output=True,
@@ -649,8 +653,9 @@ def _run_git_update_index(flag: str, path: Path) -> bool:
         # Not ``exc`` itself: its text is the whole command, the file's path included.
         logger.debug("git update-index %s not applied: timed out after %ss", flag, exc.timeout)
         return False
-    except OSError as exc:  # git not found, or it could not start
-        logger.debug("git update-index %s not applied: %s", flag, exc.strerror or exc)
+    except (OSError, RuntimeError) as exc:  # git could not start, or a path could not resolve
+        reason = getattr(exc, "strerror", None) or type(exc).__name__
+        logger.debug("git update-index %s not applied: %s", flag, reason)
         return False
     if result.returncode != 0:
         stderr = result.stderr
@@ -758,10 +763,23 @@ def _git_for_written_file(path: Path) -> tuple[str, str]:
     """
     target = _written_file(path)
     folder = _shown(target.parent)
-    git = "git" if folder == Path() else f"git -C {shlex.quote(str(folder))}"
+    git = "git" if folder == Path() else f"git -C {_command_word(str(folder))}"
     if folder == Path() and not _through_symlink(path):
-        return git, str(path)
-    return git, shlex.quote(target.name)
+        return git, _command_word(str(path))
+    return git, _command_word(target.name)
+
+
+def _command_word(text: str) -> str:
+    """``text`` as one word of a command the user pastes into a shell.
+
+    A path with a space, ``secrets/my app/.env.a`` say, split into two arguments, so
+    the printed command failed or acted on the wrong file. POSIX shells read
+    ``shlex.quote``; on Windows the double quotes that cmd.exe and PowerShell both
+    read (``subprocess.list2cmdline``) are added only where needed.
+    """
+    if os.name == "nt":
+        return subprocess.list2cmdline([text])
+    return shlex.quote(text)
 
 
 class DecryptSnapshot:
@@ -866,12 +884,12 @@ def _unrestored_advice(path: Path, written: Path, failure: str) -> str:
         return (
             f"{lead}, and git does not track it, so a plain `git add .` WILL stage "
             "it and git has no copy to restore. Re-encrypt it with "
-            f"`envdrift encrypt {path}` before you commit."
+            f"`envdrift encrypt {_command_word(str(path))}` before you commit."
         )
     if reason.startswith("outside a git repository"):
         return (
             f"{lead}. It is outside a git repository, so git cannot stage it or "
-            f"restore it: re-encrypt it with `envdrift encrypt {path}`."
+            f"restore it: re-encrypt it with `envdrift encrypt {_command_word(str(path))}`."
         )
     return (
         f"{lead}, and it could not be marked skip-worktree: a plain `git add .` "

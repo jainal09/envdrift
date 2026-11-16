@@ -175,7 +175,7 @@ def _git_dirs(cwd: Path, env: Mapping[str, str]) -> tuple[Path, Path] | None:
             errors="surrogateescape",
             timeout=10,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+    except (subprocess.TimeoutExpired, OSError):  # OSError: no git, or cwd cannot be entered
         return None
     lines = result.stdout.splitlines()
     if result.returncode != 0 or len(lines) != 2:

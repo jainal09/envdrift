@@ -258,6 +258,21 @@ class TestHookGitVariables:
         assert ensure_gitignore_entries([other / ".env.keys"]) == [".env.keys"]
         assert (other / ".gitignore").read_text() == ".env.keys\n"
 
+    def test_git_dirs_is_no_answer_when_git_cannot_start(self, tmp_path: Path, monkeypatch):
+        """An OSError other than a missing git (a PermissionError, say) is no answer, not a crash.
+
+        ``_git_dirs`` caught only a missing git and a timeout, so any other OSError escaped
+        ``git_location_for``, and the skip-worktree mark that pull sets on each file.
+        """
+        from envdrift.utils import git as git_utils
+
+        def _refuse(*args, **kwargs):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(git_utils, "run_tool", _refuse)
+
+        assert git_utils._git_dirs(tmp_path, {}) is None
+
     def test_hook_env_drops_the_variables_when_git_cannot_place_the_repository(
         self, tmp_path: Path, monkeypatch
     ):

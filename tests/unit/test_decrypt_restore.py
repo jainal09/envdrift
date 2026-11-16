@@ -448,6 +448,33 @@ class TestRecoveryAdviceActsOnTheFileThePlaintextIsIn:
         assert _flag(tmp_path / "sub", ".env.secret") == "H"
         assert secret.read_bytes() == _LARGE_ENCRYPTED
 
+    def test_a_secret_file_whose_name_has_a_space(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A name with a space is one word in the printed commands.
+
+        Unquoted, ``git checkout -- prod secrets.env`` named two files: the advice
+        failed and the file kept its plaintext.
+        """
+        _init_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        secret = tmp_path / "prod secrets.env"
+        secret.write_bytes(_LARGE_ENCRYPTED)
+        _git(tmp_path, "add", "-A")
+        _git(tmp_path, "commit", "-q", "-m", "a secret file with a space")
+        snapshot = _snapshot(Path("prod secrets.env"))
+        secret.write_bytes(_PARTLY_DECRYPTED)
+
+        with file_size_limit(len(_LARGE_ENCRYPTED) // 2):
+            note = snapshot.restore()
+
+        assert _flag(tmp_path, "prod secrets.env") == "S"
+        _run_each(tmp_path, *_recovery_commands(note))
+        assert _flag(tmp_path, "prod secrets.env") == "H"
+        assert secret.read_bytes() == _LARGE_ENCRYPTED
+
 
 def _backend_with(decrypt_effect) -> tuple[DotenvxEncryptionBackend, MagicMock]:
     """A backend whose dotenvx seam runs ``decrypt_effect(env_file=...)``."""
