@@ -296,8 +296,9 @@ def _record_constraint_errors(
     encrypted, so the model checked its default instead: an empty default
     failed ``min_length=1`` (or ``str_min_length=1``) and ``validate --ci``
     failed a file whose real value it never saw. Errors there are dropped,
-    unless they are the only ones and the model has checks that a failed field
-    stops (``_checks_after_fields``): those never ran, so the file still fails.
+    unless the model has checks that a failed field stops
+    (``SchemaMetadata.checks_after_fields``): those never ran, so the error
+    stays, and says so.
     """
     alias_to_field = {
         binding_name: name
@@ -305,8 +306,7 @@ def _record_constraint_errors(
         if fm.alias is not None
         for binding_name in _field_binding_names(fm)
     }
-    dropped: dict[str, str] = {}
-    recorded = False
+    keep_ciphertext_errors = schema.checks_after_fields
     for err in exc.errors():
         # missing/extra are reported via missing_required / extra_vars;
         # don't override a base-type message the heuristic already set.
@@ -317,34 +317,13 @@ def _record_constraint_errors(
             continue
         field_name, message = entry
         if field_name in ciphertext_fields:
-            dropped.setdefault(field_name, message)
-            continue
-        recorded = True
+            if not keep_ciphertext_errors:
+                continue
+            message = (
+                f"its default stands in for the encrypted value and fails ({message}), "
+                "so the model's own validators could not run"
+            )
         result.type_errors.setdefault(field_name, message)
-    if recorded or not _checks_after_fields(schema.model_class):
-        return
-    for field_name, message in dropped.items():
-        result.type_errors.setdefault(
-            field_name,
-            f"its default stands in for the encrypted value and fails ({message}), "
-            "so the model's own validators could not run",
-        )
-
-
-def _checks_after_fields(model_class: Any) -> bool:
-    """Whether the model has checks that run only once every field is valid.
-
-    A ``mode="after"`` or ``"wrap"`` model validator, or ``model_post_init``, never
-    runs when a field fails. Dropping that field's error would then pass a file
-    those checks would reject, such as one with ``PORT=0`` that a validator refuses.
-    """
-    decorators = getattr(model_class, "__pydantic_decorators__", None)
-    validators = getattr(decorators, "model_validators", None) or {}
-    if any(getattr(v.info, "mode", "after") != "before" for v in validators.values()):
-        return True
-    if getattr(decorators, "root_validators", None):
-        return True
-    return getattr(model_class, "__pydantic_post_init__", None) is not None
 
 
 class Validator:

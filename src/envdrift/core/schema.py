@@ -201,6 +201,22 @@ class SchemaMetadata:
         """
         return [name for name, f in self.fields.items() if f.sensitive]
 
+    @property
+    def checks_after_fields(self) -> bool:
+        """Whether the model has checks that run only once every field is valid.
+
+        Pydantic runs a ``mode="after"`` or ``"wrap"`` model validator, and
+        ``model_post_init``, only when no field failed. An error dropped for one
+        field could then hide what those checks reject, such as ``PORT=0``.
+        """
+        decorators = getattr(self.model_class, "__pydantic_decorators__", None)
+        validators = getattr(decorators, "model_validators", None) or {}
+        if any(getattr(v.info, "mode", "after") != "before" for v in validators.values()):
+            return True
+        if getattr(decorators, "root_validators", None):
+            return True
+        return getattr(self.model_class, "__pydantic_post_init__", None) is not None
+
 
 class SchemaLoadError(Exception):
     """Error loading schema."""

@@ -561,8 +561,8 @@ NEW_FEATURE_FLAG=enabled
         message = result.type_errors["API_KEY"]
         assert "encrypted value" in message and "could not run" in message, message
 
-    def test_an_encrypted_default_error_is_dropped_when_another_field_fails(self, tmp_path):
-        """With another field's error the file fails anyway: the default's error is not shown."""
+    def test_a_plaintext_error_is_reported_next_to_a_kept_encrypted_default(self, tmp_path):
+        """Another field's error is reported as well, and the default's error says why it is kept."""
 
         class Settings(BaseSettings):
             API_KEY: str = Field("", min_length=1)
@@ -581,7 +581,8 @@ NEW_FEATURE_FLAG=enabled
         result = Validator().validate(env, schema, check_encryption=False)
 
         assert result.valid is False
-        assert set(result.type_errors) == {"PORT"}, result.type_errors
+        assert set(result.type_errors) == {"API_KEY", "PORT"}, result.type_errors
+        assert "could not run" in result.type_errors["API_KEY"]
 
     @pytest.mark.xfail(
         raises=_KnownSkippedModelCheckError,

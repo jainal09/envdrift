@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from pydantic import AliasChoices, AliasPath, Field
+from pydantic import AliasChoices, AliasPath, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.schema import FieldMetadata, SchemaLoader, SchemaLoadError, SchemaMetadata
@@ -177,6 +177,72 @@ def test_plain_strings_without_model_limits_keep_the_type_only_path():
         NAME: str
 
     assert SchemaLoader().extract_metadata(Settings).has_constraints is False
+
+
+def _settings_with(check: str) -> type[BaseSettings]:
+    """A Settings class whose only model-level check is ``check``."""
+    if check == "after":
+
+        class After(BaseSettings):
+            NAME: str = ""
+
+            @model_validator(mode="after")
+            def check(self):
+                return self
+
+        return After
+    if check == "wrap":
+
+        class Wrap(BaseSettings):
+            NAME: str = ""
+
+            @model_validator(mode="wrap")
+            @classmethod
+            def check(cls, data, handler):
+                return handler(data)
+
+        return Wrap
+    if check == "post-init":
+
+        class PostInit(BaseSettings):
+            NAME: str = ""
+
+            def model_post_init(self, context, /):
+                pass
+
+        return PostInit
+    if check == "before":
+
+        class Before(BaseSettings):
+            NAME: str = ""
+
+            @model_validator(mode="before")
+            @classmethod
+            def check(cls, data):
+                return data
+
+        return Before
+
+    class Plain(BaseSettings):
+        NAME: str = ""
+
+    return Plain
+
+
+@pytest.mark.parametrize(
+    ("check", "expected"),
+    [("after", True), ("wrap", True), ("post-init", True), ("before", False), ("none", False)],
+)
+def test_checks_after_fields_names_the_checks_a_failed_field_stops(check: str, expected: bool):
+    """Pydantic runs after/wrap model validators and model_post_init only once every field is
+    valid; a before validator runs first, so a failed field does not stop it."""
+    schema = SchemaLoader().extract_metadata(_settings_with(check))
+
+    assert schema.checks_after_fields is expected
+
+
+def test_checks_after_fields_without_a_model_class():
+    assert SchemaMetadata(class_name="S", module_path="m").checks_after_fields is False
 
 
 def test_extract_metadata_alias_path_uses_first_component_without_prefix():
