@@ -27,7 +27,7 @@ from envdrift.encryption import EncryptionProvider
 from envdrift.encryption.base import EncryptionBackendError, EncryptionResult
 from envdrift.integrations.dotenvx import DotenvxError
 from envdrift.vault import SecretValue, VaultError
-from tests.helpers import DummyEncryptionBackend
+from tests.helpers import DOTENVX_KEY_PAIRS, DummyEncryptionBackend
 
 runner = CliRunner()
 
@@ -4392,11 +4392,14 @@ class TestLockCommand:
         Before the fix the inline parser didn't strip quotes (unlike read_key),
         so a vault value stored quoted always mismatched the unquoted local key.
         """
-        secret = "abc" + "123" + "def"
+        # A key dotenvx can use: lock also checks the held key itself (#938).
+        secret = DOTENVX_KEY_PAIRS[0][0]
         service_dir = tmp_path / "svc"
         service_dir.mkdir()
         (service_dir / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={secret}\n")
-        (service_dir / ".env.production").write_text("SECRET=encrypted:xyz\n")
+        (service_dir / ".env.production").write_text(
+            f'DOTENV_PUBLIC_KEY_PRODUCTION="{DOTENVX_KEY_PAIRS[0][1]}"\nSECRET=encrypted:xyz\n'
+        )
 
         from envdrift.sync.config import ServiceMapping, SyncConfig
 
@@ -5579,7 +5582,10 @@ class TestVaultPushCommand:
         service_dir.mkdir()
         env_file = service_dir / ".env.production"
         env_file.write_text("API_KEY=plaintext")
-        (service_dir / ".env.keys").write_text("DOTENV_PRIVATE_KEY_PRODUCTION=abc123\n")
+        # vault-push --all publishes only a key dotenvx can use (#938).
+        (service_dir / ".env.keys").write_text(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={DOTENVX_KEY_PAIRS[0][0]}\n"
+        )
 
         mapping = ServiceMapping(secret_name="my-secret", folder_path=service_dir)
         sync_config = SyncConfig(mappings=[mapping], env_keys_filename=".env.keys")

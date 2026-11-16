@@ -692,18 +692,18 @@ def _private_key_var_name_for(env_file: Path) -> str:
     """Derive dotenvx's private-key variable name from the env file name.
 
     ``.env`` -> ``DOTENV_PRIVATE_KEY``; ``.env.<env>`` ->
-    ``DOTENV_PRIVATE_KEY_<ENV>`` (dots become underscores, uppercased) — the
-    same derivation dotenvx itself applies. ``Path.stem`` strips only the
-    LAST suffix, so the previous ``env_file.stem`` was always ``".env"`` for
+    ``DOTENV_PRIVATE_KEY_<ENV>`` — exactly dotenvx's own derivation, shared
+    with the encrypt seam (:func:`~envdrift.integrations.dotenvx_keys.dotenvx_key_names`):
+    at most two parts after ``.env.`` count, so ``.env.prod.eu.west`` is
+    ``DOTENV_PRIVATE_KEY_PROD_EU``. ``Path.stem`` strips only the LAST
+    suffix, so the previous ``env_file.stem`` was always ``".env"`` for
     ``.env.<env>`` files and every raw vault value collapsed to the
     PRODUCTION default, false-failing a CORRECT bare key for any other
     environment (#473).
     """
-    env_name = env_file.name.removeprefix(".env").replace(".", "_").upper()
-    env_name = env_name.lstrip("_")
-    if not env_name:
-        return "DOTENV_PRIVATE_KEY"
-    return f"DOTENV_PRIVATE_KEY_{env_name}"
+    from envdrift.integrations.dotenvx_keys import dotenvx_key_names
+
+    return dotenvx_key_names(env_file)[1]
 
 
 def _verify_decryption_with_vault(

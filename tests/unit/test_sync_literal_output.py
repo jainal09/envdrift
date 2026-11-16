@@ -23,7 +23,7 @@ from envdrift.cli import app
 from envdrift.encryption import EncryptionProvider
 from envdrift.encryption.sops import SOPSEncryptionBackend
 from envdrift.vault.base import SecretNotFoundError, SecretValue
-from tests.helpers import DummyEncryptionBackend
+from tests.helpers import DOTENVX_KEY_PAIRS, DummyEncryptionBackend
 
 runner = CliRunner()
 
@@ -396,3 +396,231 @@ def test_pull_partial_rows_print_dotenvx_s_message_as_it_is(
     assert f"! {folder} - error: Failed to decrypt {folder}/.env:" in out
     assert f"! {Path(secret_file)} - error: Failed to decrypt {secret_file}:" in out
     assert out.count(_DOTENVX_LINK) == 4  # two rows, and the two errors listed after
+
+
+# lock and pull name the env file, its keys file and the folder in their key rows (#938).
+# `cfg[/x]` closes a tag that was never opened (MarkupError), and escape() dropped the
+# backslash in `cfg\[2024]`, in front of a bracket that is not a tag.
+_KEY_FOLDERS = ["cfg[/x]", "cfg\\[2024]"]
+(_HELD_KEY, _HELD_PUBLIC), (_OTHER_KEY, _OTHER_PUBLIC) = DOTENVX_KEY_PAIRS[:2]
+
+# Encrypted as .env.staging and renamed: the key is held under the staging name.
+_RENAMED_ENV = (
+    f'DOTENV_PUBLIC_KEY_STAGING="{_HELD_PUBLIC}"\n\n# .env.staging\nSECRET=encrypted:abc\n'
+)
+_RENAME = "(DOTENV_PRIVATE_KEY_STAGING -> DOTENV_PRIVATE_KEY_PRODUCTION)"
+
+
+def _dotenvx_files(root: Path, folder: str, env_text: str, keys: bytes) -> tuple[Path, Path]:
+    """Write ``folder``'s .env.production and .env.keys; return both as lock names them."""
+    path = root / folder
+    path.mkdir(parents=True, exist_ok=True)
+    # Bytes, so Windows newline translation cannot change the line ends.
+    (path / ".env.production").write_bytes(env_text.encode("utf-8"))
+    (path / ".env.keys").write_bytes(keys)
+    return Path(folder) / ".env.production", Path(folder) / ".env.keys"
+
+
+def _lock_config(root: Path, folder: str) -> Path:
+    return _write_config(
+        root, [{"secret_name": "app-key", "folder_path": folder, "environment": "production"}]
+    )
+
+
+def _decode_error(raw: bytes) -> str:
+    """The reason Python gives for ``raw`` not being UTF-8."""
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return str(exc)
+    raise AssertionError(f"{raw!r} is valid UTF-8")
+
+
+@pytest.mark.parametrize("folder", _KEY_FOLDERS)
+def test_lock_relabel_rows_name_the_file_as_written(project, folder: str) -> None:
+    root, _, _ = project
+    keys = f"# .env.staging\nDOTENV_PRIVATE_KEY_STAGING={_HELD_KEY}\n".encode()
+    env_file, keys_file = _dotenvx_files(root, folder, _RENAMED_ENV, keys)
+    config = _lock_config(root, folder)
+
+    check = _invoke("lock", "-c", str(config), "--check")
+
+    assert check.exit_code == 1, check.output
+    assert isinstance(check.exception, SystemExit), repr(check.exception)
+    assert f"? {env_file} - would re-key {_RENAME} by re-labeling the key" in _flat(check.output)
+
+    result = _invoke("lock", "-c", str(config), "--force")
+
+    assert result.exit_code == 0, result.output
+    out = _flat(result.output)
+    assert f"+ {env_file} - key re-labeled {_RENAME}, not re-encrypted" in out
+    assert (
+        f"• {env_file}: key name mismatch, re-labeled DOTENV_PRIVATE_KEY_STAGING as "
+        "DOTENV_PRIVATE_KEY_PRODUCTION"
+    ) in out
+    assert f"DOTENV_PRIVATE_KEY_PRODUCTION={_HELD_KEY}" in keys_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("folder", _KEY_FOLDERS)
+def test_lock_relabel_warning_names_both_files_as_written(project, folder: str) -> None:
+    """The keys file holds a key under another name, but not the one this file needs."""
+    root, _, _ = project
+    keys = f"# .env.staging\nDOTENV_PRIVATE_KEY_STAGING={_OTHER_KEY}\n".encode()
+    env_file, keys_file = _dotenvx_files(root, folder, _RENAMED_ENV, keys)
+
+    result = _invoke("lock", "-c", str(_lock_config(root, folder)), "--force")
+
+    assert result.exit_code == 0, result.output
+    message = f"{keys_file} holds no key for this file (expected DOTENV_PRIVATE_KEY_PRODUCTION)"
+    out = _flat(result.output)
+    assert f"! {env_file} - warning: {message}" in out
+    assert f"• {env_file}: {message}" in out
+
+
+@pytest.mark.parametrize("folder", _KEY_FOLDERS)
+def test_lock_relabel_error_names_an_unreadable_keys_file(project, folder: str) -> None:
+    root, _, _ = project
+    raw = b"DOTENV_PRIVATE_KEY_STAGING=caf\xe9\n"
+    env_file, keys_file = _dotenvx_files(root, folder, _RENAMED_ENV, raw)
+
+    result = _invoke("lock", "-c", str(_lock_config(root, folder)), "--force")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+    message = (
+        f"cannot re-label its key: cannot read .env.production or {keys_file}: {_decode_error(raw)}"
+    )
+    out = _flat(result.output)
+    assert f"! {env_file} - error: {message}" in out
+    assert f"• {env_file}: {message}" in out
+
+
+@pytest.mark.parametrize("folder", _KEY_FOLDERS)
+def test_lock_key_mismatch_error_names_both_files_as_written(project, folder: str) -> None:
+    """The file is encrypted with another key than the one held for it (#938)."""
+    root, _, _ = project
+    env_file, keys_file = _dotenvx_files(
+        root,
+        folder,
+        f'DOTENV_PUBLIC_KEY_PRODUCTION="{_OTHER_PUBLIC}"\nSECRET=encrypted:abc\n',
+        f"DOTENV_PRIVATE_KEY_PRODUCTION={_HELD_KEY}\n".encode(),
+    )
+
+    result = _invoke("lock", "-c", str(_lock_config(root, folder)), "--force")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+    message = (
+        "the file is encrypted with another public key than the one of "
+        f"DOTENV_PRIVATE_KEY_PRODUCTION ({keys_file}), so the key your team holds may not "
+        "decrypt it. Restore the key it was encrypted with, or decrypt it with that key "
+        "and lock again"
+    )
+    out = _flat(result.output)
+    assert f"! {env_file} - error: {message}" in out
+    assert f"• {env_file}: {message}" in out
+
+
+@pytest.mark.parametrize(
+    ("held", "detail"),
+    [
+        ([_LOCAL_KEY], ""),
+        ([_VAULT_KEY, _LOCAL_KEY], " (the keys file holds 2 different values for this key)"),
+    ],
+    ids=["one-value", "a-second-value"],
+)
+@pytest.mark.parametrize("folder", _KEY_FOLDERS)
+def test_lock_verify_vault_key_mismatch_names_the_folder(
+    project, folder: str, held: list[str], detail: str
+) -> None:
+    root, use_vault, _ = project
+    _service(root, folder, key=None)
+    keys = "".join(f"DOTENV_PRIVATE_KEY_PRODUCTION={key}\n" for key in held)
+    (root / folder / ".env.keys").write_bytes(keys.encode())
+    use_vault({"app-key": _vault_key()})
+
+    result = _invoke("lock", "-c", str(_lock_config(root, folder)), "--verify-vault", "--check")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+    out = _flat(result.output)
+    assert f"✗ {Path(folder)} - KEY MISMATCH: local key differs from vault!{detail}" in out
+    assert ("different values" in out) == bool(detail)
+
+
+@pytest.mark.parametrize("folder", _KEY_FOLDERS)
+def test_lock_verify_vault_names_the_folder_of_an_unreadable_keys_file(
+    project, folder: str
+) -> None:
+    root, _, _ = project
+    _service(root, folder, key=None)
+    raw = b"DOTENV_PRIVATE_KEY_PRODUCTION=caf\xe9\n"
+    (root / folder / ".env.keys").write_bytes(raw)
+
+    result = _invoke("lock", "-c", str(_lock_config(root, folder)), "--verify-vault", "--check")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+    expected = f"✗ {Path(folder)} - cannot verify: cannot read .env.keys: {_decode_error(raw)}"
+    assert expected in _flat(result.output)
+
+
+@pytest.mark.parametrize("folder", _KEY_FOLDERS)
+def test_pull_key_conflict_row_names_both_files_as_written(project, folder: str) -> None:
+    """Two different keys for a custom-named file stop its decryption (#938)."""
+    root, _, use_backend = project
+    backend = DummyEncryptionBackend()
+    use_backend(backend)
+    path = root / folder
+    path.mkdir(parents=True)
+    (path / "service.env").write_bytes(b"SECRET=encrypted:abc\n")
+    (path / ".env.keys").write_bytes(
+        b"DOTENV_PRIVATE_KEY_PRODUCTION=k1\n"
+        b"# service.env\nDOTENV_PRIVATE_KEY_SERVICEDEVELOPMENT=k2\n"
+    )
+    mapping = {"secret_name": "app-key", "folder_path": folder, "environment": "production"}
+    config = _write_config(root, [{**mapping, "env_file": "service.env"}])
+
+    result = _invoke("pull", "-c", str(config), "--skip-sync")
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+    env_file, keys_file = Path(folder) / "service.env", Path(folder) / ".env.keys"
+    assert (
+        f"! {env_file} - not decrypted: {keys_file} holds two different keys for service.env"
+    ) in _flat(result.output)
+    assert backend.decrypt_calls == []
+
+
+@pytest.mark.parametrize("folder", _KEY_FOLDERS)
+def test_vault_pull_refusal_names_the_keys_file_as_written(project, folder: str) -> None:
+    """vault-pull will not replace a different local key without --force (#939)."""
+    root, use_vault, _ = project
+    (root / folder).mkdir(parents=True)
+    keys_file = Path(folder) / ".env.keys"
+    keys = f"DOTENV_PRIVATE_KEY_PRODUCTION={_LOCAL_KEY}\n".encode()
+    keys_file.write_bytes(keys)
+    use_vault({"app-key": _vault_key()})
+
+    result = _invoke(
+        "vault-pull",
+        folder,
+        "app-key",
+        "--env",
+        "production",
+        "--no-decrypt",
+        "-p",
+        "azure",
+        "--vault-url",
+        "https://myvault.vault.azure.net/",
+    )
+
+    assert result.exit_code == 1, result.output
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
+    out = _flat(result.output)
+    assert f"[ERROR] {keys_file} already holds a different DOTENV_PRIVATE_KEY_PRODUCTION." in out
+    assert (
+        "Push the local key first (envdrift vault-push), or re-run with --force to replace it; "
+        "--force backs up .env.keys before writing."
+    ) in out
+    assert keys_file.read_bytes() == keys
