@@ -14,7 +14,7 @@ import shutil
 import subprocess  # nosec B404
 import sys
 import weakref
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import pytest
 
@@ -87,14 +87,29 @@ def _finding(repo: Path, commit: str | None, name: str = ".env.production") -> S
     )
 
 
-def _reported(repo: Path, findings: list[ScanFinding], *, history: bool = True, **config) -> list:
-    """The commits of the findings the engine reports, scanning ``repo`` from inside it."""
+def _reported(
+    repo: Path,
+    findings: list[ScanFinding],
+    *,
+    history: bool = True,
+    paths: list[Path] | None = None,
+    **config,
+) -> list:
+    """The commits of the findings the engine reports, scanning ``paths`` (``repo`` alone)."""
     engine = ScanEngine(
         GuardConfig(use_native=False, use_gitleaks=False, include_git_history=history, **config)
     )
     engine.scanners = [_HistoryScanner(findings)]
-    result = engine.scan([repo])
+    result = engine.scan(paths or [repo])
     return [f.commit_sha for f in result.unique_findings]
+
+
+def _commit_bytes(repo: Path, name: str, content: bytes) -> str:
+    """Commit ``content``, byte for byte, as ``name``; return the commit."""
+    (repo / name).write_bytes(content)
+    _git(repo, "add", "-f", "--", name)
+    _git(repo, "commit", "-q", "-m", f"{name} as bytes")
+    return _git(repo, "rev-parse", "HEAD")
 
 
 def test_a_secret_in_history_is_kept_when_its_line_is_encrypted_now(repo: Path):
@@ -249,6 +264,91 @@ def test_a_repository_reached_through_a_folder_link_is_not_the_findings(repo: Pa
     assert _reported(repo, [_finding(repo, plaintext, name="a/sub/app.env")]) == [plaintext]
 
 
+def test_a_worktree_inside_the_repository_does_not_choose_the_file_either(repo: Path):
+    """``prod/app.env`` is read from the scanned repository, though ``prod`` is a worktree today.
+
+    A worktree of the repository was added at ``prod`` once ``prod/`` left it. Its ``.git``
+    made ``prod`` the root, and as the worktree holds the same commits, the commit's root
+    ``app.env``, whose line 2 is encrypted, was read in place of the plaintext ``prod/app.env``.
+    """
+    _commit(repo, "app.env", f'SETTING_2="{_CIPHERTEXT}"')
+    plaintext = _commit(repo, "prod/app.env", f"AWS_ACCESS_KEY_ID={_KEY}")
+    _git(repo, "rm", "-q", "-r", "--", "prod")
+    _git(repo, "commit", "-q", "-m", "drop prod")
+    _git(repo, "worktree", "add", "-q", "-b", "side", "--", "prod")
+
+    assert _reported(repo, [_finding(repo, plaintext, name="prod/app.env")]) == [plaintext]
+
+
+def test_a_finding_in_two_scanned_repositories_is_kept(repo: Path):
+    """A file in two scanned repositories is read from neither: which history holds it is unknown.
+
+    ``nested`` is a clone with the same commits, and both were scanned. Read from the clone, the
+    commit's root ``app.env``, whose line 2 is encrypted, dropped the plaintext ``nested/app.env``
+    that the outer repository holds.
+    """
+    _commit(repo, "app.env", f'SETTING_2="{_CIPHERTEXT}"')
+    plaintext = _commit(repo, "nested/app.env", f"AWS_ACCESS_KEY_ID={_KEY}")
+    _git(repo, "rm", "-q", "-r", "--", "nested")
+    _git(repo, "commit", "-q", "-m", "drop nested")
+    _git(repo, "clone", "-q", "--", str(repo), str(repo / "nested"))
+    finding = _finding(repo, plaintext, name="nested/app.env")
+
+    assert _reported(repo, [finding], paths=[repo, repo / "nested"]) == [plaintext]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a symbolic link needs a privilege on Windows")
+def test_a_path_that_reaches_the_repository_only_through_a_link_has_no_commit_file(
+    repo: Path, tmp_path_factory: pytest.TempPathFactory
+):
+    """git names the scanned repository by its real path, so a path below a link to it is in no
+    scanned repository: no commit is read for it, and its finding is kept."""
+    commit = _commit(repo, "app.env", "A=1")
+    link = tmp_path_factory.mktemp("elsewhere") / "link"
+    link.symlink_to(repo, target_is_directory=True)
+    committed = CommittedFiles(history=True, scanned=[repo])
+
+    assert committed.line(repo / "app.env", commit, 2) == "A=1"
+    assert committed.text(link / "app.env", commit) is None
+
+
+def test_a_lone_carriage_return_does_not_move_a_history_findings_line(repo: Path):
+    """Lines are counted at ``\\n``, as git counts them, so line 2 is the key's line.
+
+    git show was read as text, which made the lone ``\\r`` a line break: line 2 was the ignore
+    comment, and the committed key was dropped. The file is gone today, so only its commit holds
+    the line.
+    """
+    committed = _commit_bytes(
+        repo,
+        ".env.production",
+        b"PAD=x\rPAD=y  # envdrift:ignore\nAWS_ACCESS_KEY_ID=" + _KEY.encode() + b"\n",
+    )
+    (repo / ".env.production").unlink()
+
+    assert _reported(repo, [_finding(repo, committed)]) == [committed]
+
+
+def test_the_lines_of_a_commit_are_counted_at_lf_only():
+    """A lone ``\\r`` stays in its line; a ``\\r\\n`` ends one, its ``\\r`` dropped, as
+    ``split_lines`` reads a line today; a final line break starts no empty line."""
+    assert history_files._lines("A=1\r\nB=2\rC=3\nD=4\n") == ["A=1", "B=2\rC=3", "D=4"]
+    assert history_files._lines("A=1") == ["A=1"]
+    assert history_files._lines("") == []
+
+
+def test_a_value_encrypted_in_a_crlf_commit_is_still_dropped(repo: Path):
+    """Each ``\\r\\n`` ends one line, and its ``\\r`` is no part of the value judged."""
+    encrypted = _commit_bytes(
+        repo,
+        ".env.production",
+        b'SETTING_1=value1\r\nAWS_ACCESS_KEY_ID="' + _CIPHERTEXT.encode() + b'"\r\n',
+    )
+    (repo / ".env.production").write_text(f"SETTING_1=value1\nAWS_ACCESS_KEY_ID={_KEY}\n")
+
+    assert _reported(repo, [_finding(repo, encrypted)]) == []
+
+
 def test_a_file_read_again_is_not_read_from_git_again(repo: Path, monkeypatch: pytest.MonkeyPatch):
     """Findings in a few (file, commit) pairs, interleaved, read each pair from git once.
 
@@ -259,12 +359,12 @@ def test_a_file_read_again_is_not_read_from_git_again(repo: Path, monkeypatch: p
     reads: list[str] = []
     real = history_files.file_at_commit
 
-    def counted(file_path: Path, commit: str) -> str | None:
+    def counted(root: Path, relative_path: PurePath, commit: str) -> str | None:
         reads.append(commit)
-        return real(file_path, commit)
+        return real(root, relative_path, commit)
 
     monkeypatch.setattr(history_files, "file_at_commit", counted)
-    committed = CommittedFiles(history=True)
+    committed = CommittedFiles(history=True, scanned=[repo])
 
     for _ in range(3):
         for number, commit in enumerate(commits):
@@ -279,7 +379,7 @@ def test_the_files_kept_in_memory_stay_within_their_budget(
     """A history of large files does not keep every revision a finding points at."""
     commits = [_commit(repo, ".env.production", f"SETTING_2=value{n}") for n in range(10)]
     monkeypatch.setattr(history_files, "_CACHED_CHARACTERS", 200)
-    committed = CommittedFiles(history=True)
+    committed = CommittedFiles(history=True, scanned=[repo])
 
     for number, commit in enumerate(commits):
         assert committed.line(repo / ".env.production", commit, 2) == f"SETTING_2=value{number}"
@@ -294,7 +394,7 @@ def test_the_files_read_are_freed_with_the_scan(repo: Path):
     engine = ScanEngine(GuardConfig(use_native=False, use_gitleaks=False, include_git_history=True))
     gc.disable()
     try:
-        committed = CommittedFiles(history=True)
+        committed = CommittedFiles(history=True, scanned=[repo])
         files = _EncryptedFiles(committed)
         assert files.keeps(_finding(repo, commit)) is True
         assert committed.line(repo / ".env.production", commit, 2)

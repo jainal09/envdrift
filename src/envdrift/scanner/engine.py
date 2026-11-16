@@ -892,7 +892,8 @@ class ScanEngine:
 
         # A history finding is judged by its file in the commit it was found in, not by
         # today's file: that line may now hold an encrypted value or an ignore comment (#1014).
-        committed = CommittedFiles(history=self.config.include_git_history)
+        # The commit is read from the repository each scanned path is in, as the scanners did.
+        committed = CommittedFiles(history=self.config.include_git_history, scanned=paths)
 
         # Filter out findings from encrypted files (dotenvx/SOPS markers)
         # Encrypted files contain ciphertext that triggers false positives
@@ -1159,8 +1160,9 @@ class ScanEngine:
 
         Args:
             findings: List of findings to filter.
-            committed: The files of the commits history findings were made in. Defaults to
-                those of this engine's scan.
+            committed: The files of the commits history findings were made in. By default
+                no scanned repository is known, so no commit is read and each history finding
+                is kept.
 
         Returns:
             Filtered list excluding findings on encrypted content.
@@ -1264,8 +1266,8 @@ class ScanEngine:
 
         Args:
             findings: List of findings to filter.
-            committed: Says which findings a history scan made in an old commit. Defaults
-                to those of this engine's scan.
+            committed: Says which findings a history scan made in an old commit. By default
+                it is told by this engine's configuration.
 
         Returns:
             Filtered list excluding findings from gitignored files.

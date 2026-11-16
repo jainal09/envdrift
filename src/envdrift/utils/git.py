@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import subprocess  # nosec B404
 from collections.abc import Iterable, Mapping
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from envdrift.utils.deadline import run_tool
 
@@ -390,52 +390,27 @@ def _git_entry_above(path: Path) -> Path | None:
     return None
 
 
-def file_at_commit(file_path: Path, commit: str) -> str | None:
-    """The text of ``file_path`` as ``commit`` holds it; None when git cannot show it.
+def file_at_commit(root: Path, relative_path: PurePath, commit: str) -> str | None:
+    """The text of ``relative_path`` in the repository at ``root`` as ``commit`` holds it.
 
-    The file is named by its path in the repository, taken from the path as given: no symbolic
-    link on the way is followed, at the file or at a folder, as the commit may hold a file at
-    that path where a link is today (#1014). A path that reaches its repository only through a
-    folder link has None too, as no root can be told for it.
+    None when git cannot show it. The file is named by its path in the repository, so no
+    symbolic link made since is followed (#1014). Its bytes are read as they are: no line
+    break is translated, so a lone ``\\r`` stays in its line, as git and the scanners count
+    lines at ``\\n`` only.
     """
-    located = _in_work_tree(file_path)
-    if located is None:
-        return None
-    root, relative_path = located
     try:
         result = run_tool(
             ["git", "show", f"{commit}:{relative_path.as_posix()}"],
             cwd=str(root),
             env=_hook_env(root),
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="surrogateescape",
             timeout=10,
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
-    return result.stdout if result.returncode == 0 else None
-
-
-def _in_work_tree(file_path: Path) -> tuple[Path, Path] | None:
-    """The root of the work tree ``file_path`` is in and its path there, both as written.
-
-    No link is resolved: the root is the nearest folder above the file, on its absolute path as
-    given, that holds a ``.git`` (a repository, or the file that names one) and is not reached
-    through a folder link. Through a link, a ``.git`` may be another folder's: with ``prod``
-    linked to the root, ``prod/.git`` exists, and ``prod/app.env`` would be read as the root's
-    ``app.env``. A path whose only ``.git`` is below a link has no root that can be told: None.
-    """
-    # normpath folds "a/../b" without resolving a link, as Path.resolve() would.
-    path = Path(os.path.normpath(Path(file_path).absolute()))
-    root = None
-    for folder in reversed(path.parents):  # from the top, down to the link nearest it
-        if folder.is_symlink():
-            break
-        if (folder / ".git").exists():
-            root = folder
-    return None if root is None else (root, path.relative_to(root))
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode("utf-8", errors="surrogateescape")
 
 
 def _literal_pathspec(relative_path: Path) -> str:

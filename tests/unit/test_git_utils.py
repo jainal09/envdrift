@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess  # nosec B404
 import sys
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePath, PureWindowsPath
 from unittest.mock import patch
 
 import pytest
@@ -29,7 +29,8 @@ def _repo_with(tmp_path: Path, files: dict[str, str]) -> Path:
     """A repository at ``tmp_path`` with ``files`` (name: content) in one commit."""
     for name, content in files.items():
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / name).write_text(content)
+        # As bytes, so the line breaks are the same on every platform.
+        (tmp_path / name).write_bytes(content.encode())
     for args in (
         ["init", "-q"],
         ["config", "user.email", "test@test.com"],
@@ -257,36 +258,31 @@ class TestFileAtCommit:
         commit = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
         ).stdout.strip()
-        (repo / "app.env").write_text("A=2\n")
+        (repo / "app.env").write_bytes(b"A=2\n")
 
-        assert file_at_commit(repo / "app.env", commit) == "A=1\n"
+        assert file_at_commit(repo, PurePath("app.env"), commit) == "A=1\n"
 
-    def test_a_file_outside_any_work_tree_has_none(self, tmp_path: Path):
-        (tmp_path / "app.env").write_text("A=1\n")
+    def test_no_line_break_is_translated(self, tmp_path: Path):
+        """A lone ``\\r`` stays in its line: git and the scanners count lines at ``\\n`` only."""
+        repo = _repo_with(tmp_path, {"app.env": "A=1\rB=2\nC=3\n"})
 
-        assert file_at_commit(tmp_path / "app.env", "0123abcd") is None
+        assert file_at_commit(repo, PurePath("app.env"), "HEAD") == "A=1\rB=2\nC=3\n"
+
+    def test_a_folder_that_is_no_repository_has_none(self, tmp_path: Path):
+        (tmp_path / "app.env").write_bytes(b"A=1\n")
+
+        assert file_at_commit(tmp_path, PurePath("app.env"), "0123abcd") is None
 
     def test_a_commit_that_does_not_hold_the_file_has_none(self, tmp_path: Path):
         repo = _repo_with(tmp_path, {"app.env": "A=1\n"})
 
-        assert file_at_commit(repo / "other.env", "HEAD") is None
+        assert file_at_commit(repo, PurePath("other.env"), "HEAD") is None
 
     def test_git_that_cannot_run_gives_none(self, tmp_path: Path):
         repo = _repo_with(tmp_path, {"app.env": "A=1\n"})
 
         with patch("envdrift.utils.git.run_tool", side_effect=OSError("no git")):
-            assert file_at_commit(repo / "app.env", "HEAD") is None
-
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="a symbolic link needs a privilege on Windows"
-    )
-    def test_a_repository_named_only_through_a_folder_link_has_none(self, tmp_path: Path):
-        """Below a link a ``.git`` may be another folder's, so no root can be told: None."""
-        repo = _repo_with(tmp_path / "repo", {"app.env": "A=1\n"})
-        (tmp_path / "link").symlink_to(repo, target_is_directory=True)
-
-        assert file_at_commit(repo / "app.env", "HEAD") == "A=1\n"
-        assert file_at_commit(tmp_path / "link" / "app.env", "HEAD") is None
+            assert file_at_commit(repo, PurePath("app.env"), "HEAD") is None
 
 
 class TestGetFileFromGit:
