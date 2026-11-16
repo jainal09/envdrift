@@ -366,6 +366,26 @@ def _value_is_ciphertext(value: str) -> bool:
     return v.startswith(_DOTENVX_CIPHERTEXT_PREFIX) or v.startswith(_SOPS_CIPHERTEXT_PREFIX)
 
 
+# python-dotenv's unquoted-value comment: a "#" after whitespace starts it.
+_UNQUOTED_COMMENT_RE = re.compile(r"\s+#.*")
+
+
+def _value_is_only_ciphertext(value: str) -> bool:
+    """Return True if an assigned VALUE is ciphertext with no plaintext glued after it.
+
+    dotenvx ciphertext is base64, which never holds a ``#``. dotenvx ends an unquoted
+    value at its first ``#``, so ``KEY=hunter2#Spring`` became
+    ``KEY=encrypted:...#Spring``: ciphertext, then plaintext dotenvx read as a comment.
+    python-dotenv reads that ``#`` as value text (a comment starts only at a ``#`` after
+    whitespace), so such a value still holds plaintext (#947). It is ciphertext all the
+    same for ``is_file_encrypted``: dotenvx decrypts it.
+    """
+    v = _unquote_value(value)
+    if v.startswith(_DOTENVX_CIPHERTEXT_PREFIX):
+        return "#" not in _UNQUOTED_COMMENT_RE.sub("", v)
+    return v.startswith(_SOPS_CIPHERTEXT_PREFIX)
+
+
 def _line_has_plaintext_secret(line: str) -> bool:
     """Return True if a single ``.secret`` line is a PLAINTEXT secret assignment.
 
@@ -373,13 +393,14 @@ def _line_has_plaintext_secret(line: str) -> bool:
     artifact (a public key is not a secret) are filtered by ``_is_secret_var_line``
     and return False. Among real secret assignments, empty values
     (``KEY=`` / ``KEY=""`` / ``KEY=''``) carry no secret to leak, and ciphertext
-    values are already encrypted; only a non-empty plaintext value returns True.
+    values are already encrypted; only a non-empty plaintext value, or ciphertext
+    with plaintext glued after a ``#`` (#947), returns True.
     """
     if not _is_secret_var_line(line):
         return False
     _, _, value = line.strip().partition("=")
     # Empty assignment (KEY=, KEY="", KEY='') carries no secret to leak.
-    return bool(_unquote_value(value)) and not _value_is_ciphertext(value)
+    return bool(_unquote_value(value)) and not _value_is_only_ciphertext(value)
 
 
 def has_plaintext_secret_value(file_path: Path) -> bool:

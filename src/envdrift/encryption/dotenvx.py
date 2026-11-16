@@ -228,6 +228,7 @@ class DotenvxEncryptionBackend(EncryptionBackend):
             DotenvxError,
             DotenvxFilenameError,
             DotenvxKeyError,
+            DotenvxValueError,
         )
 
         try:
@@ -239,9 +240,10 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 cwd=kwargs.get("cwd"),
                 environment=kwargs.get("environment"),
             )
-        except DotenvxKeyError as e:
+        except (DotenvxKeyError, DotenvxValueError) as e:
             # A refusal, not a crash: the folder's key could not be reused (or
-            # dotenvx did not reuse it) and both files were left as they were.
+            # dotenvx did not reuse it), or dotenvx would leave part of a value
+            # in plaintext (#947), and both files were left as they were.
             return EncryptionResult(success=False, message=str(e), file_path=env_file)
         except (DotenvxError, DotenvxFilenameError) as e:
             # DotenvxFilenameError: the wrapper refused pre-flight (e.g. a

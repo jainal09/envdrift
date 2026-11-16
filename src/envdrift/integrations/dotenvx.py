@@ -37,6 +37,7 @@ from envdrift.integrations.dotenvx_keys import (
     KeyReusePlan,
     KeyTarget,
     assignment_values,
+    comment_cut_names,
     distinct_keys,
     dotenvx_key_names,
     has_encrypted_values,
@@ -133,6 +134,15 @@ class DotenvxKeyError(DotenvxError):
     the one the folder holds (#938), or when normalizing a custom filename
     would write one key over a different one. The message describes the state
     of the files, so every command can show it as it is.
+    """
+
+
+class DotenvxValueError(DotenvxError):
+    """envdrift refused to encrypt a value dotenvx would not encrypt whole.
+
+    Raised before dotenvx runs, so the file is left as it was: dotenvx ends an
+    unquoted value at a ``#`` that touches it and would leave the rest of the
+    value in the file as a plaintext comment (#947).
     """
 
 
@@ -1352,6 +1362,8 @@ class DotenvxWrapper:
             DotenvxFilenameError: If the filename is not compatible with dotenvx.
             DotenvxKeyError: If the keys file cannot tell which key to use, or
                 dotenvx did not use it. Both files are left as they were.
+            DotenvxValueError: If dotenvx would end an unquoted value at a ``#``
+                and leave the rest of it in plaintext. Nothing is changed.
             DotenvxError: If a file cannot be read or the encryption command fails.
         """
         env_file = Path(env_file)
@@ -1433,6 +1445,14 @@ class DotenvxWrapper:
                 f"replace its undecodable bytes. Nothing was changed."
             ) from None
         env_text = env_text.replace("\r\n", "\n").replace("\r", "\n")
+        cut = comment_cut_names(env_text)
+        if cut:
+            raise DotenvxValueError(
+                f"Refusing to encrypt {env_file}: dotenvx ends an unquoted value at a `#` "
+                "that touches it and keeps the rest as a plaintext comment, so it would "
+                f"leave part of {', '.join(cut)} unencrypted. Put each of those values in "
+                "quotes (for example KEY='a#b'), then encrypt again. Nothing was changed."
+            )
         env_text = self._clean_mismatched_header_text(env_text, env_file.name, environment)
         if environment:
             key_name = f"DOTENV_PRIVATE_KEY_{environment.upper()}"

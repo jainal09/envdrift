@@ -201,6 +201,31 @@ def has_encrypted_values(text: str) -> bool:
     )
 
 
+def comment_cut_names(text: str) -> list[str]:
+    """Return the names whose unquoted value dotenvx ends at a ``#`` touching it (#947).
+
+    dotenvx ends an unquoted value at its first ``#`` and reads the rest of the line
+    as a comment, wherever that ``#`` is. python-dotenv, which envdrift follows,
+    starts a comment only at a ``#`` after whitespace, so ``PASSWORD=hunter2#Spring``
+    holds ``hunter2#Spring``: dotenvx would encrypt ``hunter2`` and leave ``#Spring``
+    in the file as plaintext. A ``#`` right after ``=`` (``COLOR=#FF0000``) makes the
+    whole value a comment to dotenvx. Inside quotes a ``#`` is value text to both.
+    """
+    flat = re.sub(r"\r\n?", "\n", text)
+    names: list[str] = []
+    for match in _LINE_RE.finditer(flat):
+        value = match.group(2)
+        token = (value or "").strip(_JS_SPACE_CHARS)
+        if len(token) >= 2 and token[0] in ("'", '"', "`") and token[-1] == token[0]:
+            continue
+        # The unquoted value runs to the first "#"; without a value, the "#" follows "=".
+        hash_at = match.end(2) if value is not None else flat.find("#", match.end(1), match.end())
+        touches = hash_at > 0 and flat[hash_at - 1] not in _JS_SPACE_CHARS
+        if flat[hash_at : hash_at + 1] == "#" and touches and match.group(1) not in names:
+            names.append(match.group(1))
+    return names
+
+
 def unverifiable_ciphertext(text: str) -> bool:
     """Whether ``text`` holds ciphertext but no public key to tie a private key to it.
 

@@ -64,6 +64,11 @@ Two backends are supported:
 - **dotenvx** — Simple, file-based encryption with `.env.keys`
 - **SOPS** — Enterprise-grade encryption with KMS integration
 
+dotenvx reads an unquoted value only up to its first `#`, while envdrift reads it the
+python-dotenv way described above. So envdrift refuses to encrypt with dotenvx a value
+whose `#` touches it (`PASSWORD=abc#def`) rather than leave the part after the `#` in
+plaintext: quote such a value first.
+
 See [Encryption Backends](encryption-backends.md) for a detailed comparison.
 
 ### 3. Vault Sync

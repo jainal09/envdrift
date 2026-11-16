@@ -62,6 +62,15 @@ exit code (dotenvx can exit `0` without encrypting):
 - **Gitignores the key file on failure too.** `.env.keys` is added to `.gitignore`
   after a run that fails its outcome check as well, since dotenvx may already have
   written a new private key to it.
+- **Refuses a value dotenvx would cut at a `#`.** dotenvx ends an unquoted value at its
+  first `#` and keeps the rest of the line as a comment, while python-dotenv (and so
+  envdrift) starts a comment only at a `#` after whitespace. `DB_PASSWORD=hunter2#Spring2024!`
+  would be encrypted as `hunter2`, with `#Spring2024!` left in the file as plaintext, and
+  `COLOR=#FF0000` not at all. dotenvx `encrypt`, `lock`, `vault-push` and `push` refuse such
+  a file before dotenvx runs, name the variables, and change nothing: put each value in
+  quotes (`DB_PASSWORD='hunter2#Spring2024!'`) and encrypt again. `NOTE=plain # comment`
+  is fine. `encrypt --check` reports a file dotenvx already cut this way as holding
+  plaintext, not as fully encrypted.
 - **Encrypts with the key the folder already holds.** dotenvx 2.x creates a brand-new
   key whenever a file has no `DOTENV_PUBLIC_KEY` header, even when `.env.keys` already
   holds the file's key, and the file then needs a key only this machine has. So before

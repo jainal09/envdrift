@@ -910,8 +910,11 @@ class EnvParser:
             return EncryptionStatus.EMPTY, None
 
         # Check for dotenvx encrypted format, inside the backticks dotenvx keeps
-        # around a backtick-quoted value's ciphertext (#950)
-        if self.DOTENVX_ENCRYPTED_PATTERN.match(strip_backtick_quotes(value)):
+        # around a backtick-quoted value's ciphertext (#950). The ciphertext is
+        # base64, which never holds a "#": one in the value is plaintext that
+        # dotenvx read as a comment and left unencrypted (#947).
+        inner = strip_backtick_quotes(value)
+        if self.DOTENVX_ENCRYPTED_PATTERN.match(inner) and "#" not in inner:
             return EncryptionStatus.ENCRYPTED, "dotenvx"
 
         # Check for SOPS encrypted format
