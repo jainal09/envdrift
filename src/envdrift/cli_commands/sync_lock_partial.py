@@ -61,13 +61,15 @@ def _lock_partial_secret(
         encrypt_secret_file,
         is_fully_encrypted,
     )
+    from envdrift.integrations.dotenvx_keys import plain_keys_apply
 
     if not secret_file.exists():
         console.print(
             styled_text("  [dim]=[/dim] {} [dim]- skipped (not found)[/dim]", secret_file)
         )
         return "missing"
-    if is_fully_encrypted(secret_file):
+    # Partial encryption encrypts with dotenvx, which leaves its _PLAIN keys plain (#1048).
+    if is_fully_encrypted(secret_file, plain_keys=plain_keys_apply()):
         if not context.request.check_only:
             encrypt_secret_file(env_config)
         console.print(

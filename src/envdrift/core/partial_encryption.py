@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, NamedTuple, TypedDict
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.env_files import _is_excluded_env_file
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError, DotenvxWrapper
+from envdrift.integrations.dotenvx_keys import is_plain_key, plain_keys_apply
 from envdrift.sync.operations import atomic_write
 from envdrift.utils.git import git_location_for, literal_pathspec_env
 
@@ -386,7 +387,7 @@ def _value_is_only_ciphertext(value: str) -> bool:
     return v.startswith(_SOPS_CIPHERTEXT_PREFIX)
 
 
-def _line_has_plaintext_secret(line: str) -> bool:
+def _line_has_plaintext_secret(line: str, *, plain_keys: bool = False) -> bool:
     """Return True if a single ``.secret`` line is a PLAINTEXT secret assignment.
 
     Comments, blank lines, non-assignments and dotenvx's ``DOTENV_PUBLIC_KEY_*``
@@ -395,15 +396,30 @@ def _line_has_plaintext_secret(line: str) -> bool:
     (``KEY=`` / ``KEY=""`` / ``KEY=''``) carry no secret to leak, and ciphertext
     values are already encrypted; only a non-empty plaintext value, or ciphertext
     with plaintext glued after a ``#`` (#947), returns True.
+
+    With ``plain_keys``, a key dotenvx's encrypt never encrypts (``is_plain_key``;
+    an ``export`` prefix leaves the name's ``_PLAIN`` end as it is) is not leftover
+    plaintext either (#1048). The default is SOPS's view, which has no such rule.
     """
     if not _is_secret_var_line(line):
         return False
-    _, _, value = line.strip().partition("=")
+    name, _, value = line.strip().partition("=")
+    if plain_keys and is_plain_key(name.strip()):
+        return False
     # Empty assignment (KEY=, KEY="", KEY='') carries no secret to leak.
     return bool(_unquote_value(value)) and not _value_is_only_ciphertext(value)
 
 
-def has_plaintext_secret_value(file_path: Path) -> bool:
+def _dotenvx_plain_keys(content: str, plain_keys: bool) -> bool:
+    """Whether the ``_PLAIN`` exemption applies to ``content`` (``has_plaintext_secret_value``).
+
+    Only for a caller that checks a dotenvx encryption, and never for SOPS ciphertext:
+    SOPS has no ``_PLAIN`` convention, and a SOPS-encrypted file keeps its own rules.
+    """
+    return plain_keys and _SOPS_CIPHERTEXT_PREFIX not in content
+
+
+def has_plaintext_secret_value(file_path: Path, *, plain_keys: bool = False) -> bool:
     """Return True if the file still holds at least one PLAINTEXT secret value.
 
     A "plaintext secret value" is a real variable assignment whose value is not
@@ -423,6 +439,11 @@ def has_plaintext_secret_value(file_path: Path) -> bool:
     ``.secret`` file and the generated combined file. Callers force a re-encrypt
     when this returns True (``dotenvx encrypt`` is idempotent: it re-encrypts
     only the plaintext values and leaves existing ciphertext untouched).
+
+    ``plain_keys`` is for a caller that judges what dotenvx encrypts, passed as
+    ``plain_keys_apply()``: dotenvx never encrypts a ``_PLAIN`` key (#1048), so its
+    value is not plaintext the encryption missed. A file holding SOPS ciphertext
+    keeps SOPS's rules all the same.
     """
     if not file_path.exists():
         return False
@@ -432,7 +453,11 @@ def has_plaintext_secret_value(file_path: Path) -> bool:
     # cannot make a plaintext value look like ciphertext.
     content = file_path.read_text(encoding="utf-8", errors="replace")
 
-    return any(_line_has_plaintext_secret(raw_line) for raw_line in content.splitlines())
+    plain_keys = _dotenvx_plain_keys(content, plain_keys)
+    return any(
+        _line_has_plaintext_secret(raw_line, plain_keys=plain_keys)
+        for raw_line in content.splitlines()
+    )
 
 
 def file_has_assignment(file_path: Path) -> bool:
@@ -513,7 +538,7 @@ def is_file_encrypted(file_path: Path) -> bool:
     return "sops_version" in content and _SOPS_CIPHERTEXT_PREFIX in content
 
 
-def is_fully_encrypted(file_path: Path) -> bool:
+def is_fully_encrypted(file_path: Path, *, plain_keys: bool = False) -> bool:
     """Return True only when the file is FULLY encrypted (push would no-op).
 
     Fully encrypted means ciphertext is present AND no leftover plaintext secret
@@ -524,9 +549,13 @@ def is_fully_encrypted(file_path: Path) -> bool:
 
     This is the canonical shared predicate: the push paths, ``envdrift lock``
     and the dry-run ``--check`` sync test all use it so they agree on what
-    "already pushed/encrypted" means.
+    "already pushed/encrypted" means. Those callers encrypt with dotenvx and pass
+    ``plain_keys=plain_keys_apply()``: a ``_PLAIN`` key a push would leave plaintext
+    is no reason to call the file unpushed (#1048).
     """
-    return is_file_encrypted(file_path) and not has_plaintext_secret_value(file_path)
+    return is_file_encrypted(file_path) and not has_plaintext_secret_value(
+        file_path, plain_keys=plain_keys
+    )
 
 
 # Backward-compatible alias for the pre-#507 private name (in-flight branches
@@ -627,8 +656,16 @@ def combine_files(
         atomic_write(combined_file, new_content, max_permissions=0o600)
         in_sync = True
 
-    # Count real secret variables (excludes comments and dotenvx public-key line)
-    secret_var_count = sum(1 for line in secret_lines if _is_secret_var_line(line))
+    # Count real secret variables (excludes comments and dotenvx public-key line).
+    # push reports them as encrypted, so a key dotenvx leaves plaintext by its
+    # _PLAIN rule is not counted (#1048), unless SOPS encrypted the file.
+    plain_keys = _dotenvx_plain_keys(secret_file_content or "", plain_keys_apply())
+    secret_var_count = sum(
+        1
+        for line in secret_lines
+        if _is_secret_var_line(line)
+        and not (plain_keys and is_plain_key(line.strip().partition("=")[0].strip()))
+    )
 
     return {
         "clear_lines": len(clear_lines),
@@ -1044,7 +1081,8 @@ def _encrypt_and_verify(dotenvx: DotenvxWrapper, file: Path) -> None:
         dotenvx.encrypt(file)
     except (DotenvxError, DotenvxFilenameError) as e:
         raise PartialEncryptionError.encrypt_failed(file, e) from e
-    if has_plaintext_secret_value(file):
+    # dotenvx ran in the working directory, and leaves its _PLAIN keys plain (#1048).
+    if has_plaintext_secret_value(file, plain_keys=plain_keys_apply()):
         raise PartialEncryptionError.encryption_did_not_take_effect(file)
 
 
@@ -1068,8 +1106,9 @@ def encrypt_secret_file(env_config: PartialEncryptionEnvironmentConfig) -> None:
     # values already encrypted, one freshly-added plaintext) must still be
     # re-encrypted — otherwise the new plaintext secret leaks into the committed
     # .secret file and the combined file. is_file_encrypted() returns True on
-    # the first ciphertext value, so it alone cannot tell the two apart.
-    if is_fully_encrypted(secret_file):
+    # the first ciphertext value, so it alone cannot tell the two apart. A _PLAIN
+    # key, which dotenvx would leave as it is, is no reason to run it (#1048).
+    if is_fully_encrypted(secret_file, plain_keys=plain_keys_apply()):
         # Already fully encrypted (e.g. push run twice) — still lift any stale
         # skip-worktree protection so the encrypted diff is visible to git.
         _git_unskip_worktree(secret_file)
@@ -1160,9 +1199,12 @@ def push_partial_encryption(
         # mirrors the encrypt-path skip guard (is_file_encrypted AND no leftover
         # plaintext secret): a mixed-state file (some ciphertext, one freshly
         # added plaintext value) trips is_file_encrypted but would still be
-        # re-encrypted, so it must report out of sync.
+        # re-encrypted, so it must report out of sync. The same _PLAIN rule as the
+        # real push applies (#1048).
         secret_file = Path(env_config.secret_file)
-        if secret_file.exists() and not is_fully_encrypted(secret_file):
+        if secret_file.exists() and not is_fully_encrypted(
+            secret_file, plain_keys=plain_keys_apply()
+        ):
             stats["in_sync"] = False
         return stats
 
@@ -1294,9 +1336,10 @@ def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bo
     ``has_plaintext_secret_value`` catches the leak.
 
     Returns False (already-encrypted) without touching ``dotenvx`` when the file
-    is fully encrypted. In ``check`` mode no file is modified.
+    is fully encrypted, a ``_PLAIN`` key dotenvx leaves plain aside (#1048). In
+    ``check`` mode no file is modified.
     """
-    if is_fully_encrypted(file):
+    if is_fully_encrypted(file, plain_keys=plain_keys_apply()):
         if not check:
             # Already fully encrypted — lift any stale skip-worktree protection
             # so the encrypted diff is visible to git.

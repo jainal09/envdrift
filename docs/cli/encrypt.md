@@ -55,6 +55,14 @@ exit code (dotenvx can exit `0` without encrypting):
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails
   loudly instead of printing `[OK]`.
+- **Leaves dotenvx's `_PLAIN` keys to dotenvx.** dotenvx never encrypts a key whose name
+  ends with `_PLAIN` (case-sensitive: `NOTE_PLAIN` and `_PLAIN`, not `note_plain`),
+  unless an `Envfile` in the directory it runs in sets its own policy. So with the
+  dotenvx backend, the outcome check, `push`, `push --check`, `lock` and `lock --check`
+  do not count such a value as plaintext the encryption missed, and `push` does not count
+  it as encrypted. It is still plaintext: `encrypt --check` and `guard` keep reporting a
+  secret-looking value in one, such as `API_KEY_PLAIN=sk_live_...`. With an `Envfile`,
+  every plaintext value counts again. SOPS has no `_PLAIN` rule, so nothing changes for it.
 - **Reads ciphertext in every quote style dotenvx keeps.** dotenvx keeps a value's
   quotes around its ciphertext, backticks included (`` API_KEY=`encrypted:...` ``), so
   the outcome check, `encrypt --check` and `decrypt` read ciphertext inside `"`, `'` or

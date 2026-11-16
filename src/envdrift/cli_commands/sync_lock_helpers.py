@@ -422,15 +422,27 @@ def _handle_sops_recipients(
     return True
 
 
+def _plaintext_values_remain(env_file: Path, provider: EncryptionProvider) -> bool:
+    """Whether an encrypted ``env_file`` still holds values ``provider`` would encrypt.
+
+    dotenvx never encrypts a ``_PLAIN`` key, so for it that key is not left over
+    (#1048). SOPS has no such rule, and keeps its own check.
+    """
+    from envdrift.core.partial_encryption import has_plaintext_secret_value
+    from envdrift.encryption import EncryptionProvider
+    from envdrift.integrations.dotenvx_keys import plain_keys_apply
+
+    plain_keys = provider == EncryptionProvider.DOTENVX and plain_keys_apply()
+    return has_plaintext_secret_value(env_file, plain_keys=plain_keys)
+
+
 def _handle_already_encrypted(
     file: _LockFile,
     content: str,
     context: _LockEncryptContext,
     state: _LockState,
 ) -> bool:
-    from envdrift.core.partial_encryption import has_plaintext_secret_value
-
-    if has_plaintext_secret_value(file.env_file):
+    if _plaintext_values_remain(file.env_file, context.encryption.provider):
         state.warnings.append(f"{file.env_file}: partially encrypted, plaintext values remain")
         if context.request.check_only:
             _print_line(

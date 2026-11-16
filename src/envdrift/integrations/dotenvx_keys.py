@@ -77,6 +77,34 @@ _SURROUNDING_QUOTES_RE = re.compile(_BOL + r"(['\"`])([\s\S]*)\1" + _EOL)
 PRIVATE_KEY_PREFIX = "DOTENV_PRIVATE_KEY"
 PUBLIC_KEY_PREFIX = "DOTENV_PUBLIC_KEY"
 ENCRYPTED_PREFIX = "encrypted:"
+# dotenvx's encrypt leaves a key whose name ends with this as plaintext (#1048).
+PLAIN_KEY_SUFFIX = "_PLAIN"
+# The policy file dotenvx reads from its working directory when there is one.
+ENVFILE_NAME = "Envfile"
+
+
+def is_plain_key(name: str) -> bool:
+    """Return True if dotenvx's encrypt leaves the key ``name`` as plaintext (#1048).
+
+    dotenvx 2.38.2 tests the name with ``/_PLAIN$/``, case-sensitive: ``NOTE_PLAIN``
+    and a bare ``_PLAIN`` stay plaintext, while ``note_plain``, ``NOTE_plain``,
+    ``PLAIN`` and ``X_PLAIN_Y`` are encrypted, whatever the value's quotes or an
+    ``export``. It skips them only when :func:`plain_keys_apply`.
+    """
+    return name.endswith(PLAIN_KEY_SUFFIX)
+
+
+def plain_keys_apply(cwd: Path | str | None = None) -> bool:
+    """Return True if dotenvx's encrypt, run in ``cwd``, leaves the ``_PLAIN`` keys plain.
+
+    It does unless it reads an ``Envfile`` in that directory (the current one by
+    default): then the Envfile's policy decides which keys are encrypted, and by
+    default every key is, ``_PLAIN`` ones included. Any entry under that name
+    counts, since dotenvx fails on one it cannot read instead of applying the rule.
+    """
+    folder = Path(cwd) if cwd else Path()
+    return not os.path.lexists(folder / ENVFILE_NAME)
+
 
 # secp256k1 domain parameters (SEC 2, section 2.4.1).
 _P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F

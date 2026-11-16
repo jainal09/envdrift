@@ -40,6 +40,16 @@ API_KEY=encrypted:BD9XKwm...
 DEBUG=encrypted:BD2QpRf...
 ```
 
+A key whose name ends with `_PLAIN` is the exception: dotenvx never encrypts it, so
+`NOTE_PLAIN=hello` stays as written. The test is case-sensitive (`note_plain` is
+encrypted, a bare `_PLAIN` is not) and ignores quotes and `export`. It does not apply when
+an `Envfile` is in the directory dotenvx runs in: that file's policy then decides, and by
+default encrypts every key. envdrift follows the same rule when it checks a dotenvx
+encryption, so such a value is not reported as plaintext the encryption missed. It is
+still plaintext, though: `encrypt --check` and `guard` keep reporting a secret-looking value
+in one. SOPS has no such rule; it leaves the keys ending in its `unencrypted_suffix`
+(`_unencrypted` by default) as plaintext instead.
+
 ### Advantages
 
 - Simple setup, no external dependencies

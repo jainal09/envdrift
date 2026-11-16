@@ -149,10 +149,10 @@ class TestFailedEncryptStillProtectsTheKeyDotenvxWrote:
     def test_key_written_during_a_failed_encrypt_is_gitignored(
         self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
     ) -> None:
-        # dotenvx never encrypts a ``*_PLAIN`` key, so the value stays plaintext after it
-        # encrypted API_KEY with a key it just created. Whatever encrypt then reports, that
-        # key must not be left for ``git add .`` to stage.
-        (git_repo / ".env").write_text(f"API_KEY={_API_KEY}\nNOTE_PLAIN=hello\n", encoding="utf-8")
+        # python-dotenv loads CAFÉ, but dotenvx reads only ASCII names and leaves its value
+        # plaintext after it encrypted API_KEY with a key it just created, so encrypt fails.
+        # That key must not be left for ``git add .`` to stage.
+        (git_repo / ".env").write_text(f"API_KEY={_API_KEY}\nCAFÉ=hello\n", encoding="utf-8")
 
         result = _run_envdrift(
             ["encrypt", ".env"],
@@ -161,6 +161,7 @@ class TestFailedEncryptStillProtectsTheKeyDotenvxWrote:
             envdrift_cmd=envdrift_cmd,
         )
 
+        assert result.returncode == 1, _flat(result)
         assert (git_repo / ".env.keys").is_file(), _flat(result)
         assert _is_ignored(git_repo, ".env.keys"), (
             f"exit {result.returncode}, key left unprotected: {_flat(result)}"

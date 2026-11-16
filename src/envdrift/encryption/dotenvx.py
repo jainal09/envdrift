@@ -15,6 +15,7 @@ from envdrift.encryption.base import (
     EncryptionStatus,
 )
 from envdrift.integrations.dotenvx import is_dotenvx_safe_filename
+from envdrift.integrations.dotenvx_keys import plain_keys_apply
 
 if TYPE_CHECKING:
     from envdrift.core.partial_encryption import DecryptSnapshot
@@ -256,8 +257,9 @@ class DotenvxEncryptionBackend(EncryptionBackend):
         # exit code. dotenvx can exit 0 *without* encrypting when the private key
         # is missing or malformed (e.g. .env.keys is a directory, garbage, or a
         # mismatched key); it only prints a warning to stderr. Re-read the file
-        # and confirm no plaintext value survived (envdrift #443).
-        if has_plaintext_secret_value(env_file):
+        # and confirm no plaintext value survived (envdrift #443). A _PLAIN key,
+        # which dotenvx never encrypts where it ran, is not one that survived (#1048).
+        if has_plaintext_secret_value(env_file, plain_keys=plain_keys_apply(kwargs.get("cwd"))):
             return EncryptionResult(
                 success=False,
                 message=(
