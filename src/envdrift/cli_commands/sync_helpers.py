@@ -511,12 +511,19 @@ def _run_pull_decrypt_tasks(context: _PullDecryptContext) -> None:
 
 
 def _put_back_original(task: _DecryptTask) -> str:
-    """Write back the bytes the file had before pull rewrote its header; say if that failed."""
+    """Write back the bytes the file had before pull rewrote its header; say if that failed.
+
+    The bytes go back whole or not at all (a temp file renamed over the file a write to
+    ``env_file`` lands in, so a symlink stays a symlink): written in place, a write that
+    failed part way left the file cut short.
+    """
+    from envdrift.sync.operations import atomic_write
+
     if task.original is None:
         return ""
     try:
         if task.env_file.read_bytes() != task.original:
-            task.env_file.write_bytes(task.original)
+            atomic_write(task.env_file.resolve(), task.original)
     except OSError as exc:
         return f" envdrift could not put back its dotenvx header: {exc}"
     return ""

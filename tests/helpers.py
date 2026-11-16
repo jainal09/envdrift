@@ -200,8 +200,59 @@ def _as_nobody_if_root() -> Iterator[None]:
         nobody = pwd.getpwnam("nobody").pw_uid
     except KeyError:
         pytest.skip("running as root, with no 'nobody' account to drop privileges to")
-    os.seteuid(nobody)
+    try:
+        os.seteuid(nobody)
+    except OSError as exc:  # a container without CAP_SETUID, for one
+        pytest.skip(f"running as root, but cannot drop privileges to 'nobody': {exc}")
     try:
         yield
     finally:
         os.seteuid(0)
+
+
+@contextlib.contextmanager
+def file_size_limit(size: int) -> Iterator[None]:
+    """Make every write past ``size`` bytes of a file fail, for real (``RLIMIT_FSIZE``).
+
+    The kernel refuses the write with ``EFBIG``, as a full disk refuses one with
+    ``ENOSPC``; with ``SIGXFSZ`` ignored the process gets the error instead of being
+    killed. Skips where the limit is not available (Windows) or cannot be set that low.
+    """
+    resource = pytest.importorskip("resource", reason="RLIMIT_FSIZE is POSIX only")
+    import signal
+
+    if not hasattr(signal, "SIGXFSZ"):
+        pytest.skip("no SIGXFSZ on this platform")
+    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    if hard != resource.RLIM_INFINITY and hard < size:
+        pytest.skip(f"the hard file size limit ({hard}) is below {size} bytes")
+    previous = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    try:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (size, hard))
+        try:
+            yield
+        finally:
+            resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGXFSZ, previous)
+
+
+def honest_decrypt_in_place(path: Path) -> None:
+    """Stand-in for a SUCCESSFUL dotenvx decrypt: ciphertext values -> plaintext.
+
+    #963 added a post-decrypt read-back (``is_file_encrypted``) to the pull
+    seam: a decrypt that exits 0 but leaves ciphertext (a SOPS file dotenvx
+    cannot read, a missing key) is now a failure. A bare ``MagicMock`` no-op
+    "decrypt" leaves the ciphertext in place and so correctly trips it. Mocks
+    that simulate a successful decrypt must therefore actually decrypt the file
+    ("make the mock honest"); only the dotenvx subprocess seam is faked.
+    """
+    lines = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        key, sep, value = raw.partition("=")
+        if sep and value.strip().strip('"').strip("'").startswith("encrypted:"):
+            lines.append(f"{key}=decrypted-stub")
+        else:
+            lines.append(raw)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
