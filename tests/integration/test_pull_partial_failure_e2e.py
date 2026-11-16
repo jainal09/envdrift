@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from tests.helpers import native_path
 
 pytestmark = [
     pytest.mark.integration,
@@ -237,7 +238,7 @@ class TestPartlyFailedPullPartial:
         # The failing file was left as it was and is not hidden from git.
         assert db.read_bytes() == db_committed
         assert _skip_worktree_flag(git_repo, "secrets/.env.db") == "H"
-        assert "secrets/.env.db was left as it was" in out, out
+        assert f"{native_path('secrets/.env.db')} was left as it was" in out, out
 
     def test_pull_counts_the_secrets_only_files_decrypted_first(
         self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
@@ -412,7 +413,7 @@ class TestSopsSecretFileIsNotReportedAsDecrypted:
         out = _flat(result)
         assert result.returncode == 1, out
         assert "Decrypted: 1" in out and "Errors: 1" in out, out
-        assert "secrets/.env.sops: it still holds SOPS ciphertext" in out, out
+        assert f"{native_path('secrets/.env.sops')}: it still holds SOPS ciphertext" in out, out
         assert sops_file.read_bytes() == committed
         assert _skip_worktree_flag(git_repo, "secrets/.env.sops") == "H"
         assert _skip_worktree_flag(git_repo, "secrets/.env.api") == "S"
@@ -620,11 +621,11 @@ class TestUnreadableLaterSecretFile:
         assert "Traceback" not in out, out
         summary = out.rsplit("Summary", 1)[1]
         assert "Decrypted: 1" in summary and "Errors: 1" in summary, out
-        assert "Failed to decrypt secrets/.env.db: [Errno 13]" in out, out
-        assert "secrets/.env.db was left as it was" in out, out
+        assert f"Failed to decrypt {native_path('secrets/.env.db')}: [Errno 13]" in out, out
+        assert f"{native_path('secrets/.env.db')} was left as it was" in out, out
         # .env.api is untracked plaintext now, so it is named in the warning.
         assert "DANGER: No Git Protection Applied" in out, out
-        assert "• secrets/.env.api (untracked)" in out, out
+        assert f"• {native_path('secrets/.env.api')} (untracked)" in out, out
         assert f"API_KEY={_API_VALUE}" in api.read_text(encoding="utf-8")
         unprivileged.make_readable(db)
         assert db.read_bytes() == db_before

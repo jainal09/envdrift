@@ -160,6 +160,16 @@ def write_checksums_for(
     return checksums_path.resolve().as_uri()
 
 
+def native_path(posix: str) -> str:
+    """``posix``, a relative path with ``/`` separators, as envdrift prints it here.
+
+    envdrift shows a path the way this platform writes it (``secrets\\.env.db`` on
+    Windows), while git always prints ``/``, so only assertions on envdrift's own output
+    need this.
+    """
+    return str(Path(posix))
+
+
 @contextlib.contextmanager
 def unreadable_file(path: Path) -> Iterator[None]:
     """Make the file ``path`` really unreadable to this process while the block runs.

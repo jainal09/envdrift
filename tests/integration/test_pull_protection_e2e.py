@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from tests.helpers import native_path
 
 pytestmark = [
     pytest.mark.integration,
@@ -137,7 +138,7 @@ class TestPullPartialNeverCallsAnUnprotectedSetProtected:
         # Never the yellow "they are marked skip-worktree" notice.
         assert "SECRET FILES ARE NOW PLAINTEXT" not in out, out
         assert "No Git Protection Applied" in out, out
-        assert "secrets/.env.b (untracked)" in out, out
+        assert f"{native_path('secrets/.env.b')} (untracked)" in out, out
         # .env.a was plaintext already: still marked, but it proves nothing
         # about the file this pull decrypted.
         assert "The other" not in out, out
@@ -166,7 +167,7 @@ class TestPullPartialNeverCallsAnUnprotectedSetProtected:
         assert result.returncode == 0, out
         assert "Decrypted: 2" in out, out
         assert "SECRET FILES ARE NOW PLAINTEXT" not in out, out
-        assert "secrets/.env.b (untracked)" in out, out
+        assert f"{native_path('secrets/.env.b')} (untracked)" in out, out
         assert "The other 1 decrypted file(s) are marked skip-worktree." in out, out
         assert _flag(git_repo, "secrets/.env.a") == "S"
 
@@ -191,7 +192,7 @@ class TestPullPartialNeverCallsAnUnprotectedSetProtected:
 
         out = _flat(result)
         assert result.returncode == 0, out
-        assert "production/.env.production.secret (untracked)" in out, out
+        assert f"{native_path('production/.env.production.secret')} (untracked)" in out, out
         assert "The other 1 decrypted file(s) are marked skip-worktree." in out, out
         assert "SECRET FILES ARE NOW PLAINTEXT" not in out, out
 
@@ -280,7 +281,7 @@ class TestPullWarnsAboutUnprotectedSecrets:
         assert result.returncode == 0, out  # decrypting succeeded
         assert "Setup complete!" in out, out
         assert "No Git Protection Applied" in out, out
-        assert "config/.env.production.secret (untracked)" in out, out
+        assert f"{native_path('config/.env.production.secret')} (untracked)" in out, out
         # The warning comes last, after the success line, where it is seen.
         assert out.index("Setup complete!") < out.index("No Git Protection Applied"), out
         status = _git(git_repo, "status", "--porcelain", "--untracked-files=all")
@@ -304,8 +305,8 @@ class TestPullWarnsAboutUnprotectedSecrets:
 
         out = _flat(result)
         assert result.returncode == 0, out
-        assert "secrets/.env.b (untracked)" in out, out
-        assert "secrets/.env.a (" not in out, out
+        assert f"{native_path('secrets/.env.b')} (untracked)" in out, out
+        assert f"{native_path('secrets/.env.a')} (" not in out, out
         assert "The other 1 decrypted file(s) are marked skip-worktree." in out, out
         assert _flag(git_repo, "secrets/.env.a") == "S"
 
@@ -335,7 +336,7 @@ class TestPullWarnsAboutUnprotectedSecrets:
 
         out = _flat(result)
         assert result.returncode == 1, out  # the failed decrypt is an error
-        assert "secrets/.env.a (untracked)" in out, out
+        assert f"{native_path('secrets/.env.a')} (untracked)" in out, out
         assert "No Git Protection Applied" in out, out
 
     def test_no_warning_when_every_secret_file_is_protected(
@@ -471,7 +472,7 @@ def test_paths_print_as_they_are(
 
     assert push.returncode == 0, _flat(push)
     assert pull.returncode == 0, _flat(pull)
-    assert f"• secrets/{folder}/.env.a (untracked)" in _flat(pull), _flat(pull)
+    assert f"• {native_path(f'secrets/{folder}/.env.a')} (untracked)" in _flat(pull), _flat(pull)
     assert f"Updated .gitignore: secrets/.env.keys, {entry}" in _flat(push), _flat(push)
     assert "🔥" not in push.stdout + pull.stdout
 

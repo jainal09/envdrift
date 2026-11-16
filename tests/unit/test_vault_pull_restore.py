@@ -78,7 +78,11 @@ def test_an_unreadable_target_is_an_error_not_a_traceback(
     with unreadable_file(target), pytest.raises(typer.Exit) as excinfo:
         vault_helpers._decrypt_pull_target(request, target, searchable_tmp_path / ".env.keys")
 
-    err = " ".join(capsys.readouterr().err.split())
+    captured = capsys.readouterr().err
+    err = " ".join(captured.split())
     assert excinfo.value.exit_code == 1, err
-    assert f"Failed to decrypt {target}: [Errno 13]" in err, err
+    # Rich breaks a path longer than the console inside the path (a macOS temp path
+    # was), so the path is compared with every space and line break taken out.
+    expected = f"Failed to decrypt {target}: [Errno 13]"
+    assert "".join(expected.split()) in "".join(captured.split()), err
     assert "Nothing was decrypted." in err, err
