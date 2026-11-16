@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from envdrift.utils.text import strip_ansi
+from envdrift.utils.text import strip_ansi, styled_text
 
 
 @pytest.mark.parametrize(
@@ -33,3 +35,73 @@ from envdrift.utils.text import strip_ansi
 )
 def test_strip_ansi(raw: str, clean: str):
     assert strip_ansi(raw) == clean
+
+
+# Values that ``rich.markup.escape`` does not round-trip, or that Rich would
+# parse as markup or emoji codes when interpolated into a markup string.
+_LITERAL_VALUES = [
+    "cfg[/x]/a.env",
+    "kv/app[legacy]/key",
+    "cfg[bold]/a.env",
+    ":fire:.env",
+    "C:\\",
+    "C:\\[2024]\\x",
+    "a\\\\[b]",
+    "dir\\\\\\[red]x",
+    "[red]",
+    "{}",
+    "",
+]
+
+
+@pytest.mark.parametrize("value", _LITERAL_VALUES)
+@pytest.mark.parametrize(
+    ("template", "plain"),
+    [
+        ("{}", "{v}"),
+        ("[red]{}[/red]", "{v}"),
+        ("[red][ERROR][/red] {}", "[ERROR] {v}"),
+        ("  [dim]=[/dim] {} [dim]- skipped ({})[/dim]", "  = {v} - skipped ({v})"),
+        (r"\[guardian] {}", "[guardian] {v}"),
+    ],
+)
+def test_styled_text_prints_values_exactly(value: str, template: str, plain: str):
+    values = (value,) * template.count("{}")
+    assert styled_text(template, *values).plain == plain.replace("{v}", value)
+
+
+def test_styled_text_values_take_the_style_of_their_slot():
+    text = styled_text("  [red]![/red] {} [red]- error: {}[/red]", "cfg[/x]", "x [bold]y")
+
+    assert text.plain == "  ! cfg[/x] - error: x [bold]y"
+    red = [(span.start, span.end) for span in text.spans if span.style == "red"]
+    assert red == [(2, 3), (12, len(text.plain))]
+
+
+def test_styled_text_keeps_the_styling_of_a_text_value():
+    inner = styled_text("{} [dim]({})[/dim]", "svc", "kv/app[legacy]/key")
+    text = styled_text("  [green]+[/green] {} - [green]created[/green]", inner)
+
+    assert text.plain == "  + svc (kv/app[legacy]/key) - created"
+    styled = {(span.start, span.end, str(span.style)) for span in text.spans}
+    start = text.plain.index("(")
+    end = text.plain.index(")") + 1
+    assert (start, end, "dim") in styled
+    assert (2, 3, "green") in styled
+
+
+def test_styled_text_stringifies_values():
+    assert styled_text("{} file(s) in {}", 3, Path("cfg[/x]")).plain == (
+        f"3 file(s) in {Path('cfg[/x]')}"
+    )
+
+
+@pytest.mark.parametrize(("template", "values"), [("{} {}", ("a",)), ("{}", ("a", "b"))])
+def test_styled_text_rejects_unpaired_slots(template: str, values: tuple[str, ...]):
+    with pytest.raises(ValueError, match="slot"):
+        styled_text(template, *values)
+
+
+def test_styled_text_rejects_a_slot_inside_a_tag():
+    with pytest.raises(ValueError, match="markup tag"):
+        styled_text("[link={}]x[/link]", "https://example.com")

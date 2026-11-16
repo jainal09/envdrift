@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import typer
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from envdrift.env_files import resolve_mapping_env_file
 from envdrift.output.rich import console, print_success, print_warning
+from envdrift.utils.text import styled_text
 
 from .sync_helpers import (
     SyncCommandContext,
@@ -117,12 +118,17 @@ class _LockContent:
     encrypted: bool
 
 
+def _print_line(template: str, *values: object) -> None:
+    """Print one line of envdrift's markup, with each value shown as it is."""
+    console.print(styled_text(template, *values))
+
+
 def _print_lock_header(request: LockRequest, context: SyncCommandContext) -> None:
     console.print()
     profile_info = f" (profile: {request.profile})" if request.profile else ""
     mode = "CHECK" if request.check_only else ("FORCE" if request.force else "Interactive")
     all_info = " | Including partial encryption" if request.all_files else ""
-    console.print(f"[bold]Lock[/bold] - Verifying keys and encrypting env files{profile_info}")
+    _print_line("[bold]Lock[/bold] - Verifying keys and encrypting env files{}", profile_info)
     console.print(
         f"[dim]Provider: {context.effective_provider} | Mode: {mode} | "
         f"Services: {len(context.mappings)}{all_info}[/dim]"
@@ -136,7 +142,7 @@ def _resolve_lock_mapping_file(
     try:
         detection = resolve_mapping_env_file(mapping)
     except ValueError as exc:
-        console.print(f"  [red]![/red] {mapping.folder_path} [red]- invalid env_file: {exc}[/red]")
+        _print_line("  [red]![/red] {} [red]- invalid env_file: {}[/red]", mapping.folder_path, exc)
         state.errors.append(f"{mapping.folder_path}: invalid env_file - {exc}")
         state.error_count += 1
         return None
@@ -152,10 +158,10 @@ def _record_missing_lock_mapping(
     mapping: ServiceMapping, env_file: Path, status: str, state: _LockState
 ) -> None:
     if status == "folder_not_found":
-        console.print(
-            f"  [red]![/red] {mapping.folder_path} "
-            f"[red]- error: folder does not exist or is not a directory "
-            f"(check folder_path in your sync config)[/red]"
+        _print_line(
+            "  [red]![/red] {} [red]- error: folder does not exist or is not a directory "
+            "(check folder_path in your sync config)[/red]",
+            mapping.folder_path,
         )
         state.errors.append(
             f"{mapping.folder_path}: folder does not exist or is not a directory "
@@ -163,14 +169,15 @@ def _record_missing_lock_mapping(
         )
         state.error_count += 1
     elif status == "multiple_found":
-        console.print(
-            f"  [yellow]?[/yellow] {mapping.folder_path} "
-            f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
+        _print_line(
+            "  [yellow]?[/yellow] {} "
+            "[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]",
+            mapping.folder_path,
         )
         state.warnings.append(f"{mapping.folder_path}: multiple .env files found")
         state.skipped += 1
     else:
-        console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
+        _print_line("  [dim]=[/dim] {} [dim]- skipped (not found)[/dim]", env_file)
         state.warnings.append(f"{env_file}: file not found")
         state.skipped += 1
 
@@ -180,14 +187,15 @@ def _skip_lock_partial_file(env_file: Path, context: _LockEncryptContext) -> boo
         return False
     resolved = env_file.resolve()
     if resolved in context.partial_combined:
-        console.print(
-            f"  [dim]=[/dim] {env_file} "
-            "[dim]- skipped (partial encryption combined file, use --all to include)[/dim]"
+        _print_line(
+            "  [dim]=[/dim] {} "
+            "[dim]- skipped (partial encryption combined file, use --all to include)[/dim]",
+            env_file,
         )
         return True
     if resolved in context.partial_clear:
-        console.print(
-            f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption clear file)[/dim]"
+        _print_line(
+            "  [dim]=[/dim] {} [dim]- skipped (partial encryption clear file)[/dim]", env_file
         )
         return True
     return False
@@ -213,7 +221,7 @@ def _read_lock_content(
         _record_lock_key_error(file.env_file, exc, state)
         return None
     except (OSError, ValueError) as exc:
-        console.print(f"  [red]![/red] {file.env_file} [red]- error reading file: {exc}[/red]")
+        _print_line("  [red]![/red] {} [red]- error reading file: {}[/red]", file.env_file, exc)
         state.errors.append(f"{file.env_file}: read failed - {exc}")
         state.error_count += 1
         return None
@@ -221,7 +229,7 @@ def _read_lock_content(
 
 def _record_lock_key_error(env_file: Path, error: object, state: _LockState) -> None:
     """Record a refused key change (an exception or a message) for ``env_file``."""
-    console.print(f"  [red]![/red] {env_file} [red]- error: {escape(str(error))}[/red]")
+    _print_line("  [red]![/red] {} [red]- error: {}[/red]", env_file, error)
     state.errors.append(f"{env_file}: {error}")
     state.error_count += 1
 
@@ -270,9 +278,10 @@ def _handle_lock_provider_mismatch(
         detected == EncryptionProvider.DOTENVX
         and context.encryption.provider != EncryptionProvider.DOTENVX
     ):
-        console.print(
-            f"  [red]![/red] {env_file} [red]- encrypted with dotenvx, but config uses "
-            f"{context.encryption.provider.value}[/red]"
+        _print_line(
+            "  [red]![/red] {} [red]- encrypted with dotenvx, but config uses {}[/red]",
+            env_file,
+            context.encryption.provider.value,
         )
         state.errors.append(
             f"{env_file}: encrypted with dotenvx, but config uses "
@@ -280,9 +289,11 @@ def _handle_lock_provider_mismatch(
         )
         state.error_count += 1
     else:
-        console.print(
-            f"  [dim]=[/dim] {env_file} [dim]- skipped (encrypted with {detected.value}, "
-            f"config uses {context.encryption.provider.value})[/dim]"
+        _print_line(
+            "  [dim]=[/dim] {} [dim]- skipped (encrypted with {}, config uses {})[/dim]",
+            env_file,
+            detected.value,
+            context.encryption.provider.value,
         )
         state.warnings.append(
             f"{env_file}: encrypted with {detected.value}, "
@@ -314,8 +325,8 @@ def _handle_dotenvx_relabel(
     if outcome.action == "none":
         return False
     if outcome.action == "no_key":
-        console.print(
-            f"  [yellow]![/yellow] {file.env_file} [yellow]- warning: {outcome.message}[/yellow]"
+        _print_line(
+            "  [yellow]![/yellow] {} [yellow]- warning: {}[/yellow]", file.env_file, outcome.message
         )
         state.warnings.append(f"{file.env_file}: {outcome.message}")
         return False
@@ -323,9 +334,11 @@ def _handle_dotenvx_relabel(
         _record_lock_key_error(file.env_file, f"cannot re-label its key: {outcome.message}", state)
         return True
     if outcome.action == "planned":
-        console.print(
-            f"  [cyan]?[/cyan] {file.env_file} "
-            f"[dim]- would re-key ({outcome.old_name} -> {expected}) by re-labeling the key[/dim]"
+        _print_line(
+            "  [cyan]?[/cyan] {} [dim]- would re-key ({} -> {}) by re-labeling the key[/dim]",
+            file.env_file,
+            outcome.old_name,
+            expected,
         )
         state.warnings.append(
             f"{file.env_file}: key name mismatch, would re-label {outcome.old_name} as {expected}"
@@ -334,9 +347,11 @@ def _handle_dotenvx_relabel(
         return True
     if not _normalize_after_encrypt(file, context, state):
         return True
-    console.print(
-        f"  [green]+[/green] {file.env_file} "
-        f"[dim]- key re-labeled ({outcome.old_name} -> {expected}), not re-encrypted[/dim]"
+    _print_line(
+        "  [green]+[/green] {} [dim]- key re-labeled ({} -> {}), not re-encrypted[/dim]",
+        file.env_file,
+        outcome.old_name,
+        expected,
     )
     state.warnings.append(
         f"{file.env_file}: key name mismatch, re-labeled {outcome.old_name} as {expected}"
@@ -392,10 +407,11 @@ def _handle_sops_recipients(
     if not missing:
         return False
     recipients = ", ".join(missing)
-    console.print(
-        f"  [red]![/red] {env_file} "
-        f"[red]- encrypted, but SOPS metadata is missing requested "
-        f"recipient(s): {recipients}[/red]"
+    _print_line(
+        "  [red]![/red] {} [red]- encrypted, but SOPS metadata is missing requested "
+        "recipient(s): {}[/red]",
+        env_file,
+        recipients,
     )
     state.errors.append(
         f"{env_file}: SOPS metadata is missing requested recipient(s): {recipients} - "
@@ -417,15 +433,16 @@ def _handle_already_encrypted(
     if has_plaintext_secret_value(file.env_file):
         state.warnings.append(f"{file.env_file}: partially encrypted, plaintext values remain")
         if context.request.check_only:
-            console.print(
-                f"  [cyan]?[/cyan] {file.env_file} "
-                "[dim]- would re-encrypt (plaintext values remain)[/dim]"
+            _print_line(
+                "  [cyan]?[/cyan] {} [dim]- would re-encrypt (plaintext values remain)[/dim]",
+                file.env_file,
             )
             state.encrypted += 1
             return True
-        console.print(
-            f"  [yellow]~[/yellow] {file.env_file} "
-            "[dim]- partially encrypted (plaintext values remain), re-encrypting...[/dim]"
+        _print_line(
+            "  [yellow]~[/yellow] {} "
+            "[dim]- partially encrypted (plaintext values remain), re-encrypting...[/dim]",
+            file.env_file,
         )
         return False
     if _handle_dotenvx_relabel(file, context, state):
@@ -434,7 +451,7 @@ def _handle_already_encrypted(
         return True
     if _handle_sops_recipients(file.env_file, content, context, state):
         return True
-    console.print(f"  [dim]=[/dim] {file.env_file} [dim]- skipped (already encrypted)[/dim]")
+    _print_line("  [dim]=[/dim] {} [dim]- skipped (already encrypted)[/dim]", file.env_file)
     state.already_encrypted += 1
     return True
 
@@ -452,16 +469,16 @@ def _encrypt_interactive_file(
             **_lock_encrypt_kwargs(context, file.keys_file, file.environment),
         )
         if not result.success:
-            console.print(f"  [red]![/red] {file.env_file} [red]- error: {result.message}[/red]")
+            _print_line("  [red]![/red] {} [red]- error: {}[/red]", file.env_file, result.message)
             state.errors.append(f"{file.env_file}: encryption failed - {result.message}")
             state.error_count += 1
             return
         if not _normalize_after_encrypt(file, context, state):
             return
-        console.print(f"  [green]+[/green] {file.env_file} [dim]- encrypted[/dim]")
+        _print_line("  [green]+[/green] {} [dim]- encrypted[/dim]", file.env_file)
         state.encrypted += 1
     except (EncryptionNotFoundError, EncryptionBackendError) as exc:
-        console.print(f"  [red]![/red] {file.env_file} [red]- error: {exc}[/red]")
+        _print_line("  [red]![/red] {} [red]- error: {}[/red]", file.env_file, exc)
         state.errors.append(f"{file.env_file}: encryption failed - {exc}")
         state.error_count += 1
 
@@ -475,7 +492,7 @@ def _queue_or_encrypt_lock_file(
     from envdrift.encryption import EncryptionProvider
 
     if context.request.check_only:
-        console.print(f"  [cyan]?[/cyan] {file.env_file} [dim]- would be encrypted[/dim]")
+        _print_line("  [cyan]?[/cyan] {} [dim]- would be encrypted[/dim]", file.env_file)
         state.encrypted += 1
         return
     smart = context.encryption.config.smart_encryption if context.encryption.config else False
@@ -483,7 +500,7 @@ def _queue_or_encrypt_lock_file(
         file.env_file, context.encryption.backend, enabled=smart
     )
     if should_skip:
-        console.print(f"  [dim]=[/dim] {file.env_file} [dim]- skipped ({reason})[/dim]")
+        _print_line("  [dim]=[/dim] {} [dim]- skipped ({})[/dim]", file.env_file, reason)
         state.already_encrypted += 1
         return
     if not context.request.force:
@@ -504,9 +521,11 @@ def _queue_or_encrypt_lock_file(
 
 
 def _encrypt_or_decline(file: _LockFile, context: _LockEncryptContext, state: _LockState) -> None:
-    response = console.input(f"  Encrypt {file.env_file}? (y/N): ").strip().lower()
+    # Text, not a markup string: Console.input parses a str prompt as markup and
+    # emoji codes whatever the console's defaults, and the prompt names the file.
+    response = console.input(Text(f"  Encrypt {file.env_file}? (y/N): ")).strip().lower()
     if response not in ("y", "yes"):
-        console.print(f"  [dim]=[/dim] {file.env_file} [dim]- skipped (user declined)[/dim]")
+        _print_line("  [dim]=[/dim] {} [dim]- skipped (user declined)[/dim]", file.env_file)
         state.skipped += 1
         return
     _encrypt_interactive_file(file, context, state)
@@ -556,9 +575,10 @@ def _lock_keys_file(
 
     keys_file = mapping.folder_path / (context.command.sync_config.env_keys_filename or ".env.keys")
     if context.encryption.provider == EncryptionProvider.DOTENVX and not keys_file.exists():
-        console.print(
-            f"  [yellow]![/yellow] {env_file} "
-            f"[yellow]- warning: no {keys_file.name} file, will generate new key[/yellow]"
+        _print_line(
+            "  [yellow]![/yellow] {} [yellow]- warning: no {} file, will generate new key[/yellow]",
+            env_file,
+            keys_file.name,
         )
         state.warnings.append(
             f"{env_file}: no {keys_file.name} file found, new key will be generated"
@@ -615,13 +635,15 @@ def _record_lock_encrypt_result(
     outcome: _EncryptTaskOutcome, context: _LockEncryptContext, state: _LockState
 ) -> None:
     if outcome.error is not None:
-        console.print(f"  [red]![/red] {outcome.task.env_file} [red]- error: {outcome.error}[/red]")
+        _print_line(
+            "  [red]![/red] {} [red]- error: {}[/red]", outcome.task.env_file, outcome.error
+        )
         state.errors.append(f"{outcome.task.env_file}: encryption failed - {outcome.error}")
         state.error_count += 1
         return
     if outcome.result is None or not outcome.result.success:
         message = outcome.result.message if outcome.result else "unknown error"
-        console.print(f"  [red]![/red] {outcome.task.env_file} [red]- error: {message}[/red]")
+        _print_line("  [red]![/red] {} [red]- error: {}[/red]", outcome.task.env_file, message)
         state.errors.append(f"{outcome.task.env_file}: encryption failed - {message}")
         state.error_count += 1
         return
@@ -629,7 +651,7 @@ def _record_lock_encrypt_result(
     file = _LockFile(task.mapping, task.env_file, task.env_keys_file, task.effective_environment)
     if not _normalize_after_encrypt(file, context, state):
         return
-    console.print(f"  [green]+[/green] {outcome.task.env_file} [dim]- encrypted[/dim]")
+    _print_line("  [green]+[/green] {} [dim]- encrypted[/dim]", outcome.task.env_file)
     state.encrypted += 1
 
 
@@ -713,8 +735,8 @@ def _print_lock_issue_group(title: str, color: str, messages: list[str]) -> None
     console.print()
     console.print(f"[bold {color}]{title}:[/bold {color}]")
     for message in messages:
-        # Messages carry paths and tool output, so print them as text, not markup.
-        console.print(f"  [{color}]•[/{color}] {escape(message)}")
+        # The messages name files and quote errors: print them as they are.
+        console.print(Text.assemble("  ", ("•", color), " ", message))
 
 
 def _finish_lock(request: LockRequest, state: _LockState, partial: _LockPartialState) -> None:

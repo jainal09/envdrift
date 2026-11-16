@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from rich.text import Text
+
+from envdrift.utils.text import styled_text
+
 if TYPE_CHECKING:
     from rich.console import Console
 
@@ -22,15 +26,15 @@ def warn_registry_corruption(registry: ProjectRegistry, console: Console) -> Non
     Pre-#492 a corrupt ``projects.json`` was silently treated as empty (and
     silently replaced on the next write), so registrations vanished behind a
     clean success message. This prints exactly what happened and where the
-    corrupt original went.
+    corrupt original went. Paths and the parse error are printed as they are.
     """
     notice = registry.corruption
     if notice is None:
         return
-    console.print(f"[yellow]⚠[/yellow] Registry file was corrupt: {registry.path}")
-    console.print(f"  ({notice.detail})")
+    console.print(styled_text("[yellow]⚠[/yellow] Registry file was corrupt: {}", registry.path))
+    console.print(Text(f"  ({notice.detail})"))
     if notice.backup_path is not None:
-        console.print(f"  The corrupt file was backed up to: {notice.backup_path}")
+        console.print(Text(f"  The corrupt file was backed up to: {notice.backup_path}"))
         console.print("  Previously registered projects were discarded — re-register them.")
     elif notice.backup_failed:
         console.print("  The corrupt file could not be backed up; its contents were replaced.")
