@@ -63,10 +63,10 @@ Machine-readable modes keep their documented stdout contracts. In particular,
 `diff --format json` and `guard --json`/`guard --sarif` emit machine-readable
 error documents on stdout rather than replacing them with human diagnostics.
 
-The `[OK]`, `[ERROR]` and `[WARN]` messages, and the human output of `diff`,
+The `[OK]`, `[ERROR]` and `[WARN]` messages, the human output of `diff`,
 `encrypt`, `decrypt`, `guard`, `hook`, `sync`, `pull`, `lock`, `push`,
-`pull-partial`, `vault-push`, `vault-pull`, `agent` and `install`, show paths,
-variable and secret names, values and error messages exactly as they are: square
+`pull-partial`, `vault-push`, `vault-pull`, `agent` and `install`, and `validate`'s report
+show paths, variable and secret names, values and error messages exactly as they are: square
 brackets and backslashes in them are never read as terminal styling, so
 `cfg[prod]/.env` or `C:\[2024]\.env` is printed as written. No command turns a
 `:name:` code in such text into an emoji, so `:fire:.env` is printed as written
