@@ -1435,6 +1435,25 @@ class TestPrivateKeyFileScanResult:
         assert len(key_findings) == 1
         assert key_findings[0].severity == FindingSeverity.CRITICAL
 
+    def test_a_key_file_git_cannot_answer_for_fails_the_scan(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """git failing on the tracked check is not "not tracked" (#1016).
+
+        With an index git cannot read, a committed key passed the scan as clean.
+        """
+        git = self._git_repo(tmp_path)
+        (tmp_path / ".env.keys").write_text(self._KEY_CONTENT)
+        git("add", "-f", ".env.keys")
+        git("commit", "-m", "oops")
+        (tmp_path / ".git" / "index").write_bytes(b"not an index")
+
+        result = scanner.scan([tmp_path])
+
+        assert result.error is not None, result.findings
+        assert "git could not tell whether it tracks" in result.error
+        assert ".env.keys" in result.error
+
     @pytest.mark.parametrize(
         ("variable", "path"), [("GIT_DIR", ".git"), ("GIT_INDEX_FILE", ".git/index")]
     )
