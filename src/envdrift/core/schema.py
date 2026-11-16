@@ -157,7 +157,7 @@ class SchemaMetadata:
     # Pydantic field-constraint checks (ge/le, Literal, min_length, pattern, ...)
     # rather than only the name-based type heuristics derived from the metadata.
     model_class: type[BaseSettings] | None = None
-    # True when at least one field carries validation beyond a plain scalar type
+    # True when fields or model config carry validation beyond a plain scalar type
     # (a constraint, a Literal/special/nested type, or a custom validator). Lets
     # the validator skip the (relatively expensive) real model_validate pass for
     # trivially-typed schemas, where the name-based type check already suffices.
@@ -200,6 +200,23 @@ class SchemaMetadata:
             list[str]: Field names for which the corresponding FieldMetadata.sensitive is True.
         """
         return [name for name, f in self.fields.items() if f.sensitive]
+
+    @property
+    def checks_after_fields(self) -> bool:
+        """Whether the model has checks that run only once every field is valid.
+
+        Pydantic runs a ``mode="after"`` or ``"wrap"`` model validator, and
+        ``model_post_init``, only when no field failed. An error dropped for one
+        field could then hide what those checks reject, such as ``PORT=0``.
+        """
+        decorators = getattr(self.model_class, "__pydantic_decorators__", None)
+        validators = [
+            *(getattr(decorators, "model_validators", None) or {}).values(),
+            *(getattr(decorators, "root_validators", None) or {}).values(),  # pydantic v1 style
+        ]
+        if any(getattr(v.info, "mode", "after") != "before" for v in validators):
+            return True
+        return getattr(self.model_class, "__pydantic_post_init__", None) is not None
 
 
 class SchemaLoadError(Exception):
@@ -367,10 +384,17 @@ class SchemaLoader:
 
         # Track whether any field needs real Pydantic validation (a constraint, a
         # non-plain-scalar type such as Literal/EmailStr/a nested model, or a
-        # custom validator). A model with only plain str/int/float/bool fields is
-        # fully covered by the name-based type check, so the validator can skip
-        # the expensive model_validate pass for it.
-        has_constraints = False
+        # custom validator). Model-config string limits also need this pass even
+        # when every field is a plain scalar (#952).
+        has_constraints = any(
+            (
+                model_config.get(option)
+                if isinstance(model_config, dict)
+                else getattr(model_config, option, None)
+            )
+            is not None
+            for option in ("str_min_length", "str_max_length")
+        )
 
         # Extract field metadata
         for field_name, field_info in settings_cls.model_fields.items():

@@ -1,12 +1,27 @@
 """Tests for Validator."""
 
+from typing import Any
+
 import pytest
 from pydantic import AliasChoices, AliasPath, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import SchemaLoader
-from envdrift.core.validator import Validator
+from envdrift.core.validator import MODEL_ERROR_KEY, Validator
+
+
+class _KnownModelDefaultError(AssertionError):
+    """A model validator rejected an encrypted value's default (#1032)."""
+
+
+class _KnownSkippedModelCheckError(AssertionError):
+    """An encrypted required value stopped the model's validators from running (#1034)."""
+
+
+def _port_must_be_positive(model: Any) -> None:
+    if model.PORT <= 0:
+        raise ValueError("PORT must be positive")
 
 
 class _PrefixedSensitiveSettings(BaseSettings):
@@ -417,6 +432,189 @@ NEW_FEATURE_FLAG=enabled
         assert "SECRET" not in result.type_errors
         # The real app sees NOTES='' and raises string_too_short at startup.
         assert "NOTES" in result.type_errors
+
+    @pytest.mark.parametrize(
+        "constraint",
+        ["field", "model"],
+        ids=["field-min-length", "model-str-min-length"],
+    )
+    def test_constraint_pass_does_not_judge_an_encrypted_value_by_its_default(
+        self, tmp_path, constraint
+    ):
+        """An encrypted value is left out, so the model checks the default instead.
+
+        An empty default fails ``min_length=1``, whether the field or the model
+        config sets it, and ``validate --ci`` failed a file whose real value it
+        never saw. The error is dropped for that field only: an empty plaintext
+        value and a field the file leaves out still fail, as in the real app.
+        """
+        if constraint == "field":
+
+            class Settings(BaseSettings):
+                API_KEY: str = Field("", min_length=1)
+                NOTES: str = Field("x", min_length=1)
+                ABSENT: str = Field("", min_length=1)
+
+        else:
+
+            class Settings(BaseSettings):
+                model_config = SettingsConfigDict(str_min_length=1)
+                API_KEY: str = ""
+                NOTES: str = "x"
+                ABSENT: str = ""
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=encrypted:BAAAexample\nNOTES=\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert "API_KEY" not in result.type_errors, result.type_errors
+        assert "NOTES" in result.type_errors  # empty plaintext: the app sees ''
+        assert "ABSENT" in result.type_errors  # the app validates this default too
+
+    @pytest.mark.xfail(
+        raises=_KnownModelDefaultError,
+        strict=False,
+        reason="a model validator judges an encrypted value by its default (see #1032)",
+    )
+    def test_model_validator_does_not_judge_an_encrypted_value_by_its_default(self, tmp_path):
+        """A ``@model_validator`` sees the default of a value that is encrypted.
+
+        The constraint pass leaves the encrypted value out, so the model fills in
+        the field's default, the validator rejects it, and ``validate --ci`` fails
+        a file whose real value it never saw. The error has no ``loc``, so dropping
+        the errors of fields left out as ciphertext does not catch it.
+        """
+
+        class Settings(BaseSettings):
+            API_KEY: str = ""
+
+            @model_validator(mode="after")
+            def need_key(self):
+                if not self.API_KEY:
+                    raise ValueError("API_KEY is required")
+                return self
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=encrypted:BAAAexample\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        if "API_KEY is required" in result.type_errors.get(MODEL_ERROR_KEY, ""):
+            raise _KnownModelDefaultError(result.type_errors)
+        assert result.valid is True, result.type_errors
+
+    @pytest.mark.parametrize("check", ["after", "wrap", "post-init"])
+    def test_an_encrypted_default_does_not_hide_model_checks_that_never_ran(self, tmp_path, check):
+        """The encrypted value's default fails its field, so the model's own checks never run.
+
+        Pydantic runs ``mode="after"`` and ``"wrap"`` model validators, and
+        ``model_post_init``, only once every field is valid. Dropping the default's
+        error then passed ``PORT=0``, which the model's check rejects whatever the
+        secret is. The error is kept, and says why, when it is the only one.
+        """
+        if check == "after":
+
+            class Settings(BaseSettings):
+                API_KEY: str = Field("", min_length=1)
+                PORT: int = 8080
+
+                @model_validator(mode="after")
+                def port_positive(self):
+                    _port_must_be_positive(self)
+                    return self
+
+        elif check == "wrap":
+
+            class Settings(BaseSettings):
+                API_KEY: str = Field("", min_length=1)
+                PORT: int = 8080
+
+                @model_validator(mode="wrap")
+                @classmethod
+                def port_positive(cls, data, handler):
+                    model = handler(data)
+                    _port_must_be_positive(model)
+                    return model
+
+        else:
+
+            class Settings(BaseSettings):
+                API_KEY: str = Field("", min_length=1)
+                PORT: int = 8080
+
+                def model_post_init(self, context, /):
+                    _port_must_be_positive(self)
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=encrypted:BAAAexample\nPORT=0\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.valid is False, result.type_errors
+        message = result.type_errors["API_KEY"]
+        assert "encrypted value" in message and "could not run" in message, message
+
+    def test_a_plaintext_error_is_reported_next_to_a_kept_encrypted_default(self, tmp_path):
+        """Another field's error is reported as well, and the default's error says why it is kept."""
+
+        class Settings(BaseSettings):
+            API_KEY: str = Field("", min_length=1)
+            PORT: int = Field(8080, ge=1)
+
+            @model_validator(mode="after")
+            def port_positive(self):
+                _port_must_be_positive(self)
+                return self
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=encrypted:BAAAexample\nPORT=0\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert result.valid is False
+        assert set(result.type_errors) == {"API_KEY", "PORT"}, result.type_errors
+        assert "could not run" in result.type_errors["API_KEY"]
+
+    @pytest.mark.xfail(
+        raises=_KnownSkippedModelCheckError,
+        strict=False,
+        reason="an encrypted required value stops the model's validators (see #1034)",
+    )
+    def test_an_encrypted_required_value_does_not_stop_the_model_validators(self, tmp_path):
+        """A required field whose value is encrypted is left out, so pydantic reports it missing.
+
+        That error is dropped (the base check sees the value), and the model's
+        ``mode="after"`` validator never ran: ``PORT=0`` passed ``validate --ci``.
+        """
+
+        class Settings(BaseSettings):
+            API_KEY: str
+            PORT: int = 8080
+
+            @model_validator(mode="after")
+            def port_positive(self):
+                _port_must_be_positive(self)
+                return self
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=encrypted:BAAAexample\nPORT=0\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        if result.valid and not result.type_errors:
+            raise _KnownSkippedModelCheckError("PORT=0 passed: the model validator never ran")
+        assert "PORT must be positive" in result.type_errors.get(MODEL_ERROR_KEY, "")
 
     def test_constraint_pass_skips_empty_when_env_ignore_empty(self, tmp_path):
         """With env_ignore_empty=True the env source drops '' (the field is
