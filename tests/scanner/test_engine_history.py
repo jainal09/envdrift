@@ -88,17 +88,14 @@ def _finding(repo: Path, commit: str | None, name: str = ".env.production") -> S
 
 
 def _reported(
-    repo: Path,
-    findings: list[ScanFinding],
-    *,
-    history: bool = True,
-    paths: list[Path] | None = None,
-    **config,
+    repo: Path, findings: list[ScanFinding], *, paths: list[Path] | None = None, **config
 ) -> list:
-    """The commits of the findings the engine reports, scanning ``paths`` (``repo`` alone)."""
-    engine = ScanEngine(
-        GuardConfig(use_native=False, use_gitleaks=False, include_git_history=history, **config)
-    )
+    """The commits of the findings the engine reports, scanning ``paths`` (``repo`` alone).
+
+    ``config`` sets ``GuardConfig`` fields; the scan is a history scan unless it says otherwise.
+    """
+    config.setdefault("include_git_history", True)
+    engine = ScanEngine(GuardConfig(use_native=False, use_gitleaks=False, **config))
     engine.scanners = [_HistoryScanner(findings)]
     result = engine.scan(paths or [repo])
     return [f.commit_sha for f in result.unique_findings]
@@ -149,7 +146,7 @@ def test_without_history_a_finding_is_judged_by_todays_file(repo: Path):
     commit = _commit(repo, ".env.production", f"AWS_ACCESS_KEY_ID={_KEY}")
     _commit(repo, ".env.production", f'SETTING_2="{_CIPHERTEXT}"')
 
-    assert _reported(repo, [_finding(repo, commit)], history=False) == []
+    assert _reported(repo, [_finding(repo, commit)], include_git_history=False) == []
 
 
 def test_an_ignore_comment_written_later_does_not_drop_a_history_finding(repo: Path):
