@@ -532,20 +532,39 @@ def git_tracks(file_path: Path, *, env: Mapping[str, str] | None = None) -> bool
     Raises:
         GitError: git could not tell whether it tracks the file.
     """
-    git_root = get_git_root(file_path)
-    if not git_root:
-        if _git_entry_above(file_path) is not None:
-            raise GitError(
-                f"git could not tell whether it tracks {file_path}: it found no repository "
-                "there, though a .git is above it"
-            )
+    git_root = _tracking_root(file_path)
+    if git_root is None:
         return False
-
     try:
         relative_path = file_path.resolve().relative_to(git_root)
     except ValueError:
         return False  # not below the repository's root, so not a file it tracks
+    return _listed_by_git(file_path, git_root, relative_path, env)
 
+
+def _tracking_root(file_path: Path) -> Path | None:
+    """The root of the repository that could track ``file_path``; None outside any repository.
+
+    Raises:
+        GitError: a ``.git`` is above the file, and git finds no repository there.
+    """
+    git_root = get_git_root(file_path)
+    if git_root is None and _git_entry_above(file_path) is not None:
+        raise GitError(
+            f"git could not tell whether it tracks {file_path}: it found no repository "
+            "there, though a .git is above it"
+        )
+    return git_root
+
+
+def _listed_by_git(
+    file_path: Path, git_root: Path, relative_path: Path, env: Mapping[str, str] | None
+) -> bool:
+    """Whether ``git ls-files --error-unmatch`` lists ``relative_path``: exit 0 it does, 1 not.
+
+    Raises:
+        GitError: git failed with another exit, timed out or could not run.
+    """
     try:
         result = run_tool(
             ["git", "ls-files", "--error-unmatch", "--", _literal_pathspec(relative_path)],
@@ -560,12 +579,17 @@ def git_tracks(file_path: Path, *, env: Mapping[str, str] | None = None) -> bool
     except (subprocess.TimeoutExpired, OSError) as exc:
         raise GitError(f"git could not tell whether it tracks {file_path}: {exc}") from exc
     if result.returncode not in (0, 1):  # 1: the file is not tracked
-        detail = result.stderr.strip().splitlines()[0] if result.stderr.strip() else ""
         raise GitError(
             f"git could not tell whether it tracks {file_path} "
-            f"(exit {result.returncode}){': ' + detail if detail else ''}"
+            f"(exit {result.returncode}){_first_line(result.stderr)}"
         )
     return result.returncode == 0
+
+
+def _first_line(stderr: str) -> str:
+    """``": "`` and the first line of git's ``stderr``, or "" when it printed nothing."""
+    lines = stderr.strip().splitlines()
+    return f": {lines[0]}" if lines else ""
 
 
 def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = None) -> list[str]:
