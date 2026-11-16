@@ -9,16 +9,18 @@ gitleaks reports them from ``git log -p``; the engine's filters run for real.
 
 from __future__ import annotations
 
+import gc
 import shutil
 import subprocess  # nosec B404
 import sys
+import weakref
 from pathlib import Path
 
 import pytest
 
 from envdrift.scanner import history_files
 from envdrift.scanner.base import FindingSeverity, ScanFinding, ScannerBackend, ScanResult
-from envdrift.scanner.engine import GuardConfig, ScanEngine
+from envdrift.scanner.engine import GuardConfig, ScanEngine, _EncryptedFiles
 from envdrift.scanner.history_files import CommittedFiles
 
 _KEY = "AKIA" + "IOSFODNN7" + "EXAMPLX"
@@ -197,16 +199,58 @@ def test_a_folder_linked_elsewhere_later_does_not_choose_the_file_either(repo: P
     assert _reported(repo, [_finding(repo, plaintext, name="prod/app.env")]) == [plaintext]
 
 
-def test_only_the_last_files_read_are_kept_in_memory(repo: Path):
-    """A history scan's findings in many revisions of large files do not all stay in memory."""
-    commits = [
-        _commit(repo, ".env.production", f"SETTING_2=value{n}")
-        for n in range(history_files._CACHED_FILES + 3)
-    ]
+def test_a_file_read_again_is_not_read_from_git_again(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    """Findings in a few (file, commit) pairs, interleaved, read each pair from git once.
+
+    trufflehog reports the findings of a history in no particular order: a cache of the last
+    16 pairs read most of them again, with a git show each time.
+    """
+    commits = [_commit(repo, ".env.production", f"SETTING_2=value{n}") for n in range(20)]
+    reads: list[str] = []
+    real = history_files.file_at_commit
+
+    def counted(file_path: Path, commit: str) -> str | None:
+        reads.append(commit)
+        return real(file_path, commit)
+
+    monkeypatch.setattr(history_files, "file_at_commit", counted)
+    committed = CommittedFiles(history=True)
+
+    for _ in range(3):
+        for number, commit in enumerate(commits):
+            assert committed.line(repo / ".env.production", commit, 2) == f"SETTING_2=value{number}"
+
+    assert sorted(reads) == sorted(commits), "a pair was read from git more than once"
+
+
+def test_the_files_kept_in_memory_stay_within_their_budget(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A history of large files does not keep every revision a finding points at."""
+    commits = [_commit(repo, ".env.production", f"SETTING_2=value{n}") for n in range(10)]
+    monkeypatch.setattr(history_files, "_CACHED_CHARACTERS", 200)
     committed = CommittedFiles(history=True)
 
     for number, commit in enumerate(commits):
         assert committed.line(repo / ".env.production", commit, 2) == f"SETTING_2=value{number}"
 
-    assert committed._lines_of.cache_info().currsize <= history_files._CACHED_FILES
-    assert committed._text_of.cache_info().currsize <= history_files._CACHED_FILES
+    assert 1 <= len(committed._files) < len(commits)
+    assert committed._size <= 200
+
+
+def test_the_files_read_are_freed_with_the_scan(repo: Path):
+    """No cycle keeps the files read alive until the garbage collector runs."""
+    commit = _commit(repo, ".env.production", f"AWS_ACCESS_KEY_ID={_KEY}")
+    engine = ScanEngine(GuardConfig(use_native=False, use_gitleaks=False, include_git_history=True))
+    gc.disable()
+    try:
+        committed = CommittedFiles(history=True)
+        files = _EncryptedFiles(committed)
+        assert files.keeps(_finding(repo, commit)) is True
+        assert committed.line(repo / ".env.production", commit, 2)
+        held = [weakref.ref(committed), weakref.ref(files)]
+        del committed, files
+        assert [ref() for ref in held] == [None, None], "a cycle holds them until the next GC"
+    finally:
+        gc.enable()
+    assert engine is not None

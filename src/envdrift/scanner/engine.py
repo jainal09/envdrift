@@ -16,7 +16,6 @@ import time
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
-from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -135,7 +134,8 @@ class _EncryptedFiles:
         self._encrypted: dict[tuple[str, str | None], bool] = {}
         self._lines: dict[str, list[str]] = {}
         # Found once for a line's findings, not once for each: a long line can hold thousands.
-        self._values = lru_cache(maxsize=LINE_CACHE_SIZE)(self._line_values)
+        # Only the last LINE_CACHE_SIZE lines are kept; no cycle holds them past the filter.
+        self._values: dict[tuple[str, int, str | None], _LineValues] = {}
 
     def keeps(self, finding: ScanFinding) -> bool:
         """Whether ``finding`` points at plaintext.
@@ -151,10 +151,18 @@ class _EncryptedFiles:
         if finding.line_number is None:
             return False
         return _outside_encrypted_values(
-            self._values(file_path, finding.line_number, commit),
+            self._values_at(file_path, finding.line_number, commit),
             finding.column_number,
             in_bytes=finding.scanner in _BYTE_COLUMN_SCANNERS,
         )
+
+    def _values_at(self, file_path: str, line_number: int, commit: str | None) -> _LineValues:
+        key = (file_path, line_number, commit)
+        if key not in self._values:
+            if len(self._values) >= LINE_CACHE_SIZE:
+                del self._values[next(iter(self._values))]  # the oldest line
+            self._values[key] = self._line_values(file_path, line_number, commit)
+        return self._values[key]
 
     def _is_encrypted(self, file_path: str, commit: str | None) -> bool:
         key = (file_path, commit)
