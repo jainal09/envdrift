@@ -100,6 +100,20 @@ def _as_reported(path: Path) -> Path:
 _BYTE_COLUMN_SCANNERS = frozenset({"gitleaks"})
 
 
+def _check_ignore_input(names: list[str]) -> str:
+    """``names`` as ``git check-ignore --stdin -z`` reads them, each as that one path."""
+    return "".join(f"{_check_ignore_form(name)}\0" for name in names)
+
+
+def _names_printed(names: list[str], output: str) -> set[str]:
+    """The ``names`` whose ``_check_ignore_form`` git printed in ``output``.
+
+    git prints each path as it was given.
+    """
+    printed = set(output.split("\0"))
+    return {name for name in names if _check_ignore_form(name) in printed}
+
+
 def _check_ignore_form(name: str) -> str:
     """``name`` as ``git check-ignore --stdin`` reads it as that one path.
 
@@ -107,6 +121,166 @@ def _check_ignore_form(name: str) -> str:
     answer was for another file (#1016). ``./`` in front keeps it a path.
     """
     return f"./{name}" if name.startswith(":") else name
+
+
+class _EncryptedFiles:
+    """Where the files that findings point at hold encrypted values, each file read once.
+
+    A finding's file is read from disk, or, for a finding a history scan made in an old commit,
+    from that commit (#1014).
+    """
+
+    def __init__(self, committed: CommittedFiles) -> None:
+        self._committed = committed
+        self._encrypted: dict[tuple[str, str | None], bool] = {}
+        self._lines: dict[str, list[str]] = {}
+        # Found once for a line's findings, not once for each: a long line can hold thousands.
+        self._values = lru_cache(maxsize=LINE_CACHE_SIZE)(self._line_values)
+
+    def keeps(self, finding: ScanFinding) -> bool:
+        """Whether ``finding`` points at plaintext.
+
+        That is a file without encrypted values, a line without one, or a column outside the
+        encrypted values on its line (#937). A finding in an encrypted value, one without a
+        column on the line of one, or one with no line information is in ciphertext.
+        """
+        file_path = str(finding.file_path)
+        commit = self._committed.commit_of(finding)
+        if not self._is_encrypted(file_path, commit):
+            return True
+        if finding.line_number is None:
+            return False
+        return _outside_encrypted_values(
+            self._values(file_path, finding.line_number, commit),
+            finding.column_number,
+            in_bytes=finding.scanner in _BYTE_COLUMN_SCANNERS,
+        )
+
+    def _is_encrypted(self, file_path: str, commit: str | None) -> bool:
+        key = (file_path, commit)
+        if key not in self._encrypted:
+            if commit is None:
+                text = _text_for_markers(file_path)
+            else:
+                text = self._committed.text(file_path, commit)
+            # Structure-aware encryption check (#348): require the dotenvx marker in value
+            # position / canonical SOPS envelopes, not a bare substring (which misfired on
+            # plaintext mentioning "encrypted:").
+            self._encrypted[key] = text is not None and _content_is_encrypted(text)
+        return self._encrypted[key]
+
+    def _line_values(self, file_path: str, line_number: int, commit: str | None) -> _LineValues:
+        if commit is not None:
+            return _line_values(self._committed.line(file_path, commit, line_number))
+        if file_path not in self._lines:
+            self._lines[file_path] = _lines_of(file_path)
+        lines = self._lines[file_path]
+        return _line_values(lines[line_number - 1] if 1 <= line_number <= len(lines) else "")
+
+
+def _text_for_markers(file_path: str) -> str | None:
+    """The whole text of ``file_path``, to look for encryption markers in; None if unreadable.
+
+    The whole file (#368): the dotenvx ``encrypted:`` marker is a *value* prefix that can sit
+    far past the first 2KB in a combined file (cleartext config first, encrypted secrets
+    after). A 2KB window misjudged such files as unencrypted and leaked their ciphertext as
+    findings. This matches ``_lines_of`` and the native scanner, which both read full content.
+    """
+    try:
+        with open(file_path, encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _lines_of(file_path: str) -> list[str]:
+    """The lines of ``file_path``; none if it cannot be read.
+
+    surrogateescape keeps each byte that is not UTF-8 in its place, so a column that a scanner
+    counts in bytes can be placed exactly (#936).
+    """
+    try:
+        with open(file_path, encoding="utf-8", errors="surrogateescape") as f:
+            return split_lines(f.read())
+    except OSError:
+        return []
+
+
+def _by_git_root(paths: Iterable[Path]) -> dict[Path, list[Path]]:
+    """``paths`` by the root of the git work tree each is in; one in none is left out."""
+
+    def find_git_root(path: Path) -> Path | None:
+        current = path if path.is_dir() else path.parent
+        for parent in [current, *current.parents]:
+            if (parent / ".git").exists():
+                return parent
+        return None
+
+    by_root: dict[Path, list[Path]] = {}
+    for path in paths:
+        root = find_git_root(path)
+        if root is not None:
+            by_root.setdefault(root, []).append(path)
+    return by_root
+
+
+def _gitignored_below(root: Path, paths: list[Path]) -> set[Path]:
+    """The ``paths`` below ``root`` that git ignores, resolved; none when git cannot tell."""
+    import os
+    import subprocess  # nosec B404
+
+    # Use git check-ignore to check all files at once (relative to repo root)
+    rel_paths: list[str] = []
+    for p in paths:
+        try:
+            rel_paths.append(str(p.relative_to(root)))
+        except ValueError:
+            # Path is outside this repo root
+            continue
+    if not rel_paths:
+        return set()
+
+    try:
+        # Binary pipes with ``os.fsencode``/``os.fsdecode``: the finding
+        # paths live in filesystem space (``os.walk``/argv surface them
+        # via the fs codec with surrogateescape), so the pipe must apply
+        # the exact same mapping in both directions or paths stop
+        # comparing equal. A text pipe with the locale codec mis-handled
+        # non-ASCII filenames (#453); a pinned-UTF-8 text pipe still
+        # broke both directions — ``errors="replace"`` rewrote raw
+        # non-UTF-8 filename bytes to ``?`` on stdin (git never matched
+        # the .gitignore entry), and decoding git's UTF-8 output produced
+        # real non-ASCII chars that no longer matched surrogate-escaped
+        # finding paths under a non-UTF-8 locale (and crashed
+        # ``Path.resolve()``). Binary pipes also sidestep Windows
+        # text-mode ``\n`` -> ``\r\n`` translation, and ``-z`` makes git
+        # read/print paths verbatim (no core.quotepath quoting). git reads a
+        # path on stdin as a pathspec: the committed ``:sec/app.env`` was
+        # asked about as ``sec/app.env``, and its findings were dropped when
+        # ``sec/`` was ignored (#1016). git prints each path as it was given,
+        # and ``root / "./:sec/app.env"`` is the file.
+        result = subprocess.run(  # nosec B603, B607
+            ["git", "check-ignore", "--stdin", "-z"],
+            input=b"\0".join(os.fsencode(_check_ignore_form(p)) for p in rel_paths) + b"\0",
+            capture_output=True,
+            timeout=30,
+            cwd=str(root),
+            # check-ignore takes "tracked" from the index of root's repository, not a
+            # git hook's (#915).
+            env=without_git_location(),
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
+        logger.warning(f"Could not check gitignore status: {e}")
+        return set()
+    if result.returncode not in (0, 1):
+        logger.warning(
+            "git check-ignore failed in %s (code %s): %s",
+            root,
+            result.returncode,
+            result.stderr.decode("utf-8", "replace").strip()[:200],
+        )
+        return set()
+    return {(root / os.fsdecode(rel)).resolve() for rel in result.stdout.split(b"\0") if rel}
 
 
 @dataclass
@@ -985,83 +1159,8 @@ class ScanEngine:
         """
         if committed is None:
             committed = CommittedFiles(history=self.config.include_git_history)
-        # Cache per-file encryption status and (lazily) split lines.
-        encrypted_files: set[str] = set()
-        checked_files: set[str] = set()
-        lines_cache: dict[str, list[str]] = {}
-
-        def is_file_encrypted(file_path: str) -> bool:
-            if file_path in encrypted_files:
-                return True
-            if file_path in checked_files:
-                return False
-
-            checked_files.add(file_path)
-            try:
-                with open(file_path, encoding="utf-8", errors="ignore") as f:
-                    # Read the whole file (#368): the dotenvx ``encrypted:`` marker
-                    # is a *value* prefix that can sit far past the first 2KB in a
-                    # combined file (cleartext config first, encrypted secrets
-                    # after). A 2KB window misjudged such files as unencrypted and
-                    # leaked their ciphertext as findings. This matches line_at()
-                    # and the native scanner, which both read full content.
-                    content = f.read()
-                    # Structure-aware encryption check (#348): require the dotenvx
-                    # marker in value position / canonical SOPS envelopes, not a bare
-                    # substring (which misfired on plaintext mentioning "encrypted:").
-                    if _content_is_encrypted(content):
-                        encrypted_files.add(file_path)
-                        return True
-            except OSError:
-                pass
-            return False
-
-        def line_at(file_path: str, line_number: int) -> str:
-            if file_path not in lines_cache:
-                try:
-                    # surrogateescape keeps each byte that is not UTF-8 in its place, so a column
-                    # that a scanner counts in bytes can be placed exactly (#936)
-                    with open(file_path, encoding="utf-8", errors="surrogateescape") as f:
-                        lines_cache[file_path] = split_lines(f.read())
-                except OSError:
-                    lines_cache[file_path] = []
-            lines = lines_cache[file_path]
-            if 1 <= line_number <= len(lines):
-                return lines[line_number - 1]
-            return ""
-
-        @lru_cache(maxsize=LINE_CACHE_SIZE)
-        def encrypted_values(file_path: str, line_number: int, commit: str | None) -> _LineValues:
-            # Found once for a line's findings, not once for each: a long line can hold thousands
-            if commit is None:
-                return _line_values(line_at(file_path, line_number))
-            return _line_values(committed.line(file_path, commit, line_number))
-
-        @lru_cache(maxsize=LINE_CACHE_SIZE)
-        def encrypted_in_commit(file_path: str, commit: str) -> bool:
-            text = committed.text(file_path, commit)
-            return text is not None and _content_is_encrypted(text)
-
-        def keep(finding: ScanFinding) -> bool:
-            file_path = str(finding.file_path)
-            commit = committed.commit_of(finding)
-            if commit is None:
-                encrypted = is_file_encrypted(file_path)
-            else:
-                encrypted = encrypted_in_commit(file_path, commit)
-            if not encrypted:
-                return True
-            # File has encryption markers. Keep findings in its plaintext; drop
-            # findings in a ciphertext, or with no line info.
-            if finding.line_number is None:
-                return False
-            return _outside_encrypted_values(
-                encrypted_values(file_path, finding.line_number, commit),
-                finding.column_number,
-                in_bytes=finding.scanner in _BYTE_COLUMN_SCANNERS,
-            )
-
-        return [finding for finding in findings if keep(finding)]
+        files = _EncryptedFiles(committed)
+        return [finding for finding in findings if files.keeps(finding)]
 
     def _filter_public_keys(self, findings: list[ScanFinding]) -> list[ScanFinding]:
         """Filter out findings that are dotenvx public keys.
@@ -1163,9 +1262,6 @@ class ScanEngine:
         Returns:
             Filtered list excluding findings from gitignored files.
         """
-        import os
-        import subprocess  # nosec B404
-
         if not findings:
             return findings
         if committed is None:
@@ -1175,83 +1271,9 @@ class ScanEngine:
         file_paths = {
             Path(f.file_path).resolve() for f in findings if committed.commit_of(f) is None
         }
-        if not file_paths:
-            return findings
-
-        def find_git_root(path: Path) -> Path | None:
-            current = path if path.is_dir() else path.parent
-            for parent in [current, *current.parents]:
-                if (parent / ".git").exists():
-                    return parent
-            return None
-
-        paths_by_root: dict[Path, list[Path]] = {}
-        for path in file_paths:
-            root = find_git_root(path)
-            if root is None:
-                continue
-            paths_by_root.setdefault(root, []).append(path)
-
         gitignored_files: set[Path] = set()
-
-        for root, paths in paths_by_root.items():
-            # Use git check-ignore to check all files at once (relative to repo root)
-            rel_paths: list[str] = []
-            for p in paths:
-                try:
-                    rel_paths.append(str(p.relative_to(root)))
-                except ValueError:
-                    # Path is outside this repo root
-                    continue
-
-            if not rel_paths:
-                continue
-
-            try:
-                # Binary pipes with ``os.fsencode``/``os.fsdecode``: the finding
-                # paths live in filesystem space (``os.walk``/argv surface them
-                # via the fs codec with surrogateescape), so the pipe must apply
-                # the exact same mapping in both directions or paths stop
-                # comparing equal. A text pipe with the locale codec mis-handled
-                # non-ASCII filenames (#453); a pinned-UTF-8 text pipe still
-                # broke both directions — ``errors="replace"`` rewrote raw
-                # non-UTF-8 filename bytes to ``?`` on stdin (git never matched
-                # the .gitignore entry), and decoding git's UTF-8 output produced
-                # real non-ASCII chars that no longer matched surrogate-escaped
-                # finding paths under a non-UTF-8 locale (and crashed
-                # ``Path.resolve()``). Binary pipes also sidestep Windows
-                # text-mode ``\n`` -> ``\r\n`` translation, and ``-z`` makes git
-                # read/print paths verbatim (no core.quotepath quoting). git reads a
-                # path on stdin as a pathspec: the committed ``:sec/app.env`` was
-                # asked about as ``sec/app.env``, and its findings were dropped when
-                # ``sec/`` was ignored (#1016). git prints each path as it was given,
-                # and ``root / "./:sec/app.env"`` is the file.
-                result = subprocess.run(  # nosec B603, B607
-                    ["git", "check-ignore", "--stdin", "-z"],
-                    input=b"\0".join(os.fsencode(_check_ignore_form(p)) for p in rel_paths) + b"\0",
-                    capture_output=True,
-                    timeout=30,
-                    cwd=str(root),
-                    # check-ignore takes "tracked" from the index of root's repository, not a
-                    # git hook's (#915).
-                    env=without_git_location(),
-                )
-                if result.returncode not in (0, 1):
-                    logger.warning(
-                        "git check-ignore failed in %s (code %s): %s",
-                        root,
-                        result.returncode,
-                        result.stderr.decode("utf-8", "replace").strip()[:200],
-                    )
-                    continue
-
-                if result.stdout:
-                    ignored = [os.fsdecode(p) for p in result.stdout.split(b"\0") if p]
-                    for rel in ignored:
-                        gitignored_files.add((root / rel).resolve())
-            except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError) as e:
-                logger.warning(f"Could not check gitignore status: {e}")
-                continue
+        for root, paths in _by_git_root(file_paths).items():
+            gitignored_files |= _gitignored_below(root, paths)
 
         if not gitignored_files:
             return findings
@@ -1312,10 +1334,9 @@ class ScanEngine:
             # raw filename bytes exactly, where ``replace`` would rewrite them.
             # A name that starts with ``:`` is given as ``./:...``, as in
             # _filter_gitignored_files, and git prints each name as it was given.
-            asked = [(_check_ignore_form(name), name) for name in self.config.combined_files]
             result = subprocess.run(  # nosec B603, B607
                 ["git", "check-ignore", "--stdin", "-z"],
-                input="\0".join(form for form, _ in asked) + "\0",
+                input=_check_ignore_input(self.config.combined_files),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -1337,8 +1358,7 @@ class ScanEngine:
                 )
                 return warnings
 
-            printed = {p for p in result.stdout.split("\0") if p}
-            gitignored = {name for form, name in asked if form in printed}
+            gitignored = _names_printed(self.config.combined_files, result.stdout)
 
             for combined_file in self.config.combined_files:
                 if combined_file not in gitignored:

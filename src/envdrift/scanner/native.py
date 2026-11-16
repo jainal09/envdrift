@@ -589,20 +589,10 @@ class NativeScanner(ScannerBackend):
             for file_path in files_to_scan:
                 if self._should_ignore(file_path, path, cwd):
                     continue
-
-                try:
-                    file_findings = self._scan_file(file_path)
-                except FileTooLargeError:
-                    # Not read, so not scanned: say so instead of passing it for clean (#933).
-                    warnings.append(_too_large_warning(file_path, cwd))
-                    continue
-                except GitError as e:
-                    # git could not say whether a key file is committed: fail the scan rather
-                    # than pass it for clean (#1016).
-                    errors.append(str(e))
-                    continue
-                files_scanned += 1
-                findings.extend(file_findings)
+                file_findings = self._scan_listed_file(file_path, cwd, warnings, errors)
+                if file_findings is not None:
+                    files_scanned += 1
+                    findings.extend(file_findings)
 
         duration_ms = int((time.time() - start_time) * 1000)
 
@@ -885,6 +875,24 @@ class NativeScanner(ScannerBackend):
         if not content.strip():
             return None
         return content
+
+    def _scan_listed_file(
+        self, file_path: Path, cwd: Path, warnings: list[str], errors: list[str]
+    ) -> list[ScanFinding] | None:
+        """The findings in ``file_path``, or None when it was not scanned.
+
+        Why it was not is added to ``warnings`` or ``errors``, never passed over as clean.
+        """
+        try:
+            return self._scan_file(file_path)
+        except FileTooLargeError:
+            # Not read, so not scanned: say so instead of passing it for clean (#933).
+            warnings.append(_too_large_warning(file_path, cwd))
+        except GitError as e:
+            # git could not say whether a key file is committed: fail the scan rather than
+            # pass it for clean (#1016).
+            errors.append(str(e))
+        return None
 
     def _scan_file(self, file_path: Path) -> list[ScanFinding]:
         """Scan a single file for secrets.
