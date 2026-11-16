@@ -201,6 +201,15 @@ def has_encrypted_values(text: str) -> bool:
     )
 
 
+def unverifiable_ciphertext(text: str) -> bool:
+    """Whether ``text`` holds ciphertext but no public key to tie a private key to it.
+
+    A file's public key is the only sign of which key its values were
+    encrypted with, so without one no held key can be checked against them.
+    """
+    return has_encrypted_values(text) and not public_key_values(text)
+
+
 def _canonical_env_filename(name: str) -> str:
     """dotenvx's canonicalEnvFilename: lowercase, ``.env*.txt`` loses ``.txt``."""
     base = name.lower()
@@ -387,10 +396,15 @@ _PUBLIC_KEY_LINE_RE = re.compile(
 
 
 def rewrite_public_keys(text: str, public_key: str) -> str:
-    """Set every single-line ``DOTENV_PUBLIC_KEY*`` value in ``text`` to ``public_key``."""
+    """Set every single-line ``DOTENV_PUBLIC_KEY*`` value in ``text`` to ``public_key``.
+
+    A line inside a quoted value that spans lines is that value's text, not a
+    public key, so it stays as it is.
+    """
     lines = text.split("\n")
+    in_values = value_continuation_lines(text)
     for index, line in enumerate(lines):
-        match = _PUBLIC_KEY_LINE_RE.match(line)
+        match = None if index in in_values else _PUBLIC_KEY_LINE_RE.match(line)
         if match:
             lines[index] = f'{match.group("head")}"{public_key}"{match.group("tail")}'
     return "\n".join(lines)
@@ -475,6 +489,13 @@ def _usable_public_key(held: str, target: KeyTarget) -> str:
 def _with_public_key(env_text: str, public_key: str, target: KeyTarget) -> str:
     """Return ``env_text`` carrying ``public_key`` as its only public key, or refuse."""
     present = [normalize_public_key(value) for value in public_key_values(env_text)]
+    if not present and has_encrypted_values(env_text):
+        raise KeyReuseError(
+            f"{target.env_file.name} holds encrypted values but no DOTENV_PUBLIC_KEY, so it "
+            f"is not known whether they were encrypted with {target.key_name} in "
+            f"{target.keys_file}. Restore the DOTENV_PUBLIC_KEY line of the key they were "
+            f"encrypted with and re-run."
+        )
     if not present:
         return seed_public_key(env_text, target.env_file, target.keys_file, public_key)
     if all(value == public_key for value in present):

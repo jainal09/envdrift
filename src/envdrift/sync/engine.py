@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 from envdrift.env_files import detect_env_file, resolve_mapping_env_file
+from envdrift.integrations.dotenvx_keys import distinct_keys, private_key_candidates
 from envdrift.sync.config import ServiceMapping, SyncConfig
 from envdrift.sync.operations import EnvKeysFile, atomic_write, ensure_directory, redact_value
 from envdrift.sync.result import (
@@ -38,6 +39,12 @@ if TYPE_CHECKING:
     from envdrift.vault import VaultClient
 
 logger = logging.getLogger(__name__)
+
+
+def _first_value_keys(env_keys_path: Path, key_name: str) -> list[str]:
+    """The distinct keys of the first ``key_name`` value, split like dotenvx's key ring."""
+    value = EnvKeysFile(env_keys_path).read_key(key_name)
+    return [] if value is None else distinct_keys(private_key_candidates([value]))
 
 
 @dataclass
@@ -309,9 +316,7 @@ class SyncEngine:
             )
         else:
             # Mismatch - update
-            return self._update_mismatched_key(
-                ctx, env_keys_file, local_preview, value_count=len(local_values)
-            )
+            return self._update_mismatched_key(ctx, env_keys_file, local_preview, local_values)
 
     def _create_missing_key(
         self, ctx: _ServiceSyncContext, env_keys_file: EnvKeysFile, env_keys_path: Path
@@ -335,7 +340,9 @@ class SyncEngine:
                 error=reason,
             )
 
-        env_keys_file.write_key(ctx.effective_key_name, ctx.vault_value, ctx.effective_environment)
+        env_keys_file.write_key(
+            ctx.effective_key_name, ctx.vault_value, ctx.effective_environment, expected=[]
+        )
         return ServiceSyncResult(
             secret_name=ctx.mapping.secret_name,
             folder_path=ctx.mapping.folder_path,
@@ -350,15 +357,18 @@ class SyncEngine:
         ctx: _ServiceSyncContext,
         env_keys_file: EnvKeysFile,
         local_preview: str | None,
-        *,
-        value_count: int = 1,
+        held: list[str],
     ) -> ServiceSyncResult:
-        """Update a mismatched local key (verify errors; prompt unless forced)."""
+        """Update a mismatched local key (verify errors; prompt unless forced).
+
+        ``held`` is every local value compared with the vault: the write is
+        refused if the keys file holds anything else by then.
+        """
         if self.mode.verify_only:
             error = "Local value differs from vault"
-            if value_count > 1:
+            if len(held) > 1:
                 error += (
-                    f" ({env_keys_file.path.name} holds {value_count} values for "
+                    f" ({env_keys_file.path.name} holds {len(held)} values for "
                     f"{ctx.effective_key_name})"
                 )
             return ServiceSyncResult(
@@ -387,7 +397,7 @@ class SyncEngine:
             # Create backup before updating
             backup_path = env_keys_file.create_backup()
             env_keys_file.write_key(
-                ctx.effective_key_name, ctx.vault_value, ctx.effective_environment
+                ctx.effective_key_name, ctx.vault_value, ctx.effective_environment, expected=held
             )
             return ServiceSyncResult(
                 secret_name=ctx.mapping.secret_name,
@@ -563,16 +573,27 @@ class SyncEngine:
             # name, so copying the whole file let a second, locally minted key
             # pass a check meant for the vault key (#938). The check tests the
             # first value of the mapping's key name only; sync itself compares
-            # every value under that name with the vault.
-            key_value = EnvKeysFile(env_keys_path).read_key(key_name)
+            # every value under that name with the vault. dotenvx splits a value
+            # on "," into a key ring, so a first value of two keys is no one key.
+            keys = _first_value_keys(env_keys_path, key_name)
+            if len(keys) > 1:
+                logger.warning(
+                    "Decryption check for %s failed: %s holds %d keys in its first %s value, "
+                    "and dotenvx decrypts with any of them",
+                    target_file,
+                    env_keys_path,
+                    len(keys),
+                    key_name,
+                )
+                return DecryptionTestResult.FAILED
             with tempfile.TemporaryDirectory(prefix=".envdrift-check-decryption-") as temp_dir:
                 temp_dir_path = Path(temp_dir)
                 # Preserve the file name: dotenvx derives the expected
                 # DOTENV_PRIVATE_KEY_<ENV> name from it.
                 temp_copy = temp_dir_path / target_file.name
                 shutil.copy2(target_file, temp_copy)
-                if key_value is not None:
-                    atomic_write(temp_dir_path / ".env.keys", f"{key_name}={key_value}\n")
+                if keys:
+                    atomic_write(temp_dir_path / ".env.keys", f"{key_name}={keys[0]}\n")
 
                 try:
                     result = subprocess.run(  # nosec B603

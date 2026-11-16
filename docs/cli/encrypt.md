@@ -66,7 +66,8 @@ exit code (dotenvx can exit `0` without encrypting):
   A header for another key is corrected while the file holds no encrypted value yet.
   The command refuses, with both files left as they were, when that name holds more
   than one different key, when the value is not a key dotenvx can use (`is not a valid
-  dotenvx key`), or when the file is already encrypted under another public key.
+  dotenvx key`), when the file is already encrypted under another public key, or when it
+  holds encrypted values but no public key, so nothing shows which key they need.
   A `.env.keys` that is a directory, unreadable or not UTF-8 is a clean error too.
 - **Checks what dotenvx did with the keys.** After dotenvx runs, both files are read
   again. If a key that was there before changed or gained a second value, if dotenvx

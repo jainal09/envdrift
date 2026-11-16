@@ -1358,6 +1358,22 @@ class TestVaultPushAllKeyChecks:
         assert "DOTENV_PRIVATE_KEY_PRODUCTION in the keys file is not a valid dotenvx key" in out
         client.set_secret.assert_not_called()
 
+    def test_a_key_for_ciphertext_without_a_public_key_is_not_published(self, tmp_path):
+        """With no public key in the file, nothing ties the held key to its values."""
+        folder = tmp_path / "svc"
+        folder.mkdir()
+        (folder / ".env.production").write_text("A=encrypted:x\n", encoding="utf-8")
+        (folder / ".env.keys").write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY}\n")
+        mapping = ServiceMapping(secret_name="s", folder_path=folder, environment="production")
+
+        result, client, _ = self._run(tmp_path, [mapping])
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "Not pushed s" in out
+        assert "holds encrypted values but no DOTENV_PUBLIC_KEY" in out
+        client.set_secret.assert_not_called()
+
     def test_a_refused_key_change_is_reported_and_the_rest_still_runs(self, tmp_path):
         """B3: a normalize conflict in one mapping does not abort the next one."""
         bad = tmp_path / "bad"
@@ -1370,7 +1386,10 @@ class TestVaultPushAllKeyChecks:
         bad_before = (bad / ".env.keys").read_bytes()
         good = tmp_path / "good"
         good.mkdir()
-        (good / ".env.production").write_text("B=encrypted:y\n", encoding="utf-8")
+        (good / ".env.production").write_text(
+            f'DOTENV_PUBLIC_KEY_PRODUCTION="{DOTENVX_KEY_PAIRS[2][1]}"\nB=encrypted:y\n',
+            encoding="utf-8",
+        )
         (good / ".env.keys").write_text(
             f"DOTENV_PRIVATE_KEY_PRODUCTION={KEY_3}\n", encoding="utf-8"
         )

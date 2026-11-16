@@ -1534,6 +1534,43 @@ class TestEveryHeldValueIsCompared:
         assert engine._test_decryption(engine.config.mappings[0]) == DecryptionTestResult.PASSED
         assert staged == [f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT}\n"]
 
+    def test_decryption_check_fails_a_first_value_of_two_keys(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dotenvx splits a value on "," into a key ring: two keys are no one key to test."""
+        (tmp_path / ".env.keys").write_text(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT},{self.OTHER}\n", encoding="utf-8"
+        )
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+        ran: list[object] = []
+        monkeypatch.setattr(
+            "envdrift.sync.engine.subprocess.run", lambda cmd, **kwargs: ran.append(cmd)
+        )
+        engine = self._engine(tmp_path, mock_vault_client, SyncMode())
+
+        assert engine._test_decryption(engine.config.mappings[0]) == DecryptionTestResult.FAILED
+        assert ran == []
+
+    def test_decryption_check_stages_a_ring_of_one_key_as_that_key(
+        self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / ".env.keys").write_text(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT},{self.VAULT.upper()}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("envdrift.sync.engine.shutil.which", lambda _: "/usr/bin/dotenvx")
+        staged: list[str] = []
+
+        def fake_run(cmd, **kwargs):
+            staged.append((Path(kwargs["cwd"]) / ".env.keys").read_text(encoding="utf-8"))
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr("envdrift.sync.engine.subprocess.run", fake_run)
+        engine = self._engine(tmp_path, mock_vault_client, SyncMode())
+
+        assert engine._test_decryption(engine.config.mappings[0]) == DecryptionTestResult.PASSED
+        assert staged == [f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT}\n"]
+
     def test_decryption_check_with_no_local_key_stages_none(
         self, mock_vault_client: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

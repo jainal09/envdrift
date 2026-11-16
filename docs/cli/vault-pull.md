@@ -77,7 +77,9 @@ A key whose quoted value spans several lines is replaced with all of its lines. 
 as `DOTENV_PRIVATE_KEY_<ENV>:` with the key on the next line, which dotenvx also reads, cannot
 be rewritten in place: the command fails and `.env.keys` is left unchanged. Write it as
 `DOTENV_PRIVATE_KEY_<ENV>=<key>` and re-run. The command also fails, with `.env.keys`
-unchanged, rather than change how dotenvx reads any other line of the file.
+unchanged, rather than change how dotenvx reads any other line of the file, or write a vault key
+that dotenvx would read back as another value, such as one holding `#`. If another process
+changes the key after `vault-pull` read it, nothing is written either: run the command again.
 
 ## Options
 

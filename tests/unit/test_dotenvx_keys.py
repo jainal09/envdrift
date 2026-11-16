@@ -250,6 +250,20 @@ def test_plan_rewrites_another_keys_header_while_nothing_is_encrypted(tmp_path: 
     assert plan.env_text == f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB1}" # -fk x\nA=plain\n'
 
 
+def test_plan_leaves_a_public_key_line_inside_a_value_alone(tmp_path: Path):
+    """A key-like line in a quoted value is the value's text: only the header is rewritten."""
+    note = 'NOTE="text\nDOTENV_PUBLIC_KEY_X=literal\n"\n'
+    text = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB2}"\n{note}A=plain\n'
+    plan = _plan(text, f"{NAME}={K1}\n", tmp_path)
+    assert plan.env_text == f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB1}"\n{note}A=plain\n'
+
+
+def test_plan_refuses_ciphertext_without_a_public_key(tmp_path: Path):
+    """Nothing ties the held key to values with no header: seeding one could mix two keys."""
+    with pytest.raises(KeyReuseError, match="holds encrypted values but no DOTENV_PUBLIC_KEY"):
+        _plan("A=encrypted:abc\nB=new\n", f"{NAME}={K1}\n", tmp_path)
+
+
 def test_plan_refuses_a_file_encrypted_under_another_key(tmp_path: Path):
     text = f'DOTENV_PUBLIC_KEY_PRODUCTION="{PUB2}"\nA=encrypted:abc\nB=new\n'
     with pytest.raises(KeyReuseError, match="encrypted with another public key"):

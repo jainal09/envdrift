@@ -115,7 +115,9 @@ decrypted or rewritten (its bytes are identical before and after, whether the
 check passes or fails). dotenvx decrypts with any key it is given, whatever its
 name, so the copy gets a keys file holding only the key sync compared with the
 vault: the first `DOTENV_PRIVATE_KEY_<ENV>` value of the mapping's keys file. A
-second, locally created key in `.env.keys` cannot make the check pass. Stray
+second, locally created key in `.env.keys` cannot make the check pass. dotenvx
+reads a value such as `a,b` as a key ring of two keys, so a first value that
+holds two different keys fails the check instead of passing through either. Stray
 `DOTENV_PRIVATE_KEY*` variables in your shell are ignored too, and mappings with
 relative `folder_path` values (the usual monorepo layout) verify correctly from
 the project root.
@@ -377,7 +379,8 @@ sure git ignores it (it adds `<folder>/<keys file>.backup.*`, for example `servi
 covers it) before writing it. If a `.gitignore` rule such as `!*.backup.*` would still let git track it, no backup is written and the key is not
 updated. A key whose quoted value spans several lines is replaced with all of its lines. A key written as `DOTENV_PRIVATE_KEY_<ENV>:` with the key
 on the next line cannot be rewritten in place, and neither can one whose rewrite would change how dotenvx reads another line: that service is
-reported as an error with its keys file unchanged.
+reported as an error with its keys file unchanged. So is a vault key that dotenvx would read back as another value, such as one holding `#`, and a
+key that another process changed after sync read it.
 
 ```text
   ~ services/myapp (myapp-key, env: production) - updated

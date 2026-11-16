@@ -86,7 +86,8 @@ envdrift vault-push --all --force
 `--all` encrypts with the keys file named by `[vault.sync] env_keys_filename` (default `.env.keys`) and the mapping's `environment`, so dotenvx reuses
 the key the folder already holds (see [`lock`](lock.md#keys-and-the-keys-file)) and the key that is pushed is the one that encrypted the file. A key
 is not pushed when the key name holds two different values (a `a,b` key ring included), when the value is not a key dotenvx can use, or when the env
-file's public key is not that key's: the vault copy could not decrypt it.
+file's public key is not that key's: the vault copy could not decrypt it. Nor is it pushed for a file with encrypted values but no public key, since
+nothing then ties the key to them.
 Each mapping is reported on its own: a refused or failed mapping is counted under `Errors`, the remaining mappings still run, and the command exits 1.
 
 When the local files are already encrypted, add `--skip-encrypt` to bypass the encryption step and only push keys:

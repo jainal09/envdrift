@@ -45,19 +45,83 @@ def test_write_key_rewrites_every_line_a_reader_would_load(tmp_path: Path) -> No
     )
 
 
-def test_write_key_refuses_a_layout_it_cannot_rewrite(tmp_path: Path) -> None:
-    """dotenvx reads ``KEY:`` + newline + value as the key: never append a second one."""
+@pytest.mark.parametrize(
+    ("original", "value", "held", "message"),
+    [
+        # dotenvx reads ``KEY:`` + newline + value as the key: never append a second one.
+        pytest.param(
+            "# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION:\nold\n",
+            "new",
+            ["old"],
+            "cannot rewrite",
+            id="key-on-the-next-line",
+        ),
+        # dotenvx reads one value of A here, which a line-by-line rewrite would split.
+        pytest.param(
+            "A=1\u2028DOTENV_PRIVATE_KEY_PRODUCTION=old\n",
+            "new",
+            [],
+            "cannot rewrite",
+            id="line-separator-inside-a-value",
+        ),
+        # dotenvx reads ``#`` as a comment, so it would load "new", not the value given.
+        pytest.param(
+            "DOTENV_PRIVATE_KEY_PRODUCTION=old\n",
+            "new#tail",
+            ["old"],
+            "would not read",
+            id="value-with-a-hash",
+        ),
+        pytest.param(None, "new#tail", [], "would not read", id="value-with-a-hash-new-file"),
+    ],
+)
+def test_write_key_writes_nothing_dotenvx_would_read_otherwise(
+    tmp_path: Path, original: str | None, value: str, held: list[str], message: str
+) -> None:
+    """No write when dotenvx would load another value, or read another name differently."""
     keys_path = tmp_path / ".env.keys"
-    original = "# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION:\nold\n"
-    keys_path.write_text(original, encoding="utf-8")
+    if original is not None:
+        keys_path.write_text(original, encoding="utf-8")
     keys = EnvKeysFile(keys_path)
-    assert keys.read_values("DOTENV_PRIVATE_KEY_PRODUCTION") == ["old"]
+    assert keys.read_values("DOTENV_PRIVATE_KEY_PRODUCTION") == held
 
-    with pytest.raises(ValueError, match="cannot rewrite"):
-        keys.write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new")
+    with pytest.raises(ValueError, match=message):
+        keys.write_key("DOTENV_PRIVATE_KEY_PRODUCTION", value)
 
-    assert keys_path.read_text(encoding="utf-8") == original
-    assert keys.read_values("DOTENV_PRIVATE_KEY_PRODUCTION") == ["old"]
+    assert keys.read_values("DOTENV_PRIVATE_KEY_PRODUCTION") == held
+    if original is None:
+        assert not keys_path.exists()
+    else:
+        assert keys_path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("before", [None, "DOTENV_PRIVATE_KEY_PRODUCTION=theirs\n"])
+def test_write_key_refuses_a_key_written_since_it_was_read(
+    tmp_path: Path, before: str | None
+) -> None:
+    """Another writer added a key after the caller read none: write nothing."""
+    keys_path = tmp_path / ".env.keys"
+    if before is not None:
+        keys_path.write_text(before, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="changed while envdrift was working on it"):
+        EnvKeysFile(keys_path).write_key(
+            "DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=["mine"] if before is None else []
+        )
+
+    if before is None:
+        assert not keys_path.exists()
+    else:
+        assert keys_path.read_text(encoding="utf-8") == before
+
+
+def test_write_key_writes_when_the_key_is_still_what_was_read(tmp_path: Path) -> None:
+    keys_path = tmp_path / ".env.keys"
+    keys_path.write_text("DOTENV_PRIVATE_KEY_PRODUCTION=old\n", encoding="utf-8")
+
+    EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=["old"])
+
+    assert keys_path.read_text(encoding="utf-8") == "DOTENV_PRIVATE_KEY_PRODUCTION=new\n"
 
 
 def test_write_key_replaces_a_multiline_value_whole(tmp_path: Path) -> None:
@@ -88,20 +152,6 @@ def test_write_key_leaves_a_line_inside_another_value_alone(tmp_path: Path) -> N
     EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new")
 
     assert keys_path.read_text(encoding="utf-8") == note + "DOTENV_PRIVATE_KEY_PRODUCTION=new\n"
-
-
-def test_write_key_refuses_a_rewrite_that_changes_another_name(tmp_path: Path) -> None:
-    """dotenvx reads this as one value of A, which a line-by-line rewrite would split."""
-    keys_path = tmp_path / ".env.keys"
-    original = "A=1\u2028DOTENV_PRIVATE_KEY_PRODUCTION=old\n"
-    keys_path.write_text(original, encoding="utf-8")
-    keys = EnvKeysFile(keys_path)
-    assert keys.read_values("DOTENV_PRIVATE_KEY_PRODUCTION") == []
-
-    with pytest.raises(ValueError, match="cannot rewrite"):
-        keys.write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new")
-
-    assert keys_path.read_text(encoding="utf-8") == original
 
 
 def _git_init(path: Path) -> None:

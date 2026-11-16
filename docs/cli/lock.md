@@ -185,8 +185,8 @@ the keys file named by `[vault.sync] env_keys_filename` (default `.env.keys`) an
 mapping's `environment`, so the key held as `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` is written
 into the file's header before dotenvx runs. The same rules as
 [`encrypt`](encrypt.md#safety-guarantees) apply: two different keys under that name, a value
-that is not a dotenvx key, or a file already encrypted under another public key is refused
-with both files left as they were, and if dotenvx still creates or replaces a key, or leaves
+that is not a dotenvx key, a file already encrypted under another public key, or a file with
+encrypted values but no public key is refused with both files left as they were, and if dotenvx still creates or replaces a key, or leaves
 the file without the held key's public key, both files are put back and the file counts as an
 error. An already encrypted file is checked the same way: a held value that is not a dotenvx
 key, or that is not the key of the file's public key, is an error, not "already encrypted".
@@ -452,6 +452,7 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | `holds N different keys under ...` | The key name holds more than one key; keep the vault key, delete the other |
 | `is not a valid dotenvx key` | The held value is not a key dotenvx can use: nothing was encrypted, and an already encrypted file counts as an error |
 | `encrypted with another public key` | The file is not encrypted with the key held for it |
+| `holds encrypted values but no DOTENV_PUBLIC_KEY` | Nothing shows which key the values need; restore the file's public-key line |
 | `holds two different keys for <file>` | A custom filename's key and the canonical key differ; neither is overwritten |
 | `cannot re-label its key` | The renamed file's key could not be saved under the expected name; nothing changed |
 

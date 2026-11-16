@@ -109,18 +109,30 @@ class EnvKeysFile:
         values = self.read_values(key_name)
         return values[0] if values else None
 
-    def write_key(self, key_name: str, value: str, environment: str = "production") -> None:
+    def write_key(
+        self,
+        key_name: str,
+        value: str,
+        environment: str = "production",
+        expected: list[str] | None = None,
+    ) -> None:
         """
         Write/update a key, preserving existing content and header.
 
         Every line dotenvx would read as ``key_name`` (``export`` and spaces
         around ``=`` included) is rewritten, so no older value is left behind
         for dotenvx to load. Creates the file with proper header if it doesn't
-        exist.
+        exist. A value dotenvx would not read back as given is refused first.
+
+        ``expected`` is every value the caller read under ``key_name`` when it
+        decided to write (``[]`` for none). When the file holds anything else
+        by now, another writer changed it in between, and nothing is written.
         """
+        self._require_readable_value(key_name, value)
         if self.path.exists():
             # UTF-8 like dotenvx itself, regardless of the platform locale (#474).
             content = self.path.read_bytes().decode("utf-8")
+            self._require_unchanged(key_name, content, expected)
             new_lines, key_found = _rewrite_key_lines(content.splitlines(), key_name, value)
 
             if not key_found:
@@ -137,11 +149,41 @@ class EnvKeysFile:
             self._require_only_value(key_name, value, content, new_content)
             atomic_write(self.path, new_content)
         else:
+            self._require_unchanged(key_name, "", expected)
             # Create new file with header. dotenvx leaves a blank line between
             # the header block and the first "# .env.<environment>" comment —
             # reproduce its layout byte-for-byte (#474).
             content = f"{DOTENVX_HEADER}\n\n# .env.{environment}\n{key_name}={value}\n"
             atomic_write(self.path, content)
+
+    def _require_unchanged(self, key_name: str, content: str, expected: list[str] | None) -> None:
+        """Refuse when ``content`` no longer holds the ``expected`` values of ``key_name``.
+
+        Raises:
+            ValueError: Another writer changed the key after the caller read it.
+        """
+        if expected is not None and assignment_values(content, key_name) != expected:
+            raise ValueError(
+                f"{self.path} changed while envdrift was working on it: it no longer holds "
+                f"the {key_name} envdrift read. Nothing was changed; run the command again."
+            )
+
+    def _require_readable_value(self, key_name: str, value: str) -> None:
+        """Refuse a value that ``key_name=<value>`` would not load as given.
+
+        dotenvx reads ``#`` as the start of a comment and strips quotes and
+        surrounding spaces, so such a value would be stored as another key.
+
+        Raises:
+            ValueError: dotenvx would load another value. The message never
+                includes the value, which is secret material.
+        """
+        if assignment_values(f"{key_name}={value}\n", key_name) != [value]:
+            raise ValueError(
+                f"dotenvx would not read the new {key_name} for {self.path} as it was "
+                f"given: the value holds a character dotenvx reads specially, such as '#' "
+                f"or a quote. Nothing was changed."
+            )
 
     def _require_only_value(
         self, key_name: str, value: str, content: str, new_content: str
@@ -158,11 +200,10 @@ class EnvKeysFile:
                 not ``value`` (``value`` on several lines is the same key), or
                 another name reads differently than in ``content``.
         """
-        expected = set(assignment_values(f"{key_name}={value}\n", key_name))
         before = parse_assignments(content)
         after = parse_assignments(new_content)
         before.pop(key_name, None)
-        if set(after.pop(key_name, [])) != expected or after != before:
+        if set(after.pop(key_name, [])) != {value} or after != before:
             raise ValueError(
                 f"{self.path} holds {key_name} in a layout envdrift cannot rewrite without "
                 f"changing what dotenvx reads, such as '{key_name}:' with the key on the "

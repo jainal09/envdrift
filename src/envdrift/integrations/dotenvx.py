@@ -1165,7 +1165,7 @@ class DotenvxWrapper:
         own = {dotenvx_key_names(filename)[0]}
         if environment:
             own.add(f"DOTENV_PUBLIC_KEY_{environment.upper()}")
-        blocks = list(cls.DOTENVX_HEADER_BLOCK_PATTERN.finditer(text))
+        blocks = cls._header_blocks(text)
         stale = [block for block in blocks if block.group(1) not in own]
         if not stale or len(stale) == len(blocks):
             return text
@@ -1175,6 +1175,21 @@ class DotenvxWrapper:
         for block in reversed(stale):
             cleaned = cleaned[: block.start()] + cleaned[block.end() :]
         return cleaned.lstrip("\n")
+
+    @classmethod
+    def _header_blocks(cls, text: str) -> list[re.Match[str]]:
+        """The header blocks in ``text`` that start a line outside every quoted value.
+
+        A banner quoted inside a value is that value's text, so it is never a
+        header that cleanup may remove.
+        """
+        in_values = value_continuation_lines(text)
+        return [
+            block
+            for block in cls.DOTENVX_HEADER_BLOCK_PATTERN.finditer(text)
+            if block.start() == 0 or text[block.start() - 1] == "\n"
+            if text.count("\n", 0, block.start()) not in in_values
+        ]
 
     @staticmethod
     def _redundant_blocks(

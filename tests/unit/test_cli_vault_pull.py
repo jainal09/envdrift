@@ -1274,6 +1274,34 @@ class TestVaultPullNeverDropsADifferentLocalKey:
         assert keys.read_bytes() == before
 
     @patch("envdrift.vault.get_vault_client")
+    def test_a_key_written_after_the_check_is_not_replaced(
+        self, mock_get_client, tmp_path, monkeypatch
+    ):
+        """Another writer adds a key after vault-pull read none: it is kept, not replaced."""
+        from envdrift.cli_commands import vault_keys
+
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        theirs = f"DOTENV_PRIVATE_KEY_PRODUCTION={self.LOCAL_KEY}\n"
+        read_held = vault_keys._held_pull_values
+
+        def read_then_another_writer(env_keys_path, key_name):
+            held = read_held(env_keys_path, key_name)
+            keys.write_text(theirs, encoding="utf-8")
+            return held
+
+        monkeypatch.setattr(vault_keys, "_held_pull_values", read_then_another_writer)
+
+        result = runner.invoke(app, self._args(tmp_path))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "changed while envdrift was working on it" in out
+        assert keys.read_text(encoding="utf-8") == theirs
+
+    @patch("envdrift.vault.get_vault_client")
     def test_force_stops_when_the_backup_cannot_be_ignored(
         self, mock_get_client, tmp_path, monkeypatch
     ):

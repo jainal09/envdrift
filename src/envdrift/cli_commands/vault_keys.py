@@ -46,7 +46,7 @@ def _unmatched_push_key(
     its key's, as ``lock`` requires of the key it holds for a file.
     """
     from envdrift.encryption import EncryptionProvider
-    from envdrift.integrations.dotenvx_keys import held_values_problem
+    from envdrift.integrations.dotenvx_keys import held_values_problem, unverifiable_ciphertext
 
     if context.backend_provider != EncryptionProvider.DOTENVX:
         return None
@@ -54,9 +54,14 @@ def _unmatched_push_key(
     env_text = env_file.read_bytes().decode("utf-8") if env_file.is_file() else ""
     key_name = f"DOTENV_PRIVATE_KEY_{target.environment.upper()}"
     problem = held_values_problem(env_text, [key_value], key_name)
-    if problem is None:
-        return None
-    return f"{problem}, so the vault copy could not decrypt {env_file}"
+    if problem is not None:
+        return f"{problem}, so the vault copy could not decrypt {env_file}"
+    if unverifiable_ciphertext(env_text):
+        return (
+            f"{env_file} holds encrypted values but no DOTENV_PUBLIC_KEY, so {key_name} "
+            f"cannot be checked against them; restore the file's header and push again"
+        )
+    return None
 
 
 def read_push_key(env_keys_path: Path, key_name: str) -> str:
@@ -151,9 +156,7 @@ def write_pull_key(request: VaultPullRequest, key_name: str, key_value: str) -> 
         _backup_pull_keys(env_keys_path)
     try:
         EnvKeysFile(env_keys_path).write_key(
-            key_name,
-            key_value,
-            environment=request.environment,
+            key_name, key_value, environment=request.environment, expected=held
         )
     except (OSError, ValueError) as e:
         print_error(f"Cannot write {env_keys_path}: {e}")

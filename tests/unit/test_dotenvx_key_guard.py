@@ -233,6 +233,15 @@ def test_a_stale_header_with_the_same_key_is_dropped(tmp_path: Path):
     assert cleaned == own + "A=encrypted:abc\n"
 
 
+@pytest.mark.parametrize("opening", ["NOTE='", "NOTE='\n"], ids=["same-line", "next-line"])
+def test_a_header_quoted_inside_a_value_is_left_alone(opening: str):
+    """A banner inside a quoted value is the value's text, not a header to clean up."""
+    own = _header("DOTENV_PUBLIC_KEY_PRODUCTION", PUB1, ".env.production")
+    text = own + opening + _header("DOTENV_PUBLIC_KEY", PUB2, ".env") + "'\nA=1\n"
+
+    assert DotenvxWrapper._clean_mismatched_header_text(text, ".env.production") == text
+
+
 def test_refusals_happen_before_dotenvx_and_change_nothing(tmp_path: Path):
     env_file, keys_file = _setup(tmp_path, keys=f"{NAME}={K1}\n{NAME}={K2}\n")
     before = (env_file.read_bytes(), keys_file.read_bytes())

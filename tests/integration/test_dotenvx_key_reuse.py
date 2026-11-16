@@ -53,20 +53,20 @@ def _venv_root() -> Path | None:
         return None
 
 
-def _child_env(pythonpath: str) -> dict[str, str]:
+def _child_env(pythonpath: str, no_venv: Path) -> dict[str, str]:
     """The CLI's environment: this checkout's code, the stand-in token, no stray keys.
 
     ``VIRTUAL_ENV`` is the folder ``_dotenvx_command`` looks in. The CLI checks
     it first, so both run the same dotenvx whatever their working directory.
+    When this process finds no virtualenv, the CLI gets ``no_venv``, an empty
+    folder, so it too runs the dotenvx on PATH.
     """
     env = {key: value for key, value in os.environ.items() if not key.startswith("DOTENV_")}
     env.pop("FORCE_COLOR", None)
     env["NO_COLOR"] = "1"
     env["PYTHONPATH"] = pythonpath
     env["VAULT_TOKEN"] = TOKEN
-    venv_root = _venv_root()
-    if venv_root is not None:
-        env["VIRTUAL_ENV"] = str(venv_root)
+    env["VIRTUAL_ENV"] = str(_venv_root() or no_venv)
     for name in ("NO_PROXY", "no_proxy"):
         env[name] = ",".join(filter(None, [env.get(name, ""), "127.0.0.1", "localhost"]))
     return env
@@ -88,7 +88,9 @@ class _Cli:
     def __init__(self, cwd: Path, envdrift_cmd: list[str], pythonpath: str) -> None:
         self.cwd = cwd
         self.envdrift_cmd = envdrift_cmd
-        self.env = _child_env(pythonpath)
+        no_venv = cwd.parent / "no-virtualenv"
+        no_venv.mkdir(exist_ok=True)
+        self.env = _child_env(pythonpath, no_venv)
 
     def run(self, *args: str) -> tuple[int, str]:
         result = subprocess.run(
@@ -803,3 +805,50 @@ def test_a_plain_env_mapping_can_be_locked_pushed_and_verified(
 
     code, out = cli.run("lock", "--verify-vault", "--check")
     assert code == 0, out
+
+
+def test_sync_decryption_check_does_not_pass_through_a_second_key_of_a_ring(
+    tmp_path: Path,
+) -> None:
+    """A first value "K1,K2" hands dotenvx both keys, so K2 could pass a check of K1.
+
+    The file is encrypted under K2. K1 alone fails the check and K2 alone
+    passes it; the key ring of both must fail, not pass through K2.
+    """
+    from unittest.mock import MagicMock
+
+    from tests.helpers import DOTENVX_KEY_PAIRS
+
+    from envdrift.sync.config import ServiceMapping, SyncConfig
+    from envdrift.sync.engine import SyncEngine, SyncMode
+    from envdrift.sync.result import DecryptionTestResult
+
+    (k1, _), (k2, k2_public) = DOTENVX_KEY_PAIRS[0], DOTENVX_KEY_PAIRS[1]
+    env_file = tmp_path / ".env.production"
+    env_file.write_text(f'DOTENV_PUBLIC_KEY_PRODUCTION="{k2_public}"\nSECRET=hello\n')
+    keys_file = tmp_path / ".env.keys"
+    keys_file.write_text(f"{PRODUCTION}={k2}\n")
+    dotenvx = shutil.which("dotenvx") or "dotenvx"
+    encrypted = subprocess.run(
+        [dotenvx, "encrypt", "-f", env_file.name],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert encrypted.returncode == 0, encrypted.stderr
+    mapping = ServiceMapping(secret_name="k", folder_path=tmp_path, environment="production")
+    engine = SyncEngine(
+        config=SyncConfig(mappings=[mapping]), vault_client=MagicMock(), mode=SyncMode()
+    )
+
+    verdicts = {}
+    for label, held in (("K1", k1), ("K2", k2), ("ring", f"{k1},{k2}")):
+        keys_file.write_text(f"{PRODUCTION}={held}\n")
+        verdicts[label] = engine._test_decryption(mapping)
+
+    assert verdicts == {
+        "K1": DecryptionTestResult.FAILED,
+        "K2": DecryptionTestResult.PASSED,
+        "ring": DecryptionTestResult.FAILED,
+    }
