@@ -774,12 +774,25 @@ def _command_word(text: str) -> str:
 
     A path with a space, ``secrets/my app/.env.a`` say, split into two arguments, so
     the printed command failed or acted on the wrong file. POSIX shells read
-    ``shlex.quote``; on Windows the double quotes that cmd.exe and PowerShell both
-    read (``subprocess.list2cmdline``) are added only where needed.
+    ``shlex.quote``; Windows shells read ``_windows_word``.
     """
     if os.name == "nt":
-        return subprocess.list2cmdline([text])
+        return _windows_word(text)
     return shlex.quote(text)
+
+
+def _windows_word(text: str) -> str:
+    """``text`` as one word for cmd.exe and PowerShell alike.
+
+    A word of only letters, digits and ``_.:\\/~-`` means nothing else to either shell,
+    so it stays as it is (``C:\\Users\\RUNNER~1\\...``). Any other word is put in double
+    quotes, which both read: a space or ``&`` there split the command in two, and
+    ``|``, ``<``, ``>``, ``^``, ``(``, ``)``, ``;``, ``,`` and ``@`` are each special to one
+    of them. A Windows file name cannot hold a double quote, so none needs escaping.
+    """
+    if re.fullmatch(r"[\w.:\\/~-]+", text):
+        return text
+    return f'"{text}"'
 
 
 class DecryptSnapshot:

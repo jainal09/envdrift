@@ -471,3 +471,27 @@ def test_the_sops_advice_takes_a_path_with_a_space_as_one_argument():
     assert len(commands) == 2, message
     for command in commands:
         assert str(path) in shlex.split(command), command
+
+
+@pytest.mark.parametrize(
+    ("text", "word"),
+    [
+        (r"C:\Users\RUNNER~1\AppData\Local\Temp\.env.production", None),
+        ("config/.env.keys", None),
+        ("prod secrets.env", '"prod secrets.env"'),
+        ("prod&secrets.env", '"prod&secrets.env"'),
+        ("a|b.env", '"a|b.env"'),
+        ("a(b).env", '"a(b).env"'),
+        ("a,b.env", '"a,b.env"'),
+        ("@a.env", '"@a.env"'),
+    ],
+)
+def test_a_windows_command_word_is_quoted_unless_no_shell_reads_it(text: str, word: str | None):
+    """cmd.exe and PowerShell read ``&``, ``|``, ``(``, ``,`` and ``@``, not only a space.
+
+    ``subprocess.list2cmdline`` quoted only a space or a tab, so ``prod&secrets.env``
+    split the printed recovery command in two under cmd.exe. None: left as it is.
+    """
+    from envdrift.core.partial_encryption import _windows_word
+
+    assert _windows_word(text) == (text if word is None else word)
