@@ -306,7 +306,6 @@ def _record_constraint_errors(
         if fm.alias is not None
         for binding_name in _field_binding_names(fm)
     }
-    keep_ciphertext_errors = schema.checks_after_fields
     for err in exc.errors():
         # missing/extra are reported via missing_required / extra_vars;
         # don't override a base-type message the heuristic already set.
@@ -316,14 +315,14 @@ def _record_constraint_errors(
         if entry is None:
             continue
         field_name, message = entry
-        if field_name in ciphertext_fields:
-            if not keep_ciphertext_errors:
-                continue
-            message = (
+        if field_name not in ciphertext_fields:
+            result.type_errors.setdefault(field_name, message)
+        elif schema.checks_after_fields:
+            result.type_errors.setdefault(
+                field_name,
                 f"its default stands in for the encrypted value and fails ({message}), "
-                "so the model's own validators could not run"
+                "so the model's own validators could not run",
             )
-        result.type_errors.setdefault(field_name, message)
 
 
 class Validator:
