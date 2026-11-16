@@ -192,16 +192,19 @@ class PartialEncryptionError(Exception):
         """
         if ciphertext == "SOPS":
             # Shared by pull-partial and pull. `envdrift decrypt` alone left the
-            # plaintext in a tracked file that `git add .` staged: mark it first.
+            # plaintext in a tracked file that `git add .` staged: mark it first, in the
+            # repository that tracks the file. Run from the superproject, the mark for a
+            # file in a submodule failed: the superproject tracks only the gitlink.
+            git, name = _git_for_written_file(path)
             word = _command_word(str(path))
             reason = (
                 "it still holds SOPS ciphertext. Partial encryption decrypts with "
                 "dotenvx, which does not read SOPS files. To move it to dotenvx, run "
-                f"`git update-index --skip-worktree {word}` so `git add .` cannot stage "
+                f"`{git} update-index --skip-worktree {name}` so `git add .` cannot stage "
                 "its plaintext (git can mark only a tracked file), then "
                 f"`envdrift decrypt {word} --backend sops`, then `envdrift push` before "
                 "you stage anything: push encrypts it with dotenvx and lifts the mark."
-            ) + _expansion_note(word)
+            ) + _expansion_note(git, name, word)
         else:
             reason = (
                 "it still holds dotenvx ciphertext after the decrypt. The decryption "
@@ -776,8 +779,12 @@ def _command_word(text: str) -> str:
 
     A path with a space, ``secrets/my app/.env.a`` say, split into two arguments, so
     the printed command failed or acted on the wrong file. POSIX shells read
-    ``shlex.quote``; Windows shells read ``_windows_word``.
+    ``shlex.quote``; Windows shells read ``_windows_word``. A word that starts with ``-``
+    is given a leading ``./`` (``.\\`` on Windows), the same file: git read ``-prod.env`` as
+    an option and refused the command, and envdrift's own commands would too.
     """
+    if text.startswith("-"):
+        text = f"{os.curdir}{os.sep}{text}"  # not Path: it drops a leading "."
     if os.name == "nt":
         return _windows_word(text)
     return shlex.quote(text)

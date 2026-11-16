@@ -353,7 +353,8 @@ class TestStillEncryptedAfterDecrypt:
         # envdrift pull gives this message too, and `envdrift decrypt` alone left
         # the plaintext stageable: the remedy marks the file first.
         assert "pull-partial" not in message
-        mark = message.index(f"`git update-index --skip-worktree {secret}`")
+        # git runs in the file's folder (git -C), so the command names the file by its name.
+        mark = message.index(f"update-index --skip-worktree {secret.name}`")
         assert mark < message.index("`envdrift decrypt") < message.index("`envdrift push`")
         # Not marked skip-worktree, and byte for byte as it was (CRLF too).
         assert skip_worktree_calls == []

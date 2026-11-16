@@ -489,8 +489,10 @@ def test_the_sops_advice_takes_a_path_with_a_space_as_one_argument():
 
     commands = [c for c in re.findall(r"`([^`]+)`", " ".join(message.split())) if "my app" in c]
     assert len(commands) == 2, message
-    for command in commands:
-        assert str(path) in shlex.split(command), command
+    mark, decrypt = (shlex.split(command) for command in commands)
+    # The mark runs git in the file's folder, where git finds the repository that tracks it.
+    assert mark == ["git", "-C", str(path.parent), "update-index", "--skip-worktree", path.name]
+    assert str(path) in decrypt, decrypt
 
 
 @pytest.mark.parametrize(

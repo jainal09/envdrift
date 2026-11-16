@@ -448,32 +448,65 @@ class TestRecoveryAdviceActsOnTheFileThePlaintextIsIn:
         assert _flag(tmp_path / "sub", ".env.secret") == "H"
         assert secret.read_bytes() == _LARGE_ENCRYPTED
 
-    def test_a_secret_file_whose_name_has_a_space(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    @pytest.mark.parametrize("name", ["prod secrets.env", "-prod.env"], ids=["space", "dash"])
+    def test_a_secret_file_whose_name_a_command_could_misread(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
     ) -> None:
-        """A name with a space is one word in the printed commands.
+        """A name with a space, or one that starts with ``-``, names one file in the commands.
 
-        Unquoted, ``git checkout -- prod secrets.env`` named two files: the advice
-        failed and the file kept its plaintext.
+        Unquoted, ``git checkout -- prod secrets.env`` named two files, and git read
+        ``git update-index --no-skip-worktree -prod.env`` as an unknown option. Either way
+        the advice failed, and the file kept its plaintext and its mark.
         """
         _init_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
-        secret = tmp_path / "prod secrets.env"
+        secret = tmp_path / name
         secret.write_bytes(_LARGE_ENCRYPTED)
         _git(tmp_path, "add", "-A")
-        _git(tmp_path, "commit", "-q", "-m", "a secret file with a space")
-        snapshot = _snapshot(Path("prod secrets.env"))
+        _git(tmp_path, "commit", "-q", "-m", "a secret file a command could misread")
+        snapshot = _snapshot(Path(name))
         secret.write_bytes(_PARTLY_DECRYPTED)
 
         with file_size_limit(len(_LARGE_ENCRYPTED) // 2):
             note = snapshot.restore()
 
-        assert _flag(tmp_path, "prod secrets.env") == "S"
+        assert _flag(tmp_path, name) == "S"
         _run_each(tmp_path, *_recovery_commands(note))
-        assert _flag(tmp_path, "prod secrets.env") == "H"
+        assert _flag(tmp_path, name) == "H"
         assert secret.read_bytes() == _LARGE_ENCRYPTED
+
+    def test_the_sops_advice_marks_a_submodule_file_in_the_submodule(
+        self,
+        tmp_path: Path,
+        tmp_path_factory: pytest.TempPathFactory,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The mark the SOPS advice prints runs in the repository that tracks the file.
+
+        Run from the superproject, ``git update-index --skip-worktree sub/.env.secret``
+        failed: the superproject tracks the submodule as one gitlink, not its files, so
+        the decrypt after it left plaintext that ``git add .`` in the submodule staged.
+        """
+        from envdrift.core.partial_encryption import PartialEncryptionError
+
+        inner = tmp_path_factory.mktemp("inner")
+        _init_repo(inner)
+        (inner / ".env.secret").write_bytes(_LARGE_ENCRYPTED)
+        _git(inner, "add", ".env.secret")
+        _git(inner, "commit", "-q", "-m", "inner")
+        _init_repo(tmp_path)
+        allow_local = ("-c", "protocol.file.allow=always")  # git refuses a local one otherwise
+        _git(tmp_path, *allow_local, "submodule", "add", "-q", str(inner), "sub")
+        _git(tmp_path, "commit", "-q", "-m", "submodule")
+        monkeypatch.chdir(tmp_path)
+
+        error = PartialEncryptionError.still_encrypted(Path("sub/.env.secret"), "SOPS", "")
+
+        flat = " ".join(str(error).split())
+        mark = re.search(r"run `([^`]+)` so `git add \.` cannot stage", flat)
+        assert mark, flat
+        _run_each(tmp_path, mark.group(1))
+        assert _flag(tmp_path / "sub", ".env.secret") == "S"
 
 
 def _backend_with(decrypt_effect) -> tuple[DotenvxEncryptionBackend, MagicMock]:
