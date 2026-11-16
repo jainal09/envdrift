@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import typer
+from rich.markup import escape
 from rich.panel import Panel
 
 from envdrift.env_files import resolve_mapping_env_file
@@ -21,6 +22,7 @@ from .sync_helpers import (
 )
 from .sync_lock_keys import _verify_or_sync_lock_keys
 from .sync_lock_partial import _LockPartialState, _process_lock_partial_encryption
+from .sync_lock_relabel import RelabelOutcome
 
 if TYPE_CHECKING:
     from envdrift.encryption import EncryptionProvider
@@ -53,8 +55,7 @@ class LockRuntime:
     normalize_metadata: Callable[..., None]
     load_partial_paths: Callable[[Path | None], tuple[set[Path], set[Path], set[Path]]]
     find_config_path: Callable[[Path | None], Path | None]
-    find_stale_key: Callable[[Path, str], str | None]
-    rekey_file: Callable[[Path, Any, dict[str, Any]], tuple[bool, str]]
+    relabel_key: Callable[..., RelabelOutcome]
     verify_summary: Callable[[int, int], str]
     sops_missing_recipients: Callable[[Any, EncryptionProvider, dict[str, Any], str], list[str]]
     lock_factory: Callable[[], Any]
@@ -87,6 +88,7 @@ class _LockState:
     already_encrypted: int = 0
     verification_issues: int = 0
     unusable_keys: int = 0
+    relabeled: int = 0
 
 
 @dataclass(frozen=True)
@@ -196,6 +198,8 @@ def _read_lock_content(
     context: _LockEncryptContext,
     state: _LockState,
 ) -> str | None:
+    from envdrift.integrations.dotenvx import DotenvxError
+
     try:
         context.runtime.normalize_metadata(
             file.env_file,
@@ -205,11 +209,51 @@ def _read_lock_content(
             check_only=context.request.check_only,
         )
         return file.env_file.read_text(encoding="utf-8")
+    except DotenvxError as exc:
+        _record_lock_key_error(file.env_file, exc, state)
+        return None
     except (OSError, ValueError) as exc:
         console.print(f"  [red]![/red] {file.env_file} [red]- error reading file: {exc}[/red]")
         state.errors.append(f"{file.env_file}: read failed - {exc}")
         state.error_count += 1
         return None
+
+
+def _record_lock_key_error(env_file: Path, error: object, state: _LockState) -> None:
+    """Record a refused key change (an exception or a message) for ``env_file``."""
+    console.print(f"  [red]![/red] {env_file} [red]- error: {escape(str(error))}[/red]")
+    state.errors.append(f"{env_file}: {error}")
+    state.error_count += 1
+
+
+def _normalize_after_encrypt(
+    file: _LockFile, context: _LockEncryptContext, state: _LockState
+) -> bool:
+    """Canonicalize a custom filename's key after encryption; False when refused."""
+    from envdrift.integrations.dotenvx import DotenvxError
+
+    try:
+        context.runtime.normalize_metadata(
+            file.env_file, file.keys_file, file.environment, context.encryption.provider
+        )
+    except (DotenvxError, OSError, ValueError) as exc:
+        _record_lock_key_error(file.env_file, exc, state)
+        return False
+    return True
+
+
+def _lock_encrypt_kwargs(context: _LockEncryptContext, keys_file: Path, environment: str):
+    """Per-file encrypt options: dotenvx gets the mapping's keys file and environment.
+
+    SOPS gets only its own recipient options. dotenvx is pointed at the
+    configured ``env_keys_filename`` (#943) and told the mapping environment,
+    so it encrypts with the key the folder holds instead of creating one (#938).
+    """
+    from envdrift.encryption import EncryptionProvider
+
+    if context.encryption.provider == EncryptionProvider.DOTENVX:
+        return {"keys_file": keys_file, "environment": environment}
+    return context.sops_kwargs
 
 
 def _handle_lock_provider_mismatch(
@@ -248,56 +292,91 @@ def _handle_lock_provider_mismatch(
     return True
 
 
-def _handle_dotenvx_rekey(
+def _handle_dotenvx_relabel(
     file: _LockFile,
     context: _LockEncryptContext,
     state: _LockState,
 ) -> bool:
+    """Give the key of an encrypted file the name its mapping expects.
+
+    Re-labels the same key instead of re-encrypting (see
+    :mod:`envdrift.cli_commands.sync_lock_relabel`), and reports success only
+    once the expected key and header are confirmed on disk.
+    """
     from envdrift.encryption import EncryptionProvider
 
     if context.encryption.provider != EncryptionProvider.DOTENVX:
         return False
     expected = f"DOTENV_PRIVATE_KEY_{file.environment.upper()}"
-    try:
-        old_name = context.runtime.find_stale_key(file.keys_file, expected)
-    except (OSError, ValueError) as exc:
-        console.print(
-            f"  [red]![/red] {file.keys_file} [red]- error reading keys file: {exc}[/red]"
-        )
-        state.errors.append(f"{file.keys_file}: read failed - {exc}")
-        state.error_count += 1
-        return True
-    if not old_name:
+    outcome = context.runtime.relabel_key(
+        file.env_file, file.keys_file, expected, apply=not context.request.check_only
+    )
+    if outcome.action == "none":
         return False
-    if context.request.check_only:
+    if outcome.action == "no_key":
         console.print(
-            f"  [cyan]?[/cyan] {file.env_file} [dim]- would re-key ({old_name} -> {expected})[/dim]"
+            f"  [yellow]![/yellow] {file.env_file} [yellow]- warning: {outcome.message}[/yellow]"
+        )
+        state.warnings.append(f"{file.env_file}: {outcome.message}")
+        return False
+    if outcome.action == "failed":
+        _record_lock_key_error(file.env_file, f"cannot re-label its key: {outcome.message}", state)
+        return True
+    if outcome.action == "planned":
+        console.print(
+            f"  [cyan]?[/cyan] {file.env_file} "
+            f"[dim]- would re-key ({outcome.old_name} -> {expected}) by re-labeling the key[/dim]"
         )
         state.warnings.append(
-            f"{file.env_file}: key name mismatch, would re-encrypt to generate {expected}"
+            f"{file.env_file}: key name mismatch, would re-label {outcome.old_name} as {expected}"
         )
         state.encrypted += 1
         return True
+    if not _normalize_after_encrypt(file, context, state):
+        return True
     console.print(
-        f"  [yellow]~[/yellow] {file.env_file} "
-        f"[dim]- key name mismatch ({old_name} -> {expected}), re-encrypting...[/dim]"
+        f"  [green]+[/green] {file.env_file} "
+        f"[dim]- key re-labeled ({outcome.old_name} -> {expected}), not re-encrypted[/dim]"
     )
     state.warnings.append(
-        f"{file.env_file}: key name mismatch, re-encrypting to generate {expected}"
+        f"{file.env_file}: key name mismatch, re-labeled {outcome.old_name} as {expected}"
     )
-    ok, error = context.runtime.rekey_file(
-        file.env_file, context.encryption.backend, context.sops_kwargs
-    )
-    if not ok:
-        console.print(f"  [red]![/red] {file.env_file} [red]- {error}[/red]")
-        state.errors.append(f"{file.env_file}: {error}")
-        state.error_count += 1
+    state.relabeled += 1
+    return True
+
+
+def _handle_dotenvx_key_mismatch(
+    file: _LockFile,
+    content: str,
+    context: _LockEncryptContext,
+    state: _LockState,
+) -> bool:
+    """Fail an encrypted file that is not encrypted with the key held for it.
+
+    dotenvx 2.x decrypts with any key in the keys file, so a file encrypted
+    with a second, locally created key passed every check (#938). The held
+    key must be a single key whose public key is the file's.
+    """
+    from envdrift.encryption import EncryptionProvider
+    from envdrift.integrations.dotenvx_keys import held_key_problem
+
+    if context.encryption.provider != EncryptionProvider.DOTENVX:
+        return False
+    key_name = f"DOTENV_PRIVATE_KEY_{file.environment.upper()}"
+    try:
+        keys_text = file.keys_file.read_bytes().decode("utf-8") if file.keys_file.exists() else None
+    except (OSError, ValueError) as exc:
+        _record_lock_key_error(file.env_file, f"cannot read {file.keys_file}: {exc}", state)
         return True
-    context.runtime.normalize_metadata(
-        file.env_file, file.keys_file, file.environment, context.encryption.provider
+    problem = held_key_problem(content, keys_text, key_name)
+    if problem is None:
+        return False
+    _record_lock_key_error(
+        file.env_file,
+        f"{problem} ({file.keys_file}), so the key your team holds may not decrypt it. "
+        f"Restore the key it was encrypted with, or decrypt it with that key and lock again",
+        state,
     )
-    console.print(f"  [green]+[/green] {file.env_file} [dim]- re-encrypted with new key[/dim]")
-    state.encrypted += 1
     return True
 
 
@@ -349,7 +428,9 @@ def _handle_already_encrypted(
             "[dim]- partially encrypted (plaintext values remain), re-encrypting...[/dim]"
         )
         return False
-    if _handle_dotenvx_rekey(file, context, state):
+    if _handle_dotenvx_relabel(file, context, state):
+        return True
+    if _handle_dotenvx_key_mismatch(file, content, context, state):
         return True
     if _handle_sops_recipients(file.env_file, content, context, state):
         return True
@@ -366,15 +447,17 @@ def _encrypt_interactive_file(
     from envdrift.encryption import EncryptionBackendError, EncryptionNotFoundError
 
     try:
-        result = context.encryption.backend.encrypt(file.env_file.resolve(), **context.sops_kwargs)
+        result = context.encryption.backend.encrypt(
+            file.env_file.resolve(),
+            **_lock_encrypt_kwargs(context, file.keys_file, file.environment),
+        )
         if not result.success:
             console.print(f"  [red]![/red] {file.env_file} [red]- error: {result.message}[/red]")
             state.errors.append(f"{file.env_file}: encryption failed - {result.message}")
             state.error_count += 1
             return
-        context.runtime.normalize_metadata(
-            file.env_file, file.keys_file, file.environment, context.encryption.provider
-        )
+        if not _normalize_after_encrypt(file, context, state):
+            return
         console.print(f"  [green]+[/green] {file.env_file} [dim]- encrypted[/dim]")
         state.encrypted += 1
     except (EncryptionNotFoundError, EncryptionBackendError) as exc:
@@ -475,9 +558,11 @@ def _lock_keys_file(
     if context.encryption.provider == EncryptionProvider.DOTENVX and not keys_file.exists():
         console.print(
             f"  [yellow]![/yellow] {env_file} "
-            f"[yellow]- warning: no .env.keys file, will generate new key[/yellow]"
+            f"[yellow]- warning: no {keys_file.name} file, will generate new key[/yellow]"
         )
-        state.warnings.append(f"{env_file}: no .env.keys file found, new key will be generated")
+        state.warnings.append(
+            f"{env_file}: no {keys_file.name} file found, new key will be generated"
+        )
     return keys_file
 
 
@@ -498,22 +583,17 @@ def _encrypt_one(task: _EncryptTask, context: _LockEncryptContext, state: _LockS
         EncryptionProvider,
     )
 
+    kwargs = _lock_encrypt_kwargs(context, task.env_keys_file, task.effective_environment)
     try:
         if context.encryption.provider == EncryptionProvider.DOTENVX:
             lock = state.dotenvx_locks.get(task.env_keys_file.resolve())
             if lock:
                 with lock:
-                    result = context.encryption.backend.encrypt(
-                        task.env_file.resolve(), **context.sops_kwargs
-                    )
+                    result = context.encryption.backend.encrypt(task.env_file.resolve(), **kwargs)
             else:
-                result = context.encryption.backend.encrypt(
-                    task.env_file.resolve(), **context.sops_kwargs
-                )
+                result = context.encryption.backend.encrypt(task.env_file.resolve(), **kwargs)
         else:
-            result = context.encryption.backend.encrypt(
-                task.env_file.resolve(), **context.sops_kwargs
-            )
+            result = context.encryption.backend.encrypt(task.env_file.resolve(), **kwargs)
         return task, result, None
     except (EncryptionNotFoundError, EncryptionBackendError) as exc:
         return task, None, exc
@@ -545,12 +625,10 @@ def _record_lock_encrypt_result(
         state.errors.append(f"{outcome.task.env_file}: encryption failed - {message}")
         state.error_count += 1
         return
-    context.runtime.normalize_metadata(
-        outcome.task.env_file,
-        outcome.task.env_keys_file,
-        outcome.task.effective_environment,
-        context.encryption.provider,
-    )
+    task = outcome.task
+    file = _LockFile(task.mapping, task.env_file, task.env_keys_file, task.effective_environment)
+    if not _normalize_after_encrypt(file, context, state):
+        return
     console.print(f"  [green]+[/green] {outcome.task.env_file} [dim]- encrypted[/dim]")
     state.encrypted += 1
 
@@ -598,6 +676,8 @@ def _print_lock_summary(
         f"Skipped: {state.skipped}",
         f"Errors: {state.error_count}",
     ]
+    if state.relabeled:
+        lines.append(f"Keys re-labeled: {state.relabeled}")
     if request.all_files:
         if request.check_only:
             lines.extend(
@@ -633,7 +713,8 @@ def _print_lock_issue_group(title: str, color: str, messages: list[str]) -> None
     console.print()
     console.print(f"[bold {color}]{title}:[/bold {color}]")
     for message in messages:
-        console.print(f"  [{color}]•[/{color}] {message}")
+        # Messages carry paths and tool output, so print them as text, not markup.
+        console.print(f"  [{color}]•[/{color}] {escape(message)}")
 
 
 def _finish_lock(request: LockRequest, state: _LockState, partial: _LockPartialState) -> None:

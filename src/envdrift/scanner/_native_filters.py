@@ -9,7 +9,12 @@ they take a line or file content and answer a yes/no structural question.
 from __future__ import annotations
 
 import re
+from bisect import bisect_left, bisect_right
+from collections.abc import Iterable, Iterator
+from itertools import accumulate
+from typing import NamedTuple
 
+from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.encryption.sops import SOPSEncryptionBackend
 
 # A dotenvx public key is a secp256k1 *compressed* EC point: a 0x02/0x03 prefix
@@ -112,23 +117,233 @@ def _line_is_sops_metadata(line: str) -> bool:
     return any(pattern.match(line) for pattern in _SOPS_METADATA_RES)
 
 
-def _is_encrypted_value_line(line: str) -> bool:
-    """Return True if a line holds an already-encrypted value (dotenvx or SOPS).
+# The extent of an already-encrypted value on a line, its assignment included: a dotenvx value
+# runs to the end of its ``encrypted:`` token (and its closing quote), a SOPS value to the end of
+# its ``ENC[AES256_GCM,...]`` envelope. Neither holds whitespace, so whatever follows on the line
+# is plaintext.
+_DOTENVX_VALUE_SPAN_RE = re.compile(
+    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"']?encrypted:[^\s\"']*[\"']?",
+)
+# A SOPS value runs from its envelope to the envelope's ``]``, or to the end of the line. Its
+# assignment, ``NAME=`` or ``"name": "``, is found by stepping back from the envelope, not by a
+# regex: an optional name before the envelope made a regex retry a long run of name characters
+# at every position of the line, so a 40,000-character line took guard 49 seconds.
+_SOPS_VALUE_MARKER = "ENC[AES256_GCM,"
+_QUOTES = "\"'"
+# Matched against the text before an envelope, reversed: the assignment read backwards, as far as
+# the run of name characters before its ``=`` or ``:``. Anchored, so linear in what it reads.
+_SOPS_ASSIGNMENT_REVERSED_RE = re.compile(r"[\"']?\s*[=:]\s*[\"']?([\w.-]*)")
+_NAME_START_RE = re.compile(r"[A-Za-z_]")
+# An assignment the entropy check reads: a name in any case (#369), ``=`` or ``:``, and a value of
+# 16 or more characters, as ``[A-Za-z_][A-Za-z0-9_]*\s*[=:]\s*["']?([^"'\s=]{16,})["']?`` matches
+# it. Found from each ``=`` and ``:``, not by that regex: unanchored, it retried a long run of name
+# characters at every position of the line, in time quadratic in the line's length (#995).
+_ASSIGNMENT_SEPARATOR_RE = re.compile(r"[=:]")
+# Matched against the text before a separator, reversed: the run of name characters before it.
+_ASSIGNMENT_NAME_REVERSED_RE = re.compile(r"\s*([A-Za-z0-9_]*)")
+_ASSIGNMENT_VALUE_RE = re.compile(r"\s*[\"']?([^\"'\s=]{16,})[\"']?")
+# The value of an assignment, as far as its first whitespace (and closing quote).
+_VALUE_TOKEN_RE = re.compile(r"\s*[\"']?[^\s\"']*[\"']?")
+# Where str.splitlines() breaks a line and git does not. A line counts to its line break (#937),
+# but an assignment can start after one of these, as at the start of the line.
+_NON_GIT_LINE_BREAK_RE = re.compile("[\v\f\x1c\x1d\x1e\x85\u2028\u2029]")
 
-    Used to skip such lines during pattern and entropy scanning so encrypted
-    values are never re-flagged. Shared by both scans so they stay in sync.
+
+def _segments(line: str) -> list[tuple[int, str]]:
+    """``line`` cut where ``str.splitlines()`` would cut it, each piece with its offset."""
+    segments: list[tuple[int, str]] = []
+    start = 0
+    for separator in _NON_GIT_LINE_BREAK_RE.finditer(line):
+        segments.append((start, line[start : separator.start()]))
+        start = separator.end()
+    segments.append((start, line[start:]))
+    return segments
+
+
+def _sops_assignment_start(line: str, marker: int, floor: int) -> int:
+    """Where the assignment of the SOPS value at ``marker`` starts, or ``marker`` if it has none.
+
+    The assignment is the text ``["']?[A-Za-z_][\\w.-]*["']?\\s*[=:]\\s*["']?`` matches right
+    before the envelope, at its leftmost start, read backwards from the envelope in time linear in
+    its length. ``floor`` is where the previous value ended: an assignment does not reach back
+    past it.
+    """
+    assignment = _SOPS_ASSIGNMENT_REVERSED_RE.match(line[floor:marker][::-1])
+    if assignment is None:
+        return marker
+    run_start = marker - assignment.end()
+    # The name starts at the run's first ASCII letter or underscore, after the quote before it
+    # when it starts the run.
+    name = _NAME_START_RE.search(line, run_start, marker - assignment.start(1))
+    if name is None:
+        return marker
+    quoted = run_start > floor and line[run_start - 1] in _QUOTES
+    return name.start() - 1 if quoted and name.start() == run_start else name.start()
+
+
+def _secret_group(match: re.Match[str]) -> int:
+    """The group of a pattern's ``match`` that holds the secret: the first, if it matched, else 0.
+
+    A pattern's leading boundary, such as the character before a key that aws-access-key-id
+    reads, is not part of the secret. The secret's own span decides whether it lies in an
+    encrypted value, and where its finding's column is.
+    """
+    return 1 if match.re.groups and match.group(1) is not None else 0
+
+
+def _assignments(line: str) -> Iterator[tuple[int, int, int, str]]:
+    """The ``(start, end, value_start, value)`` of each assignment the entropy check reads.
+
+    Exactly that regex's matches, left to right, in time linear in the line's length: the name
+    before a separator is looked for no further back than the separator before it.
+    """
+    floor = 0
+    previous = -1
+    for separator in _ASSIGNMENT_SEPARATOR_RE.finditer(line):
+        at = separator.start()
+        segment_start, previous = max(floor, previous + 1), at
+        if at < floor:
+            continue
+        run = _ASSIGNMENT_NAME_REVERSED_RE.match(line[segment_start:at][::-1])
+        name = run and _NAME_START_RE.search(line, at - run.end(1), at - run.start(1))
+        value = _ASSIGNMENT_VALUE_RE.match(line, at + 1) if name else None
+        if name and value:
+            yield name.start(), value.end(), value.start(1), value.group(1)
+            floor = value.end()
+
+
+def _sops_value_spans(line: str) -> list[tuple[int, int]]:
+    """The spans of the SOPS values on ``line``, each with its assignment."""
+    spans: list[tuple[int, int]] = []
+    floor = 0
+    while (marker := line.find(_SOPS_VALUE_MARKER, floor)) != -1:
+        close = line.find("]", marker + len(_SOPS_VALUE_MARKER))
+        end = len(line) if close == -1 else close + 1
+        spans.append((_sops_assignment_start(line, marker, floor), end))
+        floor = end
+    return spans
+
+
+def _encrypted_value_spans(line: str) -> list[tuple[int, int]]:
+    """The ``(start, end)`` spans of ``line`` that hold an already-encrypted value.
 
     Structure-aware (mirrors the file-level ``_content_is_encrypted``): a bare
     ``"encrypted:" in line`` / ``"ENC[" in line`` substring check misfires on a
     plaintext line that merely *mentions* the marker — e.g.
-    ``DATA=ENC[something] AKIA…`` or ``URL=https://x/encrypted:y?key=AKIA…`` —
-    causing the whole line (and any real adjacent secret on it) to be skipped
-    and never reported (#413). We instead require the marker in its real
-    structural position: a dotenvx-encrypted value (anchored value-position
-    ``encrypted:``) or a canonical SOPS ``ENC[AES256_GCM,`` envelope — not a
-    bare ``ENC[``.
+    ``DATA=ENC[something] AKIA…`` or ``URL=https://x/encrypted:y?key=AKIA…`` (#413).
+    We instead require the marker in its real structural position: a
+    dotenvx-encrypted value (anchored value-position ``encrypted:``) or a
+    canonical SOPS ``ENC[AES256_GCM,`` envelope — not a bare ``ENC[``.
+
+    Only the value is skipped, not its whole line: a plaintext secret after it
+    on the same line, past a space or a form feed, is still found (#937). A
+    dotenvx value is looked for at the start of each piece of the line that
+    ``str.splitlines()`` would cut, as it was before lines ran to their break.
     """
-    return _line_is_dotenvx_encrypted(line) or bool(_SOPS_ENC_RE.search(line))
+    spans = _sops_value_spans(line)
+    for offset, segment in _segments(line):
+        dotenvx = _DOTENVX_VALUE_SPAN_RE.match(segment)
+        if dotenvx:
+            spans.append((offset + dotenvx.start(), offset + dotenvx.end()))
+    return spans
+
+
+def _skipped_value_spans(line: str) -> list[tuple[int, int]]:
+    """The spans of ``line`` that pattern and entropy scanning leave out.
+
+    The encrypted values, which are never re-flagged, and dotenvx's public key. Shared by
+    both scans so they stay in sync.
+    """
+    spans = _encrypted_value_spans(line)
+    for offset, segment in _segments(line):
+        name, equals, _ = segment.partition("=")
+        if equals and is_dotenvx_public_key_var(name.strip()):
+            value = _VALUE_TOKEN_RE.match(segment, len(name) + 1)
+            spans.append((offset, offset + (value.end() if value else len(segment))))
+    return spans
+
+
+class _Spans:
+    """Spans of a line, sorted once so that each overlap test is a binary search.
+
+    A long line can hold thousands of encrypted values and thousands of candidates: testing each
+    candidate against every span took time quadratic in the line's length (reported by
+    CodeRabbit on #936).
+    """
+
+    def __init__(self, spans: Iterable[tuple[int, int]]) -> None:
+        ordered = sorted(spans)
+        self._starts = [start for start, _ in ordered]
+        # The furthest end of the spans up to each one, in order of their starts
+        self._reach = list(accumulate((end for _, end in ordered), max))
+
+    def __bool__(self) -> bool:
+        return bool(self._starts)
+
+    def overlaps(self, start: int, end: int) -> bool:
+        """True if ``[start, end)`` overlaps a span: ``start < span_end and span_start < end``."""
+        before = bisect_left(self._starts, end)  # the spans that start before ``end``
+        return before > 0 and self._reach[before - 1] > start
+
+
+class _LineValues(NamedTuple):
+    """A line's encrypted values, the length of its plain-ASCII start, and its UTF-8 offsets."""
+
+    spans: _Spans
+    plain: int
+    # The UTF-8 offset of each character, for a line that is not all plain; None for one that is
+    byte_starts: list[int] | None
+
+
+def _plain_length(line: str) -> int:
+    """How long the start of ``line`` is that every scanner counts columns in alike.
+
+    It ends at a NUL, which the native scanner drops before it counts, or at a character outside
+    ASCII, which gitleaks counts in bytes.
+    """
+    nul = line.find("\x00")
+    start = line if nul < 0 else line[:nul]
+    try:
+        start.encode("ascii")
+    except UnicodeEncodeError as outside_ascii:
+        return outside_ascii.start
+    return len(start)
+
+
+def _line_values(line: str) -> _LineValues:
+    """The encrypted values of ``line``, as :func:`_outside_encrypted_values` checks a column.
+
+    ``line`` is decoded with ``surrogateescape``, so its UTF-8 encoding is the file's bytes.
+    """
+    spans = _Spans(_encrypted_value_spans(line))
+    plain = _plain_length(line)
+    if plain == len(line):
+        return _LineValues(spans, plain, None)
+    sizes = (len(char.encode("utf-8", "surrogateescape")) for char in line)
+    return _LineValues(spans, plain, [0, *accumulate(sizes)][:-1])
+
+
+def _outside_encrypted_values(
+    values: _LineValues, column_number: int | None, *, in_bytes: bool = False
+) -> bool:
+    """True if a finding at 1-based ``column_number`` is in none of its line's encrypted ``values``.
+
+    Without a column, only a line that holds no encrypted value qualifies. With one, a plaintext
+    secret after an encrypted value on the same line does (#937).
+
+    Past a NUL or a non-ASCII character, scanners count a column differently (#936). A column
+    ``in_bytes``, as gitleaks counts it, is turned into the character it starts. Any other column
+    there qualifies unchecked, so a plaintext secret is never dropped on a guess: the native
+    scanner counts without the NULs it drops, and leaves out its own findings in encrypted values.
+    """
+    if column_number is None:
+        return not values.spans
+    start = column_number - 1
+    if start > values.plain:
+        if not in_bytes or values.byte_starts is None:
+            return True
+        start = bisect_right(values.byte_starts, start) - 1
+    return not values.spans.overlaps(start, start + 1)
 
 
 def _content_has_sops_markers(content: str) -> bool:

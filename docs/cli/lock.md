@@ -95,7 +95,9 @@ This helps detect key drift where a developer may have re-encrypted with a new k
 
 Verification is strict: a mapping that **cannot** be verified — missing
 `.env.keys`, a missing key entry, a missing or empty vault secret, or a vault
-access error — fails the same way a key mismatch does. When any mapping fails
+access error — fails the same way a key mismatch does. Every value `.env.keys`
+holds under the key name is compared with the vault key, because dotenvx loads
+them all: a first line that matches the vault does not hide a second key. When any mapping fails
 verification, `lock` exits 1 **before** encrypting anything (even with
 `--force`, which only skips prompts). This prevents the encryption step from
 silently minting a fresh local-only key that the rest of the team cannot
@@ -175,6 +177,34 @@ envdrift lock -f --all
 # Check what would happen
 envdrift lock --check --all
 ```
+
+## Keys and the keys file
+
+`lock` encrypts with the key the folder already holds. For each mapping it hands dotenvx
+the keys file named by `[vault.sync] env_keys_filename` (default `.env.keys`) and the
+mapping's `environment`, so the key held as `DOTENV_PRIVATE_KEY_<ENVIRONMENT>` is written
+into the file's header before dotenvx runs. The same rules as
+[`encrypt`](encrypt.md#safety-guarantees) apply: two different keys under that name, a value
+that is not a dotenvx key, a file already encrypted under another public key, or a file with
+encrypted values but no public key is refused with both files left as they were, and if dotenvx still creates or replaces a key, or leaves
+the file without the held key's public key, both files are put back and the file counts as an
+error. An already encrypted file is checked the same way: a held value that is not a dotenvx
+key, or that is not the key of the file's public key, is an error, not "already encrypted", and
+so is a held key for a file whose encrypted values have no public key to check it against.
+
+A custom filename (`env_file = ".env.prod"` for `environment = "production"`) has its key
+renamed to the canonical `DOTENV_PRIVATE_KEY_<ENVIRONMENT>`. A different key that is already
+under the canonical name is never overwritten: the file is reported as an error naming both
+keys, and neither file is changed.
+
+An already-encrypted file must be encrypted with the key held for it. When the key name
+holds two different keys, or the file's public key is not the held key's, the file is an
+error (also with `--check`), not "already encrypted".
+
+When a file was encrypted under another name (for example `.env.local` renamed to
+`.env.localenv`), `lock` finds the key by the file's public key and saves the same key under
+the expected name, renaming the header to match. Nothing is re-encrypted and the old key line
+is kept. `--check` reports it as `would re-key`.
 
 ## Smart Encryption
 
@@ -401,7 +431,8 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 
 | Warning                                    | Meaning                                                              |
 |:-------------------------------------------|:---------------------------------------------------------------------|
-| `.env.keys not found`                      | No encryption keys file exists; a new key will be generated           |
+| `no .env.keys file found, new key will be generated` | No keys file (the configured `env_keys_filename`, named in the message) |
+| `holds no key for this file`               | The keys file holds other keys, but none whose public key is the file's |
 | `{KEY} missing from .env.keys`             | The expected private key for this environment isn't in the keys file  |
 | `vault secret is empty`                    | The vault secret exists but has no value                             |
 | `vault secret not found`                   | The secret doesn't exist in the vault                                |
@@ -419,6 +450,12 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | `vault error`       | Failed to access or authenticate with the vault        |
 | `encryption failed` | The configured backend (dotenvx or SOPS) failed to encrypt the file |
 | `Key sync failed`   | Could not sync keys from vault                         |
+| `holds N different keys under ...` | The key name holds more than one key; keep the vault key, delete the other |
+| `is not a valid dotenvx key` | The held value is not a key dotenvx can use: nothing was encrypted, and an already encrypted file counts as an error |
+| `encrypted with another public key` | The file is not encrypted with the key held for it |
+| `holds encrypted values but no DOTENV_PUBLIC_KEY` | Nothing shows which key the values need; restore the file's public-key line |
+| `holds two different keys for <file>` | A custom filename's key and the canonical key differ; neither is overwritten |
+| `cannot re-label its key` | The renamed file's key could not be saved under the expected name; nothing changed |
 
 ## Exit Codes
 
@@ -430,6 +467,8 @@ The `lock` command catches many edge cases and provides helpful warnings and err
 | 1    | A mapped env file or `.env.keys` cannot be read (e.g. not valid UTF-8) — per-file error    |
 | 1    | `--verify-vault`: a mapping failed or could not be verified (nothing is encrypted)         |
 | 1    | `--check`: one or more files still need encryption                                         |
+| 1    | A key name holds two keys, or a file is encrypted with another key than the one held      |
+| 1    | A key change was refused (two keys for one file, or dotenvx did not reuse the held key)   |
 | 1    | `--all`: a skipped secrets-only environment still holds plaintext (run `envdrift push`)    |
 
 ## Configuration File Format

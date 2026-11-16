@@ -55,6 +55,33 @@ exit code (dotenvx can exit `0` without encrypting):
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails
   loudly instead of printing `[OK]`.
+- **Encrypts with the key the folder already holds.** dotenvx 2.x creates a brand-new
+  key whenever a file has no `DOTENV_PUBLIC_KEY` header, even when `.env.keys` already
+  holds the file's key, and the file then needs a key only this machine has. So before
+  dotenvx runs, envdrift reads `.env.keys` the way dotenvx reads it (a BOM, `export`,
+  spaces around `=`, quotes and inline comments included), takes the key held under the
+  name dotenvx gives the file (`DOTENV_PRIVATE_KEY_<ENV>` for `.env.<env>`,
+  `DOTENV_PRIVATE_KEY` for `.env`, `DOTENV_PRIVATE_KEY_PROD_EU` for `.env.prod.eu.west`),
+  and writes that key's public key into the header, exactly as dotenvx itself would.
+  A header for another key is corrected while the file holds no encrypted value yet.
+  The command refuses, with both files left as they were, when that name holds more
+  than one different key, when the value is not a key dotenvx can use (`is not a valid
+  dotenvx key`), when the file is already encrypted under another public key, or when it
+  holds encrypted values but no public key, so nothing shows which key they need.
+  A `.env.keys` that is a directory, unreadable or not UTF-8 is a clean error too.
+- **Checks what dotenvx did with the keys.** After dotenvx runs, both files are read
+  again. If a key that was there before changed or gained a second value, if dotenvx
+  created a new key although one was held, or if the file now carries a public key
+  whose private key was not saved, both files are put back byte for byte (line endings
+  included) and the command fails instead of printing `[OK]`. Each file is put back on its
+  own: when one cannot be, the other still is, and the error names the one that could not.
+  An env file that cannot be put back may hold values encrypted with a key dotenvx wrote, so
+  the keys file dotenvx wrote is first saved as a gitignored `.env.keys.backup.<timestamp>`.
+  If no backup can be made, the keys file is left as dotenvx wrote it: no key is deleted.
+- **Keeps a renamed file's header.** A header block under another name is removed only
+  when the file's own header is also there. On its own it still holds the public key the
+  file's values were encrypted with, so `.env.staging` renamed to `.env.production` keeps
+  encrypting with its key instead of getting a second one.
 
 Multiple env files can be passed in one invocation. With `--check`, each secret
 store gets its own report, plaintext companions are skipped, and the exit code is 1
@@ -178,10 +205,12 @@ envdrift encrypt .env.production
 This will:
 
 1. Install dotenvx if `encryption.dotenvx.auto_install` is enabled
-2. Generate an ECIES (secp256k1) keypair, encrypt every value with the public
+2. Use the key `.env.keys` already holds for the file, or generate an ECIES
+   (secp256k1) keypair when it holds none, encrypt every value with the public
    key (ECIES envelope around an AES-256-GCM payload), and rewrite the file in
    place
-3. Create `.env.keys` with the matching private key (never commit this!)
+3. Create `.env.keys` with the matching private key when a new one was
+   generated (never commit this!)
 
 ### Encrypt with SOPS
 

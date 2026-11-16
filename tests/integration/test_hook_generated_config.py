@@ -22,6 +22,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 pytestmark = pytest.mark.integration
 
@@ -248,6 +249,63 @@ class TestGeneratedConfigRunsAsEmitted:
 
 class TestHookInstallPreservesUserConfig:
     """hook --install must not rewrite the user's .pre-commit-config.yaml (#493)."""
+
+    @pytest.mark.parametrize("indicator", ["|", ">", "|+", ">+"])
+    def test_install_refuses_changed_block_scalar_args(
+        self, tmp_path: Path, indicator: str
+    ) -> None:
+        original = (
+            "repos:\n"
+            "  - repo: local\n"
+            "    hooks:\n"
+            "      - id: existing\n"
+            "        name: existing\n"
+            "        entry: echo\n"
+            "        language: system\n"
+            "        args:\n"
+            f"          - {indicator}\n"
+            "            --config=pyproject.toml"
+        )
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_bytes(original.encode())
+
+        result = _run_envdrift(["hook", "--install"], cwd=tmp_path, env=_cli_env(tmp_path))
+
+        assert result.returncode == 1, _diag(result)
+        output = " ".join((result.stdout + result.stderr).split())
+        assert "existing configuration would change" in output, _diag(result)
+        assert "Traceback" not in output
+        assert config_file.read_bytes() == original.encode()
+
+    def test_install_without_final_newline_preserves_hook_ownership(self, tmp_path: Path) -> None:
+        """The emitted config retains the user's repo and passes pre-commit (#941)."""
+        pytest.importorskip("pre_commit")
+        original = (
+            "repos:\n"
+            "  - repo: https://github.com/psf/black\n"
+            "    rev: 24.3.0\n"
+            "    hooks:\n"
+            "      - id: black"
+        )
+        config_file = tmp_path / ".pre-commit-config.yaml"
+        config_file.write_text(original, encoding="utf-8")
+        env = _cli_env(tmp_path)
+        _init_git_repo(tmp_path, env)
+
+        result = _run_envdrift(["hook", "--install"], cwd=tmp_path, env=env)
+        assert result.returncode == 0, _diag(result)
+        validation = _run(
+            [sys.executable, "-m", "pre_commit", "validate-config", str(config_file)],
+            cwd=tmp_path,
+            env=env,
+        )
+        assert validation.returncode == 0, _diag(validation)
+        updated = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        assert updated["repos"][:-1] == yaml.safe_load(original)["repos"]
+        assert [hook["id"] for hook in updated["repos"][-1]["hooks"]] == [
+            "envdrift-encryption",
+            "envdrift-guard",
+        ]
 
     def test_install_preserves_comments_and_formatting(self, tmp_path: Path) -> None:
         original = textwrap.dedent(

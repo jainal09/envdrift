@@ -75,6 +75,9 @@ class _DecryptTask:
     env_file: Path
     ephemeral_key: str | None = None
     ephemeral_key_name: str | None = None
+    # The mapping's keys file ([vault.sync] env_keys_filename), handed to
+    # dotenvx so pull decrypts with the file sync wrote (#943).
+    keys_file: Path | None = None
 
 
 @dataclass
@@ -356,18 +359,31 @@ def _should_queue_decryption(
     return False
 
 
+def _pull_keys_file(mapping: ServiceMapping, context: SyncCommandContext) -> Path:
+    """The mapping's keys file: ``[vault.sync] env_keys_filename`` in its folder."""
+    return mapping.folder_path / (context.sync_config.env_keys_filename or ".env.keys")
+
+
 def _read_pull_encrypted_file(
     mapping: ServiceMapping,
     env_file: Path,
     environment: str,
     context: _PullDecryptContext,
 ) -> str | None:
-    keys_file = mapping.folder_path / (context.command.sync_config.env_keys_filename or ".env.keys")
+    from envdrift.integrations.dotenvx import DotenvxError
+
+    keys_file = _pull_keys_file(mapping, context.command)
     try:
         context.runtime.normalize_metadata(
             env_file, keys_file, environment, context.encryption.provider
         )
         return env_file.read_text(encoding="utf-8")
+    except DotenvxError as exc:
+        # The keys file holds two different keys for this file; nothing was
+        # written and nothing is decrypted until one of them is removed.
+        console.print(f"  [red]![/red] {env_file} [red]- not decrypted: {escape(str(exc))}[/red]")
+        context.state.errors += 1
+        return None
     except (OSError, ValueError) as exc:
         console.print(f"  [red]![/red] {env_file} [red]- error reading file: {exc}[/red]")
         context.state.errors += 1
@@ -399,6 +415,8 @@ def _record_pull_provider_mismatch(env_file: Path, context: _PullDecryptContext)
 
 
 def _queue_pull_mapping(mapping: ServiceMapping, context: _PullDecryptContext) -> None:
+    from envdrift.encryption import EncryptionProvider
+
     resolved = _resolve_pull_mapping_file(mapping, context)
     if resolved is None:
         return
@@ -409,12 +427,16 @@ def _queue_pull_mapping(mapping: ServiceMapping, context: _PullDecryptContext) -
     if not _should_queue_decryption(mapping, env_file, environment, context):
         return
     key_name, key_value = context.ephemeral_keys.get(mapping.folder_path.resolve(), (None, None))
+    keys_file = None
+    if context.encryption.provider == EncryptionProvider.DOTENVX:
+        keys_file = _pull_keys_file(mapping, context.command)
     context.state.tasks.append(
         _DecryptTask(
             mapping=mapping,
             env_file=env_file,
             ephemeral_key=key_value,
             ephemeral_key_name=key_name,
+            keys_file=keys_file,
         )
     )
 
@@ -427,7 +449,11 @@ def _decrypt_one(task: _DecryptTask, backend: Any):
         if task.ephemeral_key and task.ephemeral_key_name:
             env_override = dict(os.environ)
             env_override[task.ephemeral_key_name] = task.ephemeral_key
-        return task, backend.decrypt(task.env_file.resolve(), env=env_override), None
+        # dotenvx gets the mapping's keys file; SOPS gets only its own options.
+        kwargs: dict[str, Any] = {"env": env_override}
+        if task.keys_file is not None:
+            kwargs["keys_file"] = task.keys_file.resolve()
+        return task, backend.decrypt(task.env_file.resolve(), **kwargs), None
     except (EncryptionNotFoundError, EncryptionBackendError) as exc:
         return task, None, exc
 
