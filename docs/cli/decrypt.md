@@ -254,8 +254,8 @@ the file may now hold decrypted plaintext, marks it `skip-worktree` so a plain
 `git add .` won't stage it, and says whether that protection worked. When it did
 not, the advice depends on why: `git checkout -- <file>` for a tracked file, or
 `envdrift encrypt <file>` for a file git has no copy of (untracked, or outside a
-git repository). `envdrift pull`, `vault-pull` and the re-key step of `lock`
-decrypt through the same code, so they leave a file as it was in the same way.
+git repository). `envdrift pull` and `vault-pull` decrypt through the same code,
+so they leave a file as it was in the same way.
 
 When using `--verify-vault`, a wrong key returns exit 1 with a message like:
 

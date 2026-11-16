@@ -738,8 +738,8 @@ class DecryptSnapshot:
 
     Used as a context manager, it restores the file on any exception from the
     body and keeps the outcome in ``note`` for the caller's error message. The
-    pull-partial paths and the dotenvx backend (decrypt, pull, vault-pull and
-    lock's re-key) share it.
+    pull-partial paths and the dotenvx backend (decrypt, pull and vault-pull)
+    share it.
     """
 
     def __init__(self, path: Path) -> None:

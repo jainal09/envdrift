@@ -522,10 +522,13 @@ def test_verify_vault_dotenvx_not_installed_returns_false(monkeypatch, tmp_path:
     assert any("dotenvx is not installed" in e for e in errors)
 
 
-def test_verify_vault_raw_key_env_starting_with_underscore(monkeypatch, tmp_path: Path):
-    """A .env.production filename yields PRODUCTION key var (covers 394-396 path)."""
-    # ".env.production".stem == ".env" -> replace(".env","") then replace "." -> "production".
-    # Use a leading-dot derived name to exercise the startswith("_") strip on line 396.
+def test_verify_vault_raw_key_env_name_matches_dotenvx(monkeypatch, tmp_path: Path):
+    """A raw vault key is injected under the name dotenvx derives from the filename (N1).
+
+    The pinned dotenvx names ``.env..local``'s key ``DOTENV_PRIVATE_KEY__LOCAL``
+    (the empty part between the dots counts as one of its two parts), so the
+    old envdrift-only rule that stripped the underscore named another key.
+    """
     env_file = tmp_path / ".env..local"
     env_file.write_text("SECRET=encrypted")
 
@@ -559,11 +562,9 @@ def test_verify_vault_raw_key_env_starting_with_underscore(monkeypatch, tmp_path
     )
 
     assert result is True
-    # Exactly one DOTENV_PRIVATE_KEY_* var should be present, no leading underscore.
+    # Exactly one DOTENV_PRIVATE_KEY_* var, named as dotenvx names the file.
     key_vars = [k for k in captured["env"] if k.startswith("DOTENV_PRIVATE_KEY_")]
-    assert len(key_vars) == 1
-    suffix = key_vars[0][len("DOTENV_PRIVATE_KEY_") :]
-    assert not suffix.startswith("_")
+    assert key_vars == ["DOTENV_PRIVATE_KEY__LOCAL"]
 
 
 def test_verify_vault_failure_includes_region(monkeypatch, tmp_path: Path):

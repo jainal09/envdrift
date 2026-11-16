@@ -331,27 +331,103 @@ def test_normalize_preserves_missing_trailing_newline_in_keys_file(tmp_path):
     assert not content.endswith("\n")
 
 
-def test_normalize_merges_into_existing_canonical_key(tmp_path):
-    """When a canonical key already exists, the generated key+comment are merged in."""
+def test_normalize_refuses_to_write_a_generated_key_over_a_different_held_one(tmp_path):
+    """#938: a key dotenvx generated must never replace the held canonical key.
+
+    The old merge wrote the generated value over ``DOTENV_PRIVATE_KEY_PRODUCTION``
+    and deleted the generated line, destroying the only copy of the held key.
+    Now both files stay byte for byte as they were — the env file's header is
+    not rewritten either, because the conflict is found before any write (B3).
+    """
+    from envdrift.integrations.dotenvx import DotenvxKeyError
+
+    env_file = tmp_path / "postgresql.env"
+    env_file.write_bytes(b"# postgresql.env\r\nDOTENV_PUBLIC_KEY_POSTGRESQLDEVELOPMENT=03abc\r\n")
+    keys_file = tmp_path / ".env.keys"
+    keys_file.write_text(
+        _keys_header()
+        + "\n# .env.production\n"
+        + "DOTENV_PRIVATE_KEY_PRODUCTION=held\n"
+        + "\n# postgresql.env\n"
+        + "DOTENV_PRIVATE_KEY_POSTGRESQLDEVELOPMENT=fresh\n"
+    )
+    env_before = env_file.read_bytes()
+    keys_before = keys_file.read_bytes()
+
+    with pytest.raises(DotenvxKeyError, match=r"holds two different keys for postgresql\.env"):
+        normalize_dotenvx_metadata(env_file, keys_file, "production")
+
+    assert keys_file.read_bytes() == keys_before
+    assert env_file.read_bytes() == env_before
+
+
+def test_normalize_drops_a_generated_duplicate_of_the_held_key(tmp_path):
+    """The same key under both names: the duplicate dotenvx wrote goes, nothing is lost."""
     env_file = tmp_path / "postgresql.env"
     env_file.write_text("DOTENV_PUBLIC_KEY_PRODUCTION=03abc\n")
     keys_file = tmp_path / ".env.keys"
     keys_file.write_text(
         _keys_header()
         + "\n# .env.production\n"
-        + "DOTENV_PRIVATE_KEY_PRODUCTION=stale\n"
+        + "DOTENV_PRIVATE_KEY_PRODUCTION=samekey\n"
         + "\n# postgresql.env\n"
-        + "DOTENV_PRIVATE_KEY_POSTGRESQLPRODUCTION=fresh\n"
+        + "DOTENV_PRIVATE_KEY_POSTGRESQLDEVELOPMENT=samekey\n"
     )
 
     normalize_dotenvx_metadata(env_file, keys_file, "production")
 
     content = keys_file.read_text()
-    # Canonical key takes the freshly generated value, duplicate is removed.
-    assert "DOTENV_PRIVATE_KEY_PRODUCTION=fresh" in content
-    assert content.count("DOTENV_PRIVATE_KEY_PRODUCTION=") == 1
-    assert "POSTGRESQLPRODUCTION" not in content
+    assert content.count("DOTENV_PRIVATE_KEY_PRODUCTION=samekey") == 1
+    assert "POSTGRESQLDEVELOPMENT" not in content
     assert "# postgresql.env" not in content
+
+
+def test_normalize_keeps_line_endings_and_unrelated_mentions(tmp_path):
+    """Only line-start key names and the filename comment change; CRLF is kept.
+
+    The files are written as bytes, so Windows text mode cannot turn LF into
+    CRLF, and a value that merely mentions a key name is not rewritten.
+    """
+    env_file = tmp_path / "postgresql.env"
+    env_file.write_bytes(
+        b"# postgresql.env\r\n"
+        b"export DOTENV_PUBLIC_KEY_POSTGRESQLDEVELOPMENT=03abc\r\n"
+        b"NOTE=see DOTENV_PUBLIC_KEY_OTHER=x\r\n"
+    )
+    keys_file = tmp_path / ".env.keys"  # absent
+
+    normalize_dotenvx_metadata(env_file, keys_file, "production")
+
+    assert env_file.read_bytes() == (
+        b"# .env.production\r\n"
+        b"export DOTENV_PUBLIC_KEY_PRODUCTION=03abc\r\n"
+        b"NOTE=see DOTENV_PUBLIC_KEY_OTHER=x\r\n"
+    )
+
+
+def test_normalize_renames_an_export_form_generated_key(tmp_path):
+    """The generated line keeps its own form (``export``, spacing); only the name changes."""
+    env_file = tmp_path / "postgresql.env"
+    env_file.write_text("A=1\n")
+    keys_file = tmp_path / ".env.keys"
+    keys_file.write_text("# postgresql.env\nexport DOTENV_PRIVATE_KEY_POSTGRESQLDEVELOPMENT = k1\n")
+
+    normalize_dotenvx_metadata(env_file, keys_file, "production")
+
+    assert keys_file.read_text() == "# .env.production\nexport DOTENV_PRIVATE_KEY_PRODUCTION = k1\n"
+
+
+def test_normalize_rejects_a_non_utf8_env_file_before_writing(tmp_path):
+    env_file = tmp_path / "postgresql.env"
+    env_file.write_bytes(b"A=caf\xe9\n")
+    keys_file = tmp_path / ".env.keys"
+    keys_file.write_text("# postgresql.env\nDOTENV_PRIVATE_KEY_POSTGRESQLDEVELOPMENT=k1\n")
+    keys_before = keys_file.read_bytes()
+
+    with pytest.raises(ValueError, match="not valid UTF-8"):
+        normalize_dotenvx_metadata(env_file, keys_file, "production")
+
+    assert keys_file.read_bytes() == keys_before
 
 
 def test_normalize_noop_when_no_custom_comment(tmp_path):

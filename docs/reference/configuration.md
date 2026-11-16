@@ -280,7 +280,7 @@ Configuration for the `envdrift sync`, `envdrift pull`, and `envdrift lock` comm
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `default_vault_name` | `string` | `null` | Default vault name for mappings |
-| `env_keys_filename` | `string` | `".env.keys"` | Name of the keys file |
+| `env_keys_filename` | `string` | `".env.keys"` | Name of the keys file; every dotenvx call of `sync`, `pull`, `lock` and `vault-push --all` uses it |
 | `max_workers` | `int \| None` | `null` | Parallel workers for pull/lock file operations |
 | `ephemeral_keys` | `bool` | `false` | Never store `.env.keys` locally; fetch from vault on-demand |
 

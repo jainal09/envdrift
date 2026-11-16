@@ -3,8 +3,8 @@
 dotenvx decrypts value by value: with one value under another key it writes the
 values it could decrypt and exits 1. ``DecryptSnapshot`` takes the file's bytes
 before dotenvx runs and puts them back when the decrypt fails, or exits 0 but
-leaves ciphertext behind. The dotenvx backend (``envdrift decrypt``, ``pull``,
-``vault-pull`` and ``lock``'s re-key) uses it.
+leaves ciphertext behind. The dotenvx backend (``envdrift decrypt``, ``pull`` and
+``vault-pull``) uses it.
 
 The real-binary proof is ``tests/integration/test_decrypt_failure_e2e.py``.
 Here the dotenvx subprocess seam is replaced by a stand-in that writes what the
