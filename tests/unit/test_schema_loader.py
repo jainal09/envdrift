@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import warnings
 from textwrap import dedent
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from pydantic import AliasChoices, AliasPath, Field, model_validator
+from pydantic import AliasChoices, AliasPath, Field, model_validator, root_validator
+from pydantic.warnings import PydanticDeprecatedSince20
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from envdrift.core.schema import FieldMetadata, SchemaLoader, SchemaLoadError, SchemaMetadata
@@ -222,6 +224,32 @@ def _settings_with(check: str) -> type[BaseSettings]:
                 return data
 
         return Before
+    if check == "root":
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PydanticDeprecatedSince20)
+
+            class Root(BaseSettings):
+                NAME: str = ""
+
+                @root_validator(skip_on_failure=True)
+                @classmethod
+                def check_root(cls, values):
+                    return values
+
+        return Root
+    if check == "root-pre":
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PydanticDeprecatedSince20)
+
+            class RootPre(BaseSettings):
+                NAME: str = ""
+
+                @root_validator(pre=True)
+                @classmethod
+                def check_root(cls, values):
+                    return values
+
+        return RootPre
 
     class Plain(BaseSettings):
         NAME: str = ""
@@ -231,7 +259,15 @@ def _settings_with(check: str) -> type[BaseSettings]:
 
 @pytest.mark.parametrize(
     ("check", "expected"),
-    [("after", True), ("wrap", True), ("post-init", True), ("before", False), ("none", False)],
+    [
+        ("after", True),
+        ("wrap", True),
+        ("post-init", True),
+        ("root", True),
+        ("before", False),
+        ("root-pre", False),
+        ("none", False),
+    ],
 )
 def test_checks_after_fields_names_the_checks_a_failed_field_stops(check: str, expected: bool):
     """Pydantic runs after/wrap model validators and model_post_init only once every field is

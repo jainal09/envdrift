@@ -210,10 +210,11 @@ class SchemaMetadata:
         field could then hide what those checks reject, such as ``PORT=0``.
         """
         decorators = getattr(self.model_class, "__pydantic_decorators__", None)
-        validators = getattr(decorators, "model_validators", None) or {}
-        if any(getattr(v.info, "mode", "after") != "before" for v in validators.values()):
-            return True
-        if getattr(decorators, "root_validators", None):
+        validators = [
+            *(getattr(decorators, "model_validators", None) or {}).values(),
+            *(getattr(decorators, "root_validators", None) or {}).values(),  # pydantic v1 style
+        ]
+        if any(getattr(v.info, "mode", "after") != "before" for v in validators):
             return True
         return getattr(self.model_class, "__pydantic_post_init__", None) is not None
 
