@@ -453,6 +453,26 @@ def test_a_failed_repository_lookup_leaves_the_file_unmarked_without_raising(tmp
         assert _git_skip_worktree(tmp_path / "production.secret") is False
 
 
+def test_a_failed_repository_lookup_still_prints_the_notice_naming_the_file(tmp_path: Path):
+    """The notice asks why the mark failed with the same lookup, so that cannot raise either.
+
+    ``_run_git_update_index`` returns False when the lookup fails, and the notice then asks
+    ``unprotected_reason`` why. That ran the lookup outside its ``try``: the same error
+    escaped, and the notice that names the plaintext file never printed.
+    """
+    from envdrift.cli_commands.partial import _print_unprotected_warning
+    from envdrift.core.partial_encryption import unprotected_reason
+
+    secret = tmp_path / "production.secret"
+    with patch(
+        "envdrift.core.partial_encryption.git_location_for",
+        side_effect=PermissionError(13, "Permission denied"),
+    ):
+        assert unprotected_reason(secret) == "skip-worktree failed: [Errno 13] Permission denied"
+        # The notice prints that reason next to the file's name.
+        assert _print_unprotected_warning(1, 0, [secret]) is True
+
+
 def test_the_sops_advice_takes_a_path_with_a_space_as_one_argument():
     """Each command in the advice for a file still holding SOPS ciphertext names the file once.
 

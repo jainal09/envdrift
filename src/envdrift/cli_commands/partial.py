@@ -85,9 +85,9 @@ def _stop_unless_git_ignores(key_files: list[Path]) -> None:
         print_error(
             f"git does not ignore {', '.join(re_included)}, where dotenvx keeps the private "
             "key, so `git add .` would stage it. A rule in your git ignore files "
-            "re-includes it (a `!` pattern, for example), or git already tracks it: then the "
-            "key is in the repository, so run `git rm --cached` on it and rotate the key. "
-            f"Fix that and run again: {stopped}"
+            "re-includes it (a `!` pattern, for example), or git already tracks it. If "
+            "`git ls-files` lists it, the key is in the repository: run `git rm --cached` on "
+            f"it and rotate the key. Fix that and run again: {stopped}"
         )
     if unconfirmed:
         print_error(

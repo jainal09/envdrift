@@ -797,10 +797,8 @@ def _undo_header_rewrite(target: Path, before: bytes | None) -> str:
     """
     from envdrift.sync.operations import atomic_write
 
-    if before is None:
-        return ""
     try:
-        if target.read_bytes() != before:
+        if before is not None and target.read_bytes() != before:
             atomic_write(target.resolve(), before)
     except OSError as e:
         return f"\nenvdrift could not put back the dotenvx header it rewrote in {target}: {e}"

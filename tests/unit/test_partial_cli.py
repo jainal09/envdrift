@@ -922,14 +922,16 @@ def test_push_says_to_untrack_a_key_file_git_already_tracks(monkeypatch, tmp_pat
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / ".env.keys").write_text("# keys\n", encoding="utf-8")
-    subprocess.run(["git", "add", "config/.env.keys"], cwd=tmp_path, check=True)
+    # -f: a global excludes file that lists .env.keys, as many do, refused the add.
+    subprocess.run(["git", "add", "-f", "config/.env.keys"], cwd=tmp_path, check=True)
     monkeypatch.chdir(tmp_path)
 
     result, output, pushed = _push_recording(monkeypatch, [_combine_env("production", "config")])
 
     assert result.exit_code == 1, output
     assert "git does not ignore config/.env.keys" in output, output
-    assert "git already tracks it" in output and "git rm --cached" in output, output
+    assert "git already tracks it" in output, output
+    assert "If `git ls-files` lists it" in output and "git rm --cached" in output, output
     assert pushed == []
 
 

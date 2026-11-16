@@ -705,8 +705,10 @@ def unprotected_reason(path: Path) -> str:
     the plaintext is in.
     """
     target = _written_file(path)
-    folder, env = git_location_for(target)
     try:
+        # In the try: the lookup fails where it failed for the mark (_run_git_update_index),
+        # and the notice that names the plaintext file must still print.
+        folder, env = git_location_for(target)
         listed = subprocess.run(  # nosec B603, B607
             [
                 "git",
@@ -723,7 +725,7 @@ def unprotected_reason(path: Path) -> str:
         )
     except FileNotFoundError:
         return "skip-worktree failed: git is not installed"
-    except (subprocess.TimeoutExpired, OSError) as exc:
+    except (subprocess.TimeoutExpired, OSError, RuntimeError) as exc:
         return f"skip-worktree failed: {exc}"
     if listed.returncode == 1:
         reason = "untracked"
