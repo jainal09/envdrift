@@ -338,7 +338,10 @@ A finding in an old commit is judged by its file in that commit, not by the file
 A key committed in plaintext and encrypted later is still reported, though its line now holds an
 encrypted value or an `envdrift:ignore` comment, and `--skip-gitignored` keeps it once the file is
 ignored: the commit still holds the key. A finding in a value that was encrypted in its commit is
-dropped as ciphertext, and a finding whose commit git cannot show is kept.
+dropped as ciphertext, and a finding whose commit git cannot show is kept. The file is the one at
+the finding's path in that commit: a symbolic link made since, at the file or at a folder above
+it, is not followed. A finding in a repository that its path reaches only through a folder link is
+kept.
 
 ### `--entropy` / `--no-entropy`, `-e`
 

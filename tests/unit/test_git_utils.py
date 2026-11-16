@@ -277,6 +277,17 @@ class TestFileAtCommit:
         with patch("envdrift.utils.git.run_tool", side_effect=OSError("no git")):
             assert file_at_commit(repo / "app.env", "HEAD") is None
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="a symbolic link needs a privilege on Windows"
+    )
+    def test_a_repository_named_only_through_a_folder_link_has_none(self, tmp_path: Path):
+        """Below a link a ``.git`` may be another folder's, so no root can be told: None."""
+        repo = _repo_with(tmp_path / "repo", {"app.env": "A=1\n"})
+        (tmp_path / "link").symlink_to(repo, target_is_directory=True)
+
+        assert file_at_commit(repo / "app.env", "HEAD") == "A=1\n"
+        assert file_at_commit(tmp_path / "link" / "app.env", "HEAD") is None
+
 
 class TestGetFileFromGit:
     """Tests for get_file_from_git function."""

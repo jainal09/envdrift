@@ -395,7 +395,8 @@ def file_at_commit(file_path: Path, commit: str) -> str | None:
 
     The file is named by its path in the repository, taken from the path as given: no symbolic
     link on the way is followed, at the file or at a folder, as the commit may hold a file at
-    that path where a link is today (#1014).
+    that path where a link is today (#1014). A path that reaches its repository only through a
+    folder link has None too, as no root can be told for it.
     """
     located = _in_work_tree(file_path)
     if located is None:
@@ -421,14 +422,20 @@ def _in_work_tree(file_path: Path) -> tuple[Path, Path] | None:
     """The root of the work tree ``file_path`` is in and its path there, both as written.
 
     No link is resolved: the root is the nearest folder above the file, on its absolute path as
-    given, that holds a ``.git`` (a repository, or the file that names one).
+    given, that holds a ``.git`` (a repository, or the file that names one) and is not reached
+    through a folder link. Through a link, a ``.git`` may be another folder's: with ``prod``
+    linked to the root, ``prod/.git`` exists, and ``prod/app.env`` would be read as the root's
+    ``app.env``. A path whose only ``.git`` is below a link has no root that can be told: None.
     """
     # normpath folds "a/../b" without resolving a link, as Path.resolve() would.
     path = Path(os.path.normpath(Path(file_path).absolute()))
-    for folder in path.parents:
+    root = None
+    for folder in reversed(path.parents):  # from the top, down to the link nearest it
+        if folder.is_symlink():
+            break
         if (folder / ".git").exists():
-            return folder, path.relative_to(folder)
-    return None
+            root = folder
+    return None if root is None else (root, path.relative_to(root))
 
 
 def _literal_pathspec(relative_path: Path) -> str:

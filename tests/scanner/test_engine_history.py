@@ -199,6 +199,56 @@ def test_a_folder_linked_elsewhere_later_does_not_choose_the_file_either(repo: P
     assert _reported(repo, [_finding(repo, plaintext, name="prod/app.env")]) == [plaintext]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="a symbolic link needs a privilege on Windows")
+def test_a_folder_linked_to_the_repository_later_does_not_choose_the_file_either(repo: Path):
+    """``prod/app.env`` is read as the commit held it, though ``prod`` links to the root today.
+
+    Through the link, ``prod/.git`` exists: ``prod`` was taken for the root, and the commit's
+    root ``app.env``, whose line 2 is encrypted, was read in place of the plaintext
+    ``prod/app.env``.
+    """
+    _commit(repo, "app.env", f'SETTING_2="{_CIPHERTEXT}"')
+    plaintext = _commit(repo, "prod/app.env", f"AWS_ACCESS_KEY_ID={_KEY}")
+    shutil.rmtree(repo / "prod")
+    (repo / "prod").symlink_to(".", target_is_directory=True)
+
+    assert _reported(repo, [_finding(repo, plaintext, name="prod/app.env")]) == [plaintext]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a symbolic link needs a privilege on Windows")
+def test_a_finding_below_a_folder_linked_to_the_repository_is_still_judged_by_its_commit(
+    repo: Path,
+):
+    """The root is found above the link, so ``prod/app.env`` is judged by its commit, as before.
+
+    Its line 2 was encrypted in that commit, so the finding is dropped. It was kept, judged by
+    the commit's root ``app.env``, which held plaintext there.
+    """
+    _commit(repo, "app.env", f"AWS_ACCESS_KEY_ID={_KEY}")
+    encrypted = _commit(repo, "prod/app.env", f'AWS_ACCESS_KEY_ID="{_CIPHERTEXT}"')
+    shutil.rmtree(repo / "prod")
+    (repo / "prod").symlink_to(".", target_is_directory=True)
+
+    assert _reported(repo, [_finding(repo, encrypted, name="prod/app.env")]) == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a symbolic link needs a privilege on Windows")
+def test_a_repository_reached_through_a_folder_link_is_not_the_findings(repo: Path):
+    """A ``.git`` reached through a link is another folder's, even a clone with the same commits.
+
+    ``a`` links to ``b`` today, and ``b/sub`` is a clone, so ``a/sub/.git`` exists through the
+    link. ``a/sub`` was taken for the root, and the clone's root ``app.env`` in that commit, whose
+    line 2 is encrypted, was read in place of the plaintext ``a/sub/app.env``.
+    """
+    _commit(repo, "app.env", f'SETTING_2="{_CIPHERTEXT}"')
+    plaintext = _commit(repo, "a/sub/app.env", f"AWS_ACCESS_KEY_ID={_KEY}")
+    _git(repo, "clone", "-q", "--", str(repo), str(repo / "b" / "sub"))
+    shutil.rmtree(repo / "a")
+    (repo / "a").symlink_to("b", target_is_directory=True)
+
+    assert _reported(repo, [_finding(repo, plaintext, name="a/sub/app.env")]) == [plaintext]
+
+
 def test_a_file_read_again_is_not_read_from_git_again(repo: Path, monkeypatch: pytest.MonkeyPatch):
     """Findings in a few (file, commit) pairs, interleaved, read each pair from git once.
 
