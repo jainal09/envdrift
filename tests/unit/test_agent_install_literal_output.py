@@ -13,6 +13,7 @@ from __future__ import annotations
 import http.server
 import io
 import json
+import shutil
 import threading
 from pathlib import Path
 
@@ -198,3 +199,36 @@ def test_install_agent_describes_a_failed_download_literally_and_in_red(
         description
     )
     assert rendered.getvalue().startswith("\x1b[31m" + expected), repr(rendered.getvalue())
+
+
+def test_install_agent_names_the_destination_when_the_error_names_no_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """A failed install says where the binary was going when the error does not.
+
+    ``shutil.move`` copies when it cannot rename, and on Windows the copy
+    (``CopyFile2``) raises an error that names no file: ``[WinError 3] The system
+    cannot find the path specified`` did not say which path was missing. The
+    error is raised here in that shape, since Linux and macOS never raise it; the
+    Windows CI legs run the real one in the ``filesystem`` case above.
+    """
+    release = tmp_path / "envdrift-agent"
+    release.write_bytes(b"agent")
+    dest = tmp_path / "missing[" / "x]" / "envdrift-agent"
+
+    def copy_error(src: str, dst: str) -> None:
+        raise FileNotFoundError(2, "The system cannot find the path specified")
+
+    monkeypatch.setattr(shutil, "move", copy_error)
+    progress = _download_progress()
+
+    assert _download_binary(release.as_uri(), dest, progress) is False
+
+    reason = f"[Errno 2] The system cannot find the path specified (installing to {dest})"
+    [task] = progress.tasks
+    column = progress.columns[-1]
+    assert isinstance(column, _DescriptionColumn)
+    assert column.render(task).plain == f"Installation failed: {reason}"
+    # The console wraps the long temp path mid-word, so whitespace is dropped.
+    printed = "".join(capsys.readouterr().out.split())
+    assert "".join(f"File System Error: {reason}".split()) in printed

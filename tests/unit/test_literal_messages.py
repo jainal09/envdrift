@@ -122,7 +122,8 @@ def test_diff_report_shows_bracketed_paths_and_file_names(bracketed_folder: Path
     assert result.exception is None
     out = _flat(result.output)
     assert f"Comparing: {first} vs {second}" in out
-    assert "┃ .env[bold] ┃ .env.prod ┃" in out
+    # Rich draws a light box on a legacy Windows console, a heavy one elsewhere.
+    assert "│ .env[bold] │ .env.prod │" in out.replace("┃", "│")
 
 
 def test_encrypt_check_report_shows_bracketed_paths_and_names(bracketed_folder: Path) -> None:

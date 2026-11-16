@@ -63,7 +63,7 @@ def test_closing_tag_in_a_path_is_reported_instead_of_crashing(
     assert result.exit_code == EXIT_CRITICAL_FINDINGS, result.output
     assert isinstance(result.exception, SystemExit), repr(result.exception)
     expected = "Run 'envdrift encrypt " + str(Path("cfg[/x]/a.env")) + "' before committing."
-    assert expected in result.output
+    assert expected in " ".join(result.output.split())
 
 
 def test_known_tag_in_a_path_names_the_real_file(

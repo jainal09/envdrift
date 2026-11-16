@@ -8,7 +8,8 @@ its bracketed segment, and a closing tag such as ``[/x]`` raised
 a row stopped the command with a traceback.
 
 The commands run for real against a real sync engine and real files; only the
-vault and the encryption backend are stand-ins.
+vault and the encryption backend are stand-ins, and the partial-encryption pull
+functions where a test needs dotenvx's decrypt failure.
 """
 
 from __future__ import annotations
@@ -169,18 +170,22 @@ def test_lock_check_names_a_missing_bracketed_folder(project) -> None:
 
 
 @pytest.mark.parametrize(
-    ("args", "header"),
+    ("args", "header", "exit_code"),
     [
-        (["sync"], "Vault Sync - Mode: Interactive | Profile: p[/x]"),
-        (["pull", "--skip-sync"], "Pull - Decrypting env files (profile: p[/x])"),
+        (["sync"], "Vault Sync - Mode: Interactive | Profile: p[/x]", 0),
+        (["pull", "--skip-sync"], "Pull - Decrypting env files (profile: p[/x])", 0),
+        # lock --check exits 1: the service's plaintext file would be encrypted.
         (
             ["lock", "--check"],
             "Lock - Verifying keys and encrypting env files (profile: p[/x])",
+            1,
         ),
     ],
     ids=["sync", "pull", "lock"],
 )
-def test_headers_name_the_profile_as_written(project, args: list[str], header: str) -> None:
+def test_headers_name_the_profile_as_written(
+    project, args: list[str], header: str, exit_code: int
+) -> None:
     root, use_vault, _ = project
     _service(root, "svc")
     config = _write_config(
@@ -198,6 +203,7 @@ def test_headers_name_the_profile_as_written(project, args: list[str], header: s
 
     result = _invoke(*args, "-c", str(config), "--profile", "p[/x]")
 
+    assert result.exit_code == exit_code, result.output
     assert isinstance(result.exception, SystemExit) or result.exception is None, repr(
         result.exception
     )
@@ -283,6 +289,7 @@ def test_lock_all_partial_rows_name_the_files(project) -> None:
 
     result = _invoke("lock", "-c", str(config), "--all", "--check")
 
+    assert result.exit_code == 1, result.output
     assert isinstance(result.exception, SystemExit), repr(result.exception)
     secret_file = Path("cfg[/x]/.env.production.secret")
     assert f"= {secret_file} - skipped (not found)" in _flat(result.output)

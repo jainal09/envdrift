@@ -31,7 +31,16 @@ runner = CliRunner()
 
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
-        ["git", "-c", "user.name=envdrift", "-c", "user.email=envdrift@example.invalid", *args],
+        [
+            "git",
+            "-c",
+            "user.name=envdrift",
+            "-c",
+            "user.email=envdrift@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            *args,
+        ],
         cwd=repo,
         check=True,
         capture_output=True,

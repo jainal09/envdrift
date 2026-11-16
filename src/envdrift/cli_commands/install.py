@@ -276,8 +276,11 @@ def _download_binary(url: str, dest: Path, progress: Progress) -> bool:
         console.print(Text(f"Network Error: {e.reason}", style="red"))
         return False
     except OSError as e:
-        progress.update(task, description=f"Installation failed: {e}", style="red")
-        console.print(Text(f"File System Error: {e}", style="red"))
+        # shutil.move copies when it cannot rename, and a copy error on Windows
+        # (CopyFile2) names no file, so the message says where the binary was going.
+        reason = str(e) if e.filename else f"{e} (installing to {dest})"
+        progress.update(task, description=f"Installation failed: {reason}", style="red")
+        console.print(Text(f"File System Error: {reason}", style="red"))
         return False
     finally:
         # Clean up temp file if it exists

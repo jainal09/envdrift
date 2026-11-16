@@ -30,6 +30,11 @@ from envdrift.utils.text import styled_text
 _DOTENVX_KEYS_FILE = ".env.keys"
 
 
+def _print_line(template: str, *values: object) -> None:
+    """Print one line of envdrift's markup, with each value shown as it is."""
+    console.print(styled_text(template, *values))
+
+
 def _validate_partial_config_or_exit(config: EnvdriftConfig) -> None:
     """Validate partial-encryption environments, exiting cleanly on a bad config.
 
@@ -152,39 +157,33 @@ def push(
 
     for env_config in envs_to_process:
         # Names, paths and errors are printed as they are, never as markup.
-        console.print(styled_text("[bold cyan]→[/bold cyan] {}", env_config.name))
+        _print_line("[bold cyan]→[/bold cyan] {}", env_config.name)
 
         try:
             if env_config.secrets_only:
                 stats = push_secrets_only(env_config, check=check)
                 if check:
                     if stats["in_sync"]:
-                        console.print(
-                            styled_text(
-                                "  [green]✓[/green] {} [dim](all {} file(s) encrypted)[/dim]",
-                                env_config.secrets_dir,
-                                stats["already_encrypted"],
-                            )
-                        )
-                    else:
-                        out_of_sync += 1
-                        console.print(
-                            styled_text(
-                                "  [yellow]![/yellow] {} "
-                                "[dim]({} file(s) not encrypted — run 'envdrift push')[/dim]",
-                                env_config.secrets_dir,
-                                stats["encrypted"],
-                            )
-                        )
-                else:
-                    console.print(
-                        styled_text(
-                            "  [green]✓[/green] Encrypted {} file(s) in {} "
-                            "[dim]({} already encrypted)[/dim]",
-                            stats["encrypted"],
+                        _print_line(
+                            "  [green]✓[/green] {} [dim](all {} file(s) encrypted)[/dim]",
                             env_config.secrets_dir,
                             stats["already_encrypted"],
                         )
+                    else:
+                        out_of_sync += 1
+                        _print_line(
+                            "  [yellow]![/yellow] {} "
+                            "[dim]({} file(s) not encrypted — run 'envdrift push')[/dim]",
+                            env_config.secrets_dir,
+                            stats["encrypted"],
+                        )
+                else:
+                    _print_line(
+                        "  [green]✓[/green] Encrypted {} file(s) in {} "
+                        "[dim]({} already encrypted)[/dim]",
+                        stats["encrypted"],
+                        env_config.secrets_dir,
+                        stats["already_encrypted"],
                     )
                     total_encrypted_files += stats["encrypted"]
                 processed += 1
@@ -192,39 +191,33 @@ def push(
                 stats = push_partial_encryption(env_config, check=check)
                 if check:
                     if stats["in_sync"]:
-                        console.print(
-                            styled_text(
-                                "  [green]✓[/green] {} [dim]is up to date[/dim]",
-                                env_config.combined_file,
-                            )
+                        _print_line(
+                            "  [green]✓[/green] {} [dim]is up to date[/dim]",
+                            env_config.combined_file,
                         )
                     else:
                         out_of_sync += 1
-                        console.print(
-                            styled_text(
-                                "  [yellow]![/yellow] {} "
-                                "[dim]is out of date — run 'envdrift push'[/dim]",
-                                env_config.combined_file,
-                            )
+                        _print_line(
+                            "  [yellow]![/yellow] {} "
+                            "[dim]is out of date — run 'envdrift push'[/dim]",
+                            env_config.combined_file,
                         )
                 else:
-                    console.print(
-                        styled_text(
-                            "  [green]✓[/green] Generated {} [dim]({} clear + {} encrypted)[/dim]",
-                            env_config.combined_file,
-                            stats["clear_lines"],
-                            stats["secret_vars"],
-                        )
+                    _print_line(
+                        "  [green]✓[/green] Generated {} [dim]({} clear + {} encrypted)[/dim]",
+                        env_config.combined_file,
+                        stats["clear_lines"],
+                        stats["secret_vars"],
                     )
                     combined_files += 1
                     total_encrypted_vars += stats["secret_vars"]
                 processed += 1
 
         except PartialEncryptionError as e:
-            console.print(styled_text("  [red]✗[/red] {}", e))
+            _print_line("  [red]✗[/red] {}", e)
             errors.append(f"{env_config.name}: {e}")
         except Exception as e:
-            console.print(styled_text("  [red]✗[/red] Unexpected error: {}", e))
+            _print_line("  [red]✗[/red] Unexpected error: {}", e)
             errors.append(f"{env_config.name}: {e}")
 
     # Summary
@@ -339,7 +332,7 @@ def pull_cmd(
 
     for env_config in envs_to_process:
         # Names, paths and errors are printed as they are, never as markup.
-        console.print(styled_text("[bold cyan]→[/bold cyan] {}", env_config.name))
+        _print_line("[bold cyan]→[/bold cyan] {}", env_config.name)
 
         try:
             if env_config.secrets_only:
@@ -347,46 +340,37 @@ def pull_cmd(
                 skipped_count += result["already_decrypted"]
                 protected_any = protected_any or result.get("protected", 0) > 0
                 if result["decrypted"]:
-                    console.print(
-                        styled_text(
-                            "  [green]✓[/green] Decrypted {} file(s) in {} "
-                            "[dim]({} already decrypted)[/dim]",
-                            result["decrypted"],
-                            env_config.secrets_dir,
-                            result["already_decrypted"],
-                        )
+                    _print_line(
+                        "  [green]✓[/green] Decrypted {} file(s) in {} "
+                        "[dim]({} already decrypted)[/dim]",
+                        result["decrypted"],
+                        env_config.secrets_dir,
+                        result["already_decrypted"],
                     )
                     decrypted_count += result["decrypted"]
                 else:
-                    console.print(
-                        styled_text(
-                            "  [dim]=[/dim] {} [dim](all {} file(s) already decrypted)[/dim]",
-                            env_config.secrets_dir,
-                            result["already_decrypted"],
-                        )
+                    _print_line(
+                        "  [dim]=[/dim] {} [dim](all {} file(s) already decrypted)[/dim]",
+                        env_config.secrets_dir,
+                        result["already_decrypted"],
                     )
             else:
                 was_decrypted, protected = pull_partial_encryption(env_config)
                 protected_any = protected_any or protected
                 if was_decrypted:
-                    console.print(
-                        styled_text("  [green]✓[/green] Decrypted {}", env_config.secret_file)
-                    )
+                    _print_line("  [green]✓[/green] Decrypted {}", env_config.secret_file)
                     decrypted_count += 1
                 else:
-                    console.print(
-                        styled_text(
-                            "  [dim]=[/dim] {} [dim](already decrypted)[/dim]",
-                            env_config.secret_file,
-                        )
+                    _print_line(
+                        "  [dim]=[/dim] {} [dim](already decrypted)[/dim]", env_config.secret_file
                     )
                     skipped_count += 1
 
         except PartialEncryptionError as e:
-            console.print(styled_text("  [red]✗[/red] {}", e))
+            _print_line("  [red]✗[/red] {}", e)
             errors.append(f"{env_config.name}: {e}")
         except Exception as e:
-            console.print(styled_text("  [red]✗[/red] Unexpected error: {}", e))
+            _print_line("  [red]✗[/red] Unexpected error: {}", e)
             errors.append(f"{env_config.name}: {e}")
 
     # Summary

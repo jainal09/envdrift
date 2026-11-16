@@ -155,17 +155,21 @@ def test_verify_vault_header_names_the_secret_as_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The header raised MarkupError before anything was checked."""
+    from envdrift.integrations.dotenvx import DotenvxWrapper
+
     env_file = tmp_path / ".env.production"
     env_file.write_text("API_TOKEN=value\n", encoding="utf-8")
     _use_vault(monkeypatch, {"kv/app[/x]": "DOTENV_PRIVATE_KEY_PRODUCTION=" + "a" * 64})
+    # Without dotenvx the check stops after the header, wherever the test runs.
+    monkeypatch.setattr(DotenvxWrapper, "is_installed", lambda _self: False)
 
     result = _invoke(
         "decrypt", str(env_file), "--verify-vault", "-p", "aws", "--secret", "kv/app[/x]"
     )
 
-    assert result.exception is None or isinstance(result.exception, SystemExit), repr(
-        result.exception
-    )
+    assert result.exit_code == 1, result.output
+    assert "dotenvx is not installed - cannot verify decryption" in _flat(result.output)
+    assert isinstance(result.exception, SystemExit), repr(result.exception)
     assert "Provider: aws | Secret: kv/app[/x]" in _flat(result.output)
 
 
