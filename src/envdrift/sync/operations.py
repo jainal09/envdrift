@@ -436,10 +436,16 @@ def create_new_file(path: Path, content: str, permissions: int = 0o600) -> None:
 def _write_new_file(path: Path, data: bytes, permissions: int) -> None:
     """Create ``path`` with ``O_EXCL`` and write ``data`` to it in place.
 
-    A write that fails removes the file it created, so no part of ``data`` is left.
+    The new file is still empty right before the write, or another writer wrote
+    into it since it was created: that file is left as it is, and
+    ``FileExistsError`` is raised. A write that fails removes the file it
+    created, so no part of ``data`` is left.
     """
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     fd = os.open(path, flags, permissions)
+    if os.fstat(fd).st_size:
+        os.close(fd)
+        raise FileExistsError(f"{path} was written by another writer as envdrift created it")
     try:
         _write_fd(fd, data, permissions)
     except BaseException:

@@ -219,6 +219,34 @@ def test_write_key_creates_a_file_where_there_are_no_hard_links(
     assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]
 
 
+def test_write_key_keeps_a_key_written_into_its_new_file_without_hard_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another writer writes into the file envdrift just created, before envdrift writes it.
+
+    Without hard links the file is created empty first. What the other writer
+    put there is kept, not overwritten.
+    """
+    keys_path = tmp_path / ".env.keys"
+    theirs = "DOTENV_PRIVATE_KEY_PRODUCTION=theirs\n"
+    real_open = os.open
+
+    def other_writer_after_the_creation(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if Path(path) == keys_path:
+            keys_path.write_text(theirs, encoding="utf-8")
+        return fd
+
+    monkeypatch.setattr(os, "link", _no_hard_links)
+    monkeypatch.setattr(os, "open", other_writer_after_the_creation)
+
+    with pytest.raises(ValueError, match="changed while envdrift was working on it"):
+        EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=[])
+
+    assert keys_path.read_text(encoding="utf-8") == theirs
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]
+
+
 def test_write_key_leaves_no_part_of_a_key_it_failed_to_write_without_hard_links(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
