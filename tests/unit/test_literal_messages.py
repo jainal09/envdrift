@@ -98,8 +98,14 @@ def test_guard_error_names_a_backslash_path_as_written(tmp_path: Path) -> None:
 
 
 @pytest.fixture
-def bracketed_folder(tmp_path: Path) -> Path:
-    folder = tmp_path / "cfg[" / "x]"
+def bracketed_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The folder ``cfg[/x]``, relative to the cwd, so a report line stays one line.
+
+    An absolute path under a long temp directory wraps a line that holds two of
+    them, and the phrase the test looks for is split.
+    """
+    monkeypatch.chdir(tmp_path)
+    folder = Path("cfg[") / "x]"
     folder.mkdir(parents=True)
     return folder
 
