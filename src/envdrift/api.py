@@ -39,9 +39,10 @@ def validate(
 
     env_file = Path(env_file)
 
-    # Parse env file
+    # Parse env file. lenient=True like the validate CLI, so a key the strict
+    # pattern rejects (``2FA_ENABLED``, ``X-API-KEY``) is validated, not dropped (#954).
     parser = EnvParser()
-    env = parser.parse(env_file)
+    env = parser.parse(env_file, lenient=True)
 
     # Load schema
     loader = SchemaLoader()
@@ -79,10 +80,20 @@ def diff(
     env1 = Path(env1)
     env2 = Path(env2)
 
-    # Parse env files
+    # Parse env files leniently, like the diff CLI, so every key python-dotenv
+    # loads is compared, and name the lines nothing could read (#954).
     parser = EnvParser()
-    env_file1 = parser.parse(env1)
-    env_file2 = parser.parse(env2)
+    env_file1 = parser.parse(env1, lenient=True)
+    env_file2 = parser.parse(env2, lenient=True)
+    for env_file in (env_file1, env_file2):
+        if env_file.unparsed_lines:
+            line_numbers = ", ".join(str(line) for line in env_file.unparsed_lines)
+            warnings.warn(
+                f"Could not parse non-comment content in .env file {env_file.path} on "
+                f"line(s) {line_numbers}; the diff ignores those lines",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # Load schema if provided
     schema_meta = None

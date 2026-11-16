@@ -38,6 +38,10 @@ else:
 
 **Returns:** `ValidationResult`
 
+The file is read like `envdrift validate` reads it: a key python-dotenv loads but that
+is not a Python identifier (`2FA_ENABLED`, `X-API-KEY`) is validated against the field
+that aliases it, not dropped.
+
 ### diff
 
 Compare two .env files.
@@ -76,6 +80,10 @@ if result.has_drift:
 | `mask_values` | `bool`                | Mask sensitive values                | `True`   |
 
 **Returns:** `DiffResult`
+
+Like `envdrift diff`, it compares every key python-dotenv loads, `2FA_ENABLED` and
+`X-API-KEY` included. Non-comment content that cannot be parsed is left out of the
+comparison with a `UserWarning` naming the file and line numbers.
 
 ### init
 

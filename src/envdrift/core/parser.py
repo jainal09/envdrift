@@ -315,7 +315,9 @@ class EnvParser:
     # (#486/#537).
     UNQUOTED_COMMENT_PATTERN = re.compile(r"\s+#.*")
 
-    def parse(self, path: Path | str, *, lenient: bool = False) -> EnvFile:
+    def parse(
+        self, path: Path | str, *, lenient: bool = False, interpolate: bool = True
+    ) -> EnvFile:
         """
         Parse a .env file and produce an EnvFile representing its parsed contents.
 
@@ -324,6 +326,8 @@ class EnvParser:
             lenient (bool): When True, also recover keys the strict pattern
                 rejects (non-identifier / non-ASCII), so the parsed variable set
                 matches every assignment in the file.
+            interpolate (bool): When False, keep ``${VAR}`` references as the
+                text the file holds instead of expanding them (``diff --strict``).
 
         Returns:
             EnvFile: Parsed file containing variables and comments.
@@ -352,12 +356,14 @@ class EnvParser:
             raise ValueError(
                 f"Could not read {path} as UTF-8 text (not a valid .env file)"
             ) from exc
-        env_file = self.parse_string(content, lenient=lenient)
+        env_file = self.parse_string(content, lenient=lenient, interpolate=interpolate)
         env_file.path = path
 
         return env_file
 
-    def parse_string(self, content: str, *, lenient: bool = False) -> EnvFile:
+    def parse_string(
+        self, content: str, *, lenient: bool = False, interpolate: bool = True
+    ) -> EnvFile:
         """
         Parse .env formatted text, extracting variables (with detected encryption status) and comments.
 
@@ -365,6 +371,8 @@ class EnvParser:
             content (str): The complete text content of a .env file to parse.
             lenient (bool): When True, accept non-identifier / non-ASCII keys too
                 (see ``LENIENT_LINE_PATTERN``).
+            interpolate (bool): When False, keep ``${VAR}`` references unexpanded
+                (see ``parse``).
 
         Returns:
             EnvFile: An EnvFile populated with parsed EnvVar entries keyed by variable name and a list of comment lines.
@@ -437,7 +445,8 @@ class EnvParser:
             # ${VAR} interpolation (#486): expand exactly like dotenv_values —
             # the loader pydantic-settings uses — so validate/diff judge the
             # value the application receives, not the unexpanded literal.
-            if "${" in value:
+            # `diff --strict` compares the raw text instead (#954).
+            if interpolate and "${" in value:
                 value = self._interpolate(value, env_file.variables, bare_keys)
             bare_keys.discard(key)
 
