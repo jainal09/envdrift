@@ -28,6 +28,7 @@ from envdrift.scanner.base import (
     AggregatedScanResult,
     FindingSeverity,
     ScanFinding,
+    ScanResult,
 )
 from envdrift.utils.git import get_git_root
 from envdrift.utils.text import strip_ansi, styled_text
@@ -249,6 +250,28 @@ def _print_scanner_notices(result: AggregatedScanResult, console: Console) -> No
             console.print()
 
 
+def _print_scanner_errors(result: AggregatedScanResult, console: Console) -> list[ScanResult]:
+    """Print the Scanner Errors panel, and return the scanners that failed.
+
+    Filter on the ScanResult.success contract (error is not None), not truthiness,
+    so an empty-string failure still lands in the panel and matches the Scan
+    Incomplete verdict (#478). A message often names a path or quotes a tool, so
+    it is printed as it is.
+    """
+    errors = [r for r in result.results if not r.success]
+    if not errors:
+        return errors
+    error_lines: list[Text] = []
+    for r in errors:
+        msg = strip_ansi(r.error or "").strip()
+        if len(msg) > 200:
+            msg = f"{msg[:200]}…"
+        error_lines.append(styled_text("[red]{}[/red]: {}", r.scanner_name, msg))
+    console.print(Panel(Text("\n").join(error_lines), title="Scanner Errors", border_style="red"))
+    console.print()
+    return errors
+
+
 def format_rich(result: AggregatedScanResult, console: Console | None = None) -> None:
     """Format and print results using Rich for terminal output.
 
@@ -261,27 +284,7 @@ def format_rich(result: AggregatedScanResult, console: Console | None = None) ->
         console = Console(emoji=False)
 
     _print_scanner_notices(result, console)
-
-    # Surface scanner errors prominently. Filter on the ScanResult.success
-    # contract (error is not None), not truthiness, so an empty-string failure
-    # still lands in the panel and matches the Scan Incomplete verdict (#478).
-    errors = [r for r in result.results if not r.success]
-    if errors:
-        error_lines: list[Text] = []
-        for r in errors:
-            msg = strip_ansi(r.error or "").strip()
-            if len(msg) > 200:
-                msg = f"{msg[:200]}…"
-            # The message often names a path or quotes a tool: print it as it is.
-            error_lines.append(styled_text("[red]{}[/red]: {}", r.scanner_name, msg))
-        console.print(
-            Panel(
-                Text("\n").join(error_lines),
-                title="Scanner Errors",
-                border_style="red",
-            )
-        )
-        console.print()
+    errors = _print_scanner_errors(result, console)
 
     if not result.unique_findings:
         if errors:

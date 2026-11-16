@@ -126,7 +126,8 @@ def test_a_base_shaped_like_a_fetch_option_runs_no_command(repo: Path, prefix: s
     hint must not suggest a fetch that runs it either.
     """
     marker = repo / "marker"
-    option = f"--upload-pack=touch {marker.as_posix()};"
+    # Relative to the repository git runs in, so a temp path with a space cannot hide it.
+    option = "--upload-pack=touch marker;"
 
     result = runner.invoke(
         app, ["guard", "--native-only", f"--pr-base={prefix}{option}"], env={"COLUMNS": "200"}

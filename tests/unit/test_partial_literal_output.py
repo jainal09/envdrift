@@ -9,6 +9,7 @@ with ``MarkupError``, and the link dotenvx ends a failure with
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from typer.testing import CliRunner
 
 from envdrift.cli import app
 from envdrift.core.partial_encryption import PartialEncryptionError
+
+pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git binary not available")
 
 runner = CliRunner()
 

@@ -833,6 +833,7 @@ def test_guard_pr_base_unresolvable_ref_errors(tmp_path: Path, monkeypatch):
     config = EnvdriftConfig()
     _patch_guard_dependencies(monkeypatch, config, _build_result([]))
     identity = ["-c", "user.name=envdrift", "-c", "user.email=envdrift@example.invalid"]
+    identity += ["-c", "commit.gpgsign=false"]
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(
         ["git", *identity, "commit", "-q", "--allow-empty", "-m", "base"],
