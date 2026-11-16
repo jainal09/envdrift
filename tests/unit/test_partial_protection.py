@@ -95,6 +95,15 @@ class TestUnprotectedReason:
 
         assert _reason(Path("c/[p]/x.env")) == "untracked"
 
+    def test_a_literal_pathspecs_environment_does_not_call_a_tracked_file_untracked(
+        self, repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Under GIT_LITERAL_PATHSPECS, ":(literal)tracked.env" named a file called so (#1016).
+        monkeypatch.setenv("GIT_LITERAL_PATHSPECS", "1")
+        (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
+
+        assert _reason(Path("tracked.env")) == "skip-worktree failed"
+
     def test_git_not_installed(self, tmp_path: Path) -> None:
         with patch(
             "envdrift.core.partial_encryption.subprocess.run",

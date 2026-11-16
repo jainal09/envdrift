@@ -10,12 +10,15 @@ gitleaks reports them from ``git log -p``; the engine's filters run for real.
 from __future__ import annotations
 
 import subprocess  # nosec B404
+import sys
 from pathlib import Path
 
 import pytest
 
+from envdrift.scanner import history_files
 from envdrift.scanner.base import FindingSeverity, ScanFinding, ScannerBackend, ScanResult
 from envdrift.scanner.engine import GuardConfig, ScanEngine
+from envdrift.scanner.history_files import CommittedFiles
 
 _KEY = "AKIA" + "IOSFODNN7" + "EXAMPLX"
 _CIPHERTEXT = "encrypted:BEj2" + "Zq9yKxw0Lr3VtP8sN1mD5cH7aG4fU6eB2oI9kJ3lQ0wR5tY8uA1sD4fG7hJ0kL3z"
@@ -118,7 +121,8 @@ def test_a_history_finding_with_a_commit_that_is_not_an_id_is_kept(repo: Path):
     _commit(repo, ".env.production", f'SETTING_2="{_CIPHERTEXT}"')
 
     assert _reported(repo, [_finding(repo, "--output=x")]) == ["--output=x"]
-    assert not (repo / "x").exists()
+    # As an option, git would have written its output to "x:.env.production".
+    assert {path.name for path in repo.iterdir()} == {".git", ".env.production"}
 
 
 def test_without_history_a_finding_is_judged_by_todays_file(repo: Path):
@@ -157,3 +161,35 @@ def test_skip_gitignored_keeps_a_secret_committed_before_its_file_was_ignored(re
     )
 
     assert reported == [committed]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a symbolic link needs a privilege on Windows")
+def test_a_symlink_made_later_does_not_choose_the_file_a_history_finding_is_judged_by(
+    repo: Path,
+):
+    """``.env.production`` is read as the commit held it, though it links elsewhere today.
+
+    The committed file was found through today's symbolic link: the commit's ``decoy.env``,
+    whose line 2 is encrypted, was read in place of the plaintext ``.env.production``.
+    """
+    _commit(repo, "decoy.env", f'SETTING_2="{_CIPHERTEXT}"')
+    plaintext = _commit(repo, ".env.production", f"AWS_ACCESS_KEY_ID={_KEY}")
+    (repo / ".env.production").unlink()
+    (repo / ".env.production").symlink_to("decoy.env")
+
+    assert _reported(repo, [_finding(repo, plaintext)]) == [plaintext]
+
+
+def test_only_the_last_files_read_are_kept_in_memory(repo: Path):
+    """A history scan's findings in many revisions of large files do not all stay in memory."""
+    commits = [
+        _commit(repo, ".env.production", f"SETTING_2=value{n}")
+        for n in range(history_files._CACHED_FILES + 3)
+    ]
+    committed = CommittedFiles(history=True)
+
+    for number, commit in enumerate(commits):
+        assert committed.line(repo / ".env.production", commit, 2) == f"SETTING_2=value{number}"
+
+    assert committed._lines_of.cache_info().currsize <= history_files._CACHED_FILES
+    assert committed._text_of.cache_info().currsize <= history_files._CACHED_FILES

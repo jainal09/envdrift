@@ -27,7 +27,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import pytest
 
@@ -333,7 +333,9 @@ def test_an_untracked_key_is_not_called_committed_because_its_name_is_a_glob(
 
     payload = _guard_json(result)
     committed = {
-        f["file_path"] for f in payload["findings"] if f["rule_id"] == "committed-private-key"
+        PurePath(f["file_path"]).as_posix()
+        for f in payload["findings"]
+        if f["rule_id"] == "committed-private-key"
     }
     assert committed == {"a/.env.keys"}, payload["findings"]
 

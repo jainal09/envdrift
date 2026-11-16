@@ -195,7 +195,7 @@ def _materialize_staged_index(
     edited away (or deleted) in the working tree would otherwise pass with exit
     0 while the commit still ships it (#476). Each repo-root-relative staged
     path (the form ``git diff --cached --name-only`` emits) is read with ``git
-    show :<path>`` and written under the mirror with the same relative layout,
+    show :0:<path>`` and written under the mirror with the same relative layout,
     so filename/suffix rules keep matching. Path-pattern ignores match the
     staged file itself: the scan engine is told the mirror copies the
     repository (#859).
@@ -427,7 +427,7 @@ def _collect_staged_targets(
         # ``-z`` + a binary pipe: git prints staged paths NUL-terminated and
         # verbatim (no ``core.quotepath`` C-quoting of spaces/non-ASCII), and
         # ``os.fsdecode`` round-trips the raw filesystem bytes so the decoded
-        # path still resolves under ``git show :<path>``. A text pipe with
+        # path still resolves under ``git show :0:<path>``. A text pipe with
         # ``split("\n")`` mis-parsed any name git would quote (spaces, quotes,
         # non-ASCII) — the same class #531 fixed for check-ignore.
         result = subprocess.run(  # nosec B603, B607

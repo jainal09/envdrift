@@ -1454,6 +1454,25 @@ class TestPrivateKeyFileScanResult:
         assert "git could not tell whether it tracks" in result.error
         assert ".env.keys" in result.error
 
+    def test_a_key_file_below_a_repository_git_cannot_use_fails_the_scan(
+        self, scanner: NativeScanner, tmp_path: Path
+    ):
+        """A ``.git`` git cannot use is not "outside a repository" (#1016).
+
+        With ``HEAD`` unreadable, git says there is no repository, and the committed key
+        passed the scan as clean.
+        """
+        git = self._git_repo(tmp_path)
+        (tmp_path / ".env.keys").write_text(self._KEY_CONTENT)
+        git("add", "-f", ".env.keys")
+        git("commit", "-m", "oops")
+        (tmp_path / ".git" / "HEAD").write_text("not a ref\n")
+
+        result = scanner.scan([tmp_path])
+
+        assert result.error is not None, result.findings
+        assert "though a .git is above it" in result.error
+
     @pytest.mark.parametrize(
         ("variable", "path"), [("GIT_DIR", ".git"), ("GIT_INDEX_FILE", ".git/index")]
     )

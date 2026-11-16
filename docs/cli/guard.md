@@ -849,10 +849,11 @@ nothing. So is no report at all after a successful run, except from
 detect-secrets, which always prints one.
 
 The native scanner fails the same way when git cannot say whether a `.env.keys` it found is
-tracked, for example because git failed, timed out or could not read the index. The key may be
-committed, so the run is not reported clean. envdrift asks git about each file by its exact
-name, so a folder called `-svc`, `:sec` or `[ab]` is never read as an option, pathspec magic or
-a glob, and the answer is always for the file that was found.
+tracked. That happens when git fails, times out or cannot read the index, and also when a `.git`
+is above the file but git finds no repository there. The key may be committed, so the run is
+not reported clean. envdrift asks git about each file by its exact name, so a folder called
+`-svc`, `:sec` or `[ab]` is never read as an option, pathspec magic or a glob, whatever the
+`GIT_*_PATHSPECS` variables say, and the answer is always for the file that was found.
 
 The native scanner fails too when git cannot list some of the files in a
 directory it scans: the untracked files, or the ignored `.env` files it always

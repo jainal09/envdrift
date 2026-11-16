@@ -1647,8 +1647,11 @@ class TestCombinedFilesSecurity:
         ``git check-ignore --stdin`` reads each path as a pathspec, so a leading ``:`` was
         magic: the warning followed whether git ignores ``sec/``, not the file's own folder.
         """
+        import shutil
         import subprocess
 
+        if shutil.which("git") is None:
+            pytest.skip("git is not available")
         subprocess.run(["git", "init", "-q"], cwd=tmp_path, capture_output=True, check=True)
         (tmp_path / ".gitignore").write_text(ignore)
         monkeypatch.chdir(tmp_path)

@@ -195,12 +195,47 @@ class TestIsFileTracked:
 
     def test_git_tracks_raises_when_git_does_not_answer(self, tmp_path: Path):
         """A timeout is not "not tracked" either (#1016)."""
+        timeout = subprocess.TimeoutExpired(cmd="git", timeout=10)
         with (
             patch("envdrift.utils.git.get_git_root", return_value=tmp_path),
-            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)),
+            patch("envdrift.utils.git.run_tool", side_effect=timeout),
             pytest.raises(GitError, match="git could not tell whether it tracks"),
         ):
             git_tracks(tmp_path / "test.txt")
+
+    def test_git_tracks_raises_when_git_cannot_use_the_repository_above(self, tmp_path: Path):
+        """A ``.git`` git cannot use is not "outside a repository" (#1016).
+
+        get_git_root gives None both outside a repository and when git fails, as it does
+        here, where ``HEAD`` is unreadable: that read as "not tracked".
+        """
+        repo = _repo_with(tmp_path, {".env.keys": "K=1\n"})
+        (repo / ".git" / "HEAD").write_text("not a ref\n")
+
+        with pytest.raises(GitError, match="git could not tell whether it tracks"):
+            git_tracks(repo / ".env.keys")
+        assert is_file_tracked(repo / ".env.keys") is False
+
+    def test_a_literal_pathspecs_environment_does_not_change_the_answers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Under GIT_LITERAL_PATHSPECS ``:(literal)x`` named a file called so (#1016).
+
+        The tracked key read as untracked, its change as none, and its restore failed.
+        """
+        repo = _repo_with(tmp_path, {".env.keys": "K=1\n"})
+        monkeypatch.setenv("GIT_LITERAL_PATHSPECS", "1")
+
+        assert git_tracks(repo / ".env.keys") is True
+        (repo / ".env.keys").write_text("K=2\n")
+        assert is_file_modified(repo / ".env.keys") is True
+        assert restore_file_from_git(repo / ".env.keys") is True
+        assert (repo / ".env.keys").read_text() == "K=1\n"
+
+    def test_git_tracks_says_a_file_outside_any_repository_is_not_tracked(self, tmp_path: Path):
+        (tmp_path / ".env.keys").write_text("K=1\n")
+
+        assert git_tracks(tmp_path / ".env.keys") is False
 
     def test_a_file_outside_the_repository_root_is_not_tracked(self, tmp_path: Path):
         """A file that resolves outside the root git reports is not one it tracks."""
@@ -557,7 +592,10 @@ class TestGitUtilsExceptions:
         """Should return False on exceptions."""
         with (
             patch("envdrift.utils.git.get_git_root", return_value=tmp_path),
-            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)),
+            patch(
+                "envdrift.utils.git.run_tool",
+                side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10),
+            ),
         ):
             assert is_file_tracked(tmp_path / "test.txt") is False
 

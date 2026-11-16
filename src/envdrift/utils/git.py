@@ -74,6 +74,24 @@ def without_git_location(environ: Mapping[str, str] | None = None) -> dict[str, 
     return {key: value for key, value in source.items() if key not in _REPOSITORY_VARIABLES}
 
 
+# Variables that change how git reads a pathspec. Under GIT_LITERAL_PATHSPECS ``:(literal)x``
+# names a file called so, and the tracked ``x`` was "not tracked"; GIT_ICASE_PATHSPECS matches
+# a name in another case.
+_PATHSPEC_VARIABLES = frozenset(
+    {"GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"}
+)
+
+
+def literal_pathspec_env(env: Mapping[str, str] | None) -> dict[str, str]:
+    """``env`` (this process's when None) for a git run that names a file by a literal pathspec.
+
+    Without the variables that change how git reads a pathspec, ``:(literal)<path>`` names
+    that one file whatever the environment says (#1016).
+    """
+    source = os.environ if env is None else env
+    return {key: value for key, value in source.items() if key not in _PATHSPEC_VARIABLES}
+
+
 def _hook_env(git_root: Path) -> dict[str, str] | None:
     """The environment for a git run in ``git_root`` that reads or writes its index.
 
@@ -363,6 +381,43 @@ def get_file_from_git(file_path: Path, ref: str = "HEAD") -> str | None:
         return None
 
 
+def _git_entry_above(path: Path) -> Path | None:
+    """The nearest ``.git`` (a repository, or the file naming one) above ``path``, or None."""
+    start = (path if path.is_dir() else path.parent).resolve()
+    for folder in (start, *start.parents):
+        if (folder / ".git").exists():
+            return folder / ".git"
+    return None
+
+
+def file_at_commit(file_path: Path, commit: str) -> str | None:
+    """The text of ``file_path`` as ``commit`` holds it; None when git cannot show it.
+
+    The file is named by its path in the repository: a symbolic link there today is not
+    followed, as the commit may hold a file at that path, or another link (#1014). Its folder
+    is resolved, as git names the repository by its real path.
+    """
+    folder = file_path.parent.resolve()
+    git_root = get_git_root(folder)
+    if not git_root:
+        return None
+    try:
+        relative_path = (folder / file_path.name).relative_to(git_root)
+        result = run_tool(
+            ["git", "show", f"{commit}:{relative_path.as_posix()}"],
+            cwd=str(git_root),
+            env=_hook_env(git_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
 def _literal_pathspec(relative_path: Path) -> str:
     """``relative_path`` as a pathspec that names that one file and nothing else.
 
@@ -395,7 +450,7 @@ def is_file_modified(file_path: Path) -> bool:
         result = run_tool(
             ["git", "status", "--porcelain", "--", _literal_pathspec(relative_path)],
             cwd=str(git_root),
-            env=_hook_env(git_root),
+            env=literal_pathspec_env(_hook_env(git_root)),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -433,7 +488,7 @@ def restore_file_from_git(file_path: Path, ref: str = "HEAD") -> bool:
         result = run_tool(
             ["git", "checkout", ref, "--", _literal_pathspec(relative_path)],
             cwd=str(git_root),
-            env=_hook_env(git_root),
+            env=literal_pathspec_env(_hook_env(git_root)),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -471,13 +526,19 @@ def git_tracks(file_path: Path, *, env: Mapping[str, str] | None = None) -> bool
     """Whether git tracks ``file_path``, as ``is_file_tracked`` says, or raise when it cannot tell.
 
     A file outside any repository is not tracked. git failing, timing out or not running at all
-    is not an answer, so it is not read as "not tracked" (#1016).
+    is not an answer, so it is not read as "not tracked" (#1016): neither for the file, nor for
+    the repository a ``.git`` above it names, which get_git_root cannot tell from none.
 
     Raises:
         GitError: git could not tell whether it tracks the file.
     """
     git_root = get_git_root(file_path)
     if not git_root:
+        if _git_entry_above(file_path) is not None:
+            raise GitError(
+                f"git could not tell whether it tracks {file_path}: it found no repository "
+                "there, though a .git is above it"
+            )
         return False
 
     try:
@@ -489,7 +550,7 @@ def git_tracks(file_path: Path, *, env: Mapping[str, str] | None = None) -> bool
         result = run_tool(
             ["git", "ls-files", "--error-unmatch", "--", _literal_pathspec(relative_path)],
             cwd=str(git_root),
-            env=_hook_env(git_root) if env is None else env,
+            env=literal_pathspec_env(_hook_env(git_root) if env is None else env),
             capture_output=True,
             text=True,
             encoding="utf-8",
