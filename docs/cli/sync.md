@@ -85,6 +85,9 @@ Exits with code 1 when any mapping errors (a mismatch, a missing local key, or a
 without needing `--ci`. A mapping whose folder has no env file yet is only skipped after confirming its configured secret exists in the vault — a
 deleted vault secret is an error, not a skip.
 
+Every value `.env.keys` holds under the key name is compared with the vault, because dotenvx loads them all: a second line holding another key is a
+mismatch even when the first line matches the vault.
+
 ### `--force`, `-f`
 
 Force update all mismatches without prompting.
@@ -106,13 +109,20 @@ success.
 After syncing, verify that the keys can decrypt `.env` files.
 
 This tests actual decryption using dotenvx to ensure keys are valid. The check
-is **non-destructive**: the encrypted file and the synced keys file are copied
-into a throwaway temp directory and dotenvx decrypts the copy there, so the
-working-tree file is never decrypted or rewritten (its bytes are identical
-before and after, whether the check passes or fails). Stray
-`DOTENV_PRIVATE_KEY*` variables in your shell are ignored so the verdict
-reflects the synced `.env.keys`, and mappings with relative `folder_path`
-values (the usual monorepo layout) verify correctly from the project root.
+is **non-destructive**: the encrypted file is copied into a throwaway temp
+directory and dotenvx decrypts the copy there, so the working-tree file is never
+decrypted or rewritten (its bytes are identical before and after, whether the
+check passes or fails). dotenvx decrypts with any key it is given, whatever its
+name, so the copy gets a keys file holding only the key sync compared with the
+vault: the first `DOTENV_PRIVATE_KEY_<ENV>` value of the mapping's keys file. A
+second, locally created key in `.env.keys` cannot make the check pass. dotenvx
+reads a value such as `a,b` as a key ring of two keys, so a first value that
+holds two different keys fails the check instead of passing through either. The
+key is staged as the hex digits dotenvx reads from the value, so the next line of
+a quoted value never becomes a second key in the copy's keys file. Stray
+`DOTENV_PRIVATE_KEY*` variables in your shell are ignored too, and mappings with
+relative `folder_path` values (the usual monorepo layout) verify correctly from
+the project root.
 
 If any decryption test fails, `sync` exits 1 — with or without `--ci`. The
 check also refuses to run when dotenvx is not installed: skipping every test
@@ -368,7 +378,13 @@ missing, verify reports an error instead of a skip:
 
 ### Force Mode (`--force`)
 
-Updates all mismatches without prompting. Creates backups before updating.
+Updates all mismatches without prompting. Creates backups before updating. A backup holds the same private keys as `.env.keys`, so envdrift makes
+sure git ignores it (it adds `<folder>/<keys file>.backup.*`, for example `services/myapp/.env.keys.backup.*`, to `.gitignore` when no existing rule
+covers it) before writing it. If a `.gitignore` rule such as `!*.backup.*` would still let git track it, no backup is written and the key is not
+updated. A key whose quoted value spans several lines is replaced with all of its lines. A key written as `DOTENV_PRIVATE_KEY_<ENV>:` with the key
+on the next line cannot be rewritten in place, and neither can one whose rewrite would change how dotenvx reads another line: that service is
+reported as an error with its keys file unchanged. So is a vault key that dotenvx would read back as another value, such as one holding `#` (no
+backup is made for it), and a key that another process changed after sync read it (the error names the backup, which is kept).
 
 ```text
   ~ services/myapp (myapp-key, env: production) - updated

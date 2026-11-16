@@ -1164,3 +1164,279 @@ class TestVaultPullNotFoundNamesRegion:
         out = " ".join(result.output.split())
         assert "not found in aws vault" in out, out
         assert "(region eu-west-1)" in out, out
+
+
+class TestVaultPullNeverDropsADifferentLocalKey:
+    """#939: a different local key is refused, or backed up first with --force.
+
+    The vault client is mocked only as a value source; the behavior under test
+    is the CLI's handling of real ``.env.keys`` files in ``tmp_path``.
+    """
+
+    VAULT_KEY = "a" * 32 + "b" * 32
+    LOCAL_KEY = "c" * 32 + "d" * 32
+
+    def _args(self, folder, *extra):
+        return [
+            "vault-pull",
+            str(folder),
+            "my-secret",
+            "--env",
+            "production",
+            "--no-decrypt",
+            "-p",
+            "azure",
+            "--vault-url",
+            "https://myvault.vault.azure.net/",
+            *extra,
+        ]
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_refuses_a_different_local_key_and_changes_nothing(self, mock_get_client, tmp_path):
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={self.LOCAL_KEY}\n", encoding="utf-8")
+        before = keys.read_bytes()
+
+        result = runner.invoke(app, self._args(tmp_path))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "already holds a different DOTENV_PRIVATE_KEY_PRODUCTION" in out
+        assert "Nothing was changed" in out
+        assert "--force" in out
+        assert keys.read_bytes() == before
+        assert sorted(p.name for p in tmp_path.iterdir()) == [".env.keys"]
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_compares_every_held_value_not_just_the_first(self, mock_get_client, tmp_path):
+        """B1: write_key rewrites every line, so a second, different key must refuse."""
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}\n"
+            f"export DOTENV_PRIVATE_KEY_PRODUCTION = {self.LOCAL_KEY}\n",
+            encoding="utf-8",
+        )
+        before = keys.read_bytes()
+
+        result = runner.invoke(app, self._args(tmp_path))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "already holds a different DOTENV_PRIVATE_KEY_PRODUCTION" in out
+        assert keys.read_bytes() == before
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_force_backs_up_then_replaces(self, mock_get_client, tmp_path):
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        original = f"# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION={self.LOCAL_KEY}\n"
+        keys.write_text(original, encoding="utf-8")
+
+        result = runner.invoke(app, self._args(tmp_path, "--force"))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0, out
+        assert "backup:" in out
+        backups = list(tmp_path.glob(".env.keys.backup.*"))
+        assert len(backups) == 1
+        assert backups[0].read_text(encoding="utf-8") == original
+        content = keys.read_text(encoding="utf-8")
+        assert f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}" in content
+        assert self.LOCAL_KEY not in content
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_force_refuses_a_layout_it_cannot_rewrite(self, mock_get_client, tmp_path):
+        """dotenvx loads ``KEY:`` + newline + key: --force must not add a second key."""
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(
+            f"# .env.production\nDOTENV_PRIVATE_KEY_PRODUCTION:\n{self.LOCAL_KEY}\n",
+            encoding="utf-8",
+        )
+        before = keys.read_bytes()
+
+        result = runner.invoke(app, self._args(tmp_path, "--force"))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "cannot rewrite" in out
+        assert "Nothing was changed" in out
+        assert keys.read_bytes() == before
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_a_key_written_after_the_check_is_not_replaced(
+        self, mock_get_client, tmp_path, monkeypatch
+    ):
+        """Another writer adds a key after vault-pull read none: it is kept, not replaced."""
+        from envdrift.cli_commands import vault_keys
+
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        theirs = f"DOTENV_PRIVATE_KEY_PRODUCTION={self.LOCAL_KEY}\n"
+        read_held = vault_keys._held_pull_values
+
+        def read_then_another_writer(env_keys_path, key_name):
+            held = read_held(env_keys_path, key_name)
+            keys.write_text(theirs, encoding="utf-8")
+            return held
+
+        monkeypatch.setattr(vault_keys, "_held_pull_values", read_then_another_writer)
+
+        result = runner.invoke(app, self._args(tmp_path))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "changed while envdrift was working on it" in out
+        assert keys.read_text(encoding="utf-8") == theirs
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_force_makes_no_backup_for_a_key_it_would_not_write(self, mock_get_client, tmp_path):
+        """A vault key dotenvx would read back as another value is refused before any backup."""
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}#tail"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={self.LOCAL_KEY}\n", encoding="utf-8")
+        before = keys.read_bytes()
+
+        result = runner.invoke(app, self._args(tmp_path, "--force"))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "would not read" in out
+        assert keys.read_bytes() == before
+        assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_a_refused_write_after_the_backup_keeps_it(
+        self, mock_get_client, tmp_path, monkeypatch
+    ):
+        """Another writer changes the key while --force backs it up: the backup is kept."""
+        from envdrift.cli_commands import vault_keys
+
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={self.LOCAL_KEY}\n", encoding="utf-8")
+        theirs = "DOTENV_PRIVATE_KEY_PRODUCTION=theirs\n"
+        back_up = vault_keys._backup_pull_keys
+
+        def back_up_then_another_writer(env_keys_path):
+            backup = back_up(env_keys_path)
+            keys.write_text(theirs, encoding="utf-8")
+            return backup
+
+        monkeypatch.setattr(vault_keys, "_backup_pull_keys", back_up_then_another_writer)
+
+        result = runner.invoke(app, self._args(tmp_path, "--force"))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "was kept" in out
+        assert keys.read_text(encoding="utf-8") == theirs
+        backups = [path for path in tmp_path.iterdir() if ".backup." in path.name]
+        assert len(backups) == 1
+        assert self.LOCAL_KEY in backups[0].read_text(encoding="utf-8")
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_force_stops_when_the_backup_cannot_be_ignored(
+        self, mock_get_client, tmp_path, monkeypatch
+    ):
+        """N2: no backup git would track, and no replacement without a backup."""
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(f"DOTENV_PRIVATE_KEY_PRODUCTION={self.LOCAL_KEY}\n", encoding="utf-8")
+        before = keys.read_bytes()
+
+        def unwritable(*args, **kwargs):
+            raise PermissionError("read-only .gitignore")
+
+        monkeypatch.setattr("envdrift.utils.git.ensure_gitignore_glob", unwritable)
+
+        result = runner.invoke(app, self._args(tmp_path, "--force"))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 1, out
+        assert "Cannot back up" in out
+        assert keys.read_bytes() == before
+        assert not list(tmp_path.glob(".env.keys.backup.*"))
+
+    @patch("envdrift.vault.get_vault_client")
+    def test_a_matching_key_is_left_as_it_is(self, mock_get_client, tmp_path):
+        mock_get_client.return_value = _make_client(
+            f"DOTENV_PRIVATE_KEY_PRODUCTION={self.VAULT_KEY}"
+        )
+        keys = tmp_path / ".env.keys"
+        keys.write_text(
+            f'DOTENV_PRIVATE_KEY_PRODUCTION="{self.VAULT_KEY}" # vault\n', encoding="utf-8"
+        )
+        before = keys.read_bytes()
+
+        result = runner.invoke(app, self._args(tmp_path))
+
+        out = " ".join(result.output.split())
+        assert result.exit_code == 0, out
+        assert "already in" in out
+        assert keys.read_bytes() == before
+
+
+@patch("envdrift.cli_commands.encryption_helpers.resolve_encryption_backend")
+@patch("envdrift.vault.get_vault_client")
+def test_vault_pull_key_conflict_for_a_custom_env_file_is_a_clean_error(
+    mock_get_client, mock_resolve_backend, tmp_path
+):
+    """B3: a key conflict is a clean error saying the file is not decrypted (#938).
+
+    The canonical key the vault provides and the key dotenvx wrote for the
+    custom filename differ, so normalizing would overwrite one with the other.
+    """
+    vault_key = "a" * 32 + "b" * 32
+    local_key = "c" * 32 + "d" * 32
+    mock_get_client.return_value = _make_client(f"DOTENV_PRIVATE_KEY_PRODUCTION={vault_key}")
+    backend = DummyEncryptionBackend()
+    mock_resolve_backend.return_value = (backend, EncryptionProvider.DOTENVX, None)
+    (tmp_path / "postgresql.env").write_text("A=encrypted:abc\n", encoding="utf-8")
+    keys = tmp_path / ".env.keys"
+    keys.write_text(
+        f"# postgresql.env\nDOTENV_PRIVATE_KEY_POSTGRESQLDEVELOPMENT={local_key}\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "vault-pull",
+            str(tmp_path),
+            "my-secret",
+            "--env",
+            "production",
+            "--env-file",
+            "postgresql.env",
+            "-p",
+            "azure",
+            "--vault-url",
+            "https://myvault.vault.azure.net/",
+        ],
+    )
+
+    out = " ".join(result.output.split())
+    assert result.exit_code == 1, out
+    assert "Not decrypting" in out
+    assert "holds two different keys for postgresql.env" in out
+    assert backend.decrypt_calls == []
+    assert local_key in keys.read_text(encoding="utf-8")
