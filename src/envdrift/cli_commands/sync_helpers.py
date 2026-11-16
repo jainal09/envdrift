@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import typer
-from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from envdrift.env_files import resolve_mapping_env_file
 from envdrift.output.rich import console, print_error, print_success, print_warning
+from envdrift.utils.text import styled_text
 from envdrift.vault.base import SecretNotFoundError, VaultError
 
 from .sync_config_helpers import require_profile_mappings
@@ -161,15 +162,18 @@ def _new_sync_engine(
     from envdrift.sync.engine import SyncEngine, SyncMode
 
     def progress_callback(msg: str) -> None:
-        # Progress text embeds user-controlled names (folders, secrets);
-        # escape so brackets render literally instead of being parsed as
-        # Rich markup — or raising MarkupError on a stray closing tag.
-        console.print(f"[dim]{escape(msg)}[/dim]")
+        # Progress text embeds user-controlled names (folders, secrets):
+        # print it as Text so brackets render as they are instead of being
+        # parsed as Rich markup, or raising MarkupError on a closing tag.
+        console.print(Text(msg, style="dim"))
 
     def prompt_callback(msg: str) -> bool:
         if force:
             return True
-        response = console.input(f"{msg} (y/N): ").strip().lower()
+        # Text, not a markup string: Console.input parses a str prompt as markup
+        # and emoji codes whatever the console's defaults, and the message names
+        # the secret (``kv/app[legacy]/key`` lost its bracketed segment).
+        response = console.input(Text(f"{msg} (y/N): ")).strip().lower()
         return response in ("y", "yes")
 
     return SyncEngine(
@@ -190,7 +194,7 @@ def _print_pull_header(request: PullRequest, context: SyncCommandContext) -> Non
     action = (
         "Decrypting env files" if request.skip_sync else "Syncing keys and decrypting env files"
     )
-    console.print(f"[bold]Pull[/bold] - {action}{profile_info}")
+    console.print(styled_text("[bold]Pull[/bold] - {}{}", action, profile_info))
     console.print(
         f"[dim]Provider: {context.effective_provider} | Services: {len(context.mappings)}[/dim]"
     )
@@ -261,7 +265,8 @@ def _load_encryption_runtime(config_file: Path | None) -> _EncryptionRuntime:
         backend, provider, config = encryption_helpers.resolve_encryption_backend(config_file)
         if not backend.is_installed():
             print_error(f"{backend.name} is not installed")
-            console.print(backend.install_instructions())
+            # Literal: the instructions quote TOML such as `[encryption.sops]`.
+            console.print(Text(backend.install_instructions()))
             raise typer.Exit(code=1)
     except (ConfigNotFoundError, ConfigLoadError) as exc:
         print_error(str(exc))
@@ -278,7 +283,11 @@ def _resolve_pull_mapping_file(
     try:
         detection = resolve_mapping_env_file(mapping)
     except ValueError as exc:
-        console.print(f"  [red]![/red] {mapping.folder_path} [red]- invalid env_file: {exc}[/red]")
+        console.print(
+            styled_text(
+                "  [red]![/red] {} [red]- invalid env_file: {}[/red]", mapping.folder_path, exc
+            )
+        )
         context.state.errors += 1
         return None
 
@@ -295,19 +304,24 @@ def _record_missing_pull_mapping(
 ) -> None:
     if status == "folder_not_found":
         console.print(
-            f"  [red]![/red] {mapping.folder_path} "
-            f"[red]- error: folder does not exist or is not a directory "
-            f"(check folder_path in your sync config)[/red]"
+            styled_text(
+                "  [red]![/red] {} [red]- error: folder does not exist or is not a directory "
+                "(check folder_path in your sync config)[/red]",
+                mapping.folder_path,
+            )
         )
         state.errors += 1
     elif status == "multiple_found":
         console.print(
-            f"  [yellow]?[/yellow] {mapping.folder_path} "
-            f"[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]"
+            styled_text(
+                "  [yellow]?[/yellow] {} "
+                "[yellow]- skipped (multiple .env.* files, specify environment)[/yellow]",
+                mapping.folder_path,
+            )
         )
         state.skipped += 1
     else:
-        console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not found)[/dim]")
+        console.print(styled_text("  [dim]=[/dim] {} [dim]- skipped (not found)[/dim]", env_file))
         state.skipped += 1
 
 
@@ -315,12 +329,17 @@ def _skip_pull_partial_file(env_file: Path, context: _PullDecryptContext) -> boo
     resolved = env_file.resolve()
     if resolved in context.partial_combined:
         console.print(
-            f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption combined file)[/dim]"
+            styled_text(
+                "  [dim]=[/dim] {} [dim]- skipped (partial encryption combined file)[/dim]",
+                env_file,
+            )
         )
         return True
     if resolved in context.partial_clear:
         console.print(
-            f"  [dim]=[/dim] {env_file} [dim]- skipped (partial encryption clear file)[/dim]"
+            styled_text(
+                "  [dim]=[/dim] {} [dim]- skipped (partial encryption clear file)[/dim]", env_file
+            )
         )
         return True
     return False
@@ -358,7 +377,7 @@ def _should_queue_decryption(
     if _record_pull_provider_mismatch(env_file, context):
         return False
 
-    console.print(f"  [dim]=[/dim] {env_file} [dim]- skipped (not encrypted)[/dim]")
+    console.print(styled_text("  [dim]=[/dim] {} [dim]- skipped (not encrypted)[/dim]", env_file))
     context.state.skipped += 1
     _record_activation(mapping, env_file, context)
     return False
@@ -386,11 +405,15 @@ def _read_pull_encrypted_file(
     except DotenvxError as exc:
         # The keys file holds two different keys for this file; nothing was
         # written and nothing is decrypted until one of them is removed.
-        console.print(f"  [red]![/red] {env_file} [red]- not decrypted: {escape(str(exc))}[/red]")
+        console.print(
+            styled_text("  [red]![/red] {} [red]- not decrypted: {}[/red]", env_file, exc)
+        )
         context.state.errors += 1
         return None
     except (OSError, ValueError) as exc:
-        console.print(f"  [red]![/red] {env_file} [red]- error reading file: {exc}[/red]")
+        console.print(
+            styled_text("  [red]![/red] {} [red]- error reading file: {}[/red]", env_file, exc)
+        )
         context.state.errors += 1
         return None
 
@@ -406,14 +429,21 @@ def _record_pull_provider_mismatch(env_file: Path, context: _PullDecryptContext)
         and context.encryption.provider != EncryptionProvider.DOTENVX
     ):
         console.print(
-            f"  [red]![/red] {env_file} [red]- encrypted with dotenvx, but config uses "
-            f"{context.encryption.provider.value}[/red]"
+            styled_text(
+                "  [red]![/red] {} [red]- encrypted with dotenvx, but config uses {}[/red]",
+                env_file,
+                context.encryption.provider.value,
+            )
         )
         context.state.errors += 1
         return True
     console.print(
-        f"  [dim]=[/dim] {env_file} [dim]- skipped (encrypted with {detected.value}, "
-        f"config uses {context.encryption.provider.value})[/dim]"
+        styled_text(
+            "  [dim]=[/dim] {} [dim]- skipped (encrypted with {}, config uses {})[/dim]",
+            env_file,
+            detected.value,
+            context.encryption.provider.value,
+        )
     )
     context.state.skipped += 1
     return True
@@ -498,10 +528,12 @@ def _record_pull_decrypt_result(
     if error is not None or result is None or not result.success:
         reason = error if error is not None else (result.message if result else "unknown error")
         reason = f"{reason}{_put_back_original(task)}"
-        console.print(f"  [red]![/red] {task.env_file} [red]- error: {reason}[/red]")
+        console.print(
+            styled_text("  [red]![/red] {} [red]- error: {}[/red]", task.env_file, reason)
+        )
         context.state.errors += 1
         return
-    console.print(f"  [green]+[/green] {task.env_file} [dim]- decrypted[/dim]")
+    console.print(styled_text("  [green]+[/green] {} [dim]- decrypted[/dim]", task.env_file))
     context.state.decrypted += 1
     _record_activation(task.mapping, task.env_file, context)
 
@@ -593,18 +625,25 @@ def _pull_secrets_only_environment(env_config: Any, state: _PullPartialState) ->
             state.skipped += exc.already_decrypted
             state.protected += exc.protected
             state.unprotected.extend(exc.unprotected)
-        console.print(f"  [red]![/red] {env_config.secrets_dir} [red]- error: {exc}[/red]")
+        console.print(
+            styled_text("  [red]![/red] {} [red]- error: {}[/red]", env_config.secrets_dir, exc)
+        )
         state.errors.append(f"{env_config.name}: {exc}")
         return
     if result["decrypted"]:
         console.print(
-            f"  [green]+[/green] {env_config.secrets_dir} "
-            f"[dim]- {result['decrypted']} file(s) decrypted[/dim]"
+            styled_text(
+                "  [green]+[/green] {} [dim]- {} file(s) decrypted[/dim]",
+                env_config.secrets_dir,
+                result["decrypted"],
+            )
         )
         state.decrypted += result["decrypted"]
     else:
         console.print(
-            f"  [dim]=[/dim] {env_config.secrets_dir} [dim]- skipped (already decrypted)[/dim]"
+            styled_text(
+                "  [dim]=[/dim] {} [dim]- skipped (already decrypted)[/dim]", env_config.secrets_dir
+            )
         )
     state.skipped += result["already_decrypted"]
     state.protected += result.get("protected", 0)
@@ -621,10 +660,12 @@ def _merge_pull_environment(
     try:
         runtime.write_merged_file(Path(env_config.clear_file), secret_file, combined_file)
     except (OSError, UnicodeDecodeError) as exc:
-        console.print(f"  [red]![/red] {combined_file} [red]- merge failed: {exc}[/red]")
+        console.print(
+            styled_text("  [red]![/red] {} [red]- merge failed: {}[/red]", combined_file, exc)
+        )
         state.errors.append(f"{env_config.name}: {exc}")
         return
-    console.print(f"  [cyan]→[/cyan] {combined_file} [dim]- merged (decrypted)[/dim]")
+    console.print(styled_text("  [cyan]→[/cyan] {} [dim]- merged (decrypted)[/dim]", combined_file))
     state.merged += 1
 
 
@@ -638,17 +679,19 @@ def _pull_combined_environment(
 
     secret_file = Path(env_config.secret_file)
     if not secret_file.exists():
-        console.print(f"  [dim]=[/dim] {secret_file} [dim]- skipped (not found)[/dim]")
+        console.print(
+            styled_text("  [dim]=[/dim] {} [dim]- skipped (not found)[/dim]", secret_file)
+        )
         state.skipped += 1
         return
     try:
         was_decrypted, protected = pull_partial_encryption(env_config)
     except Exception as exc:  # this environment's error, as in pull-partial
-        console.print(f"  [red]![/red] {secret_file} [red]- error: {exc}[/red]")
+        console.print(styled_text("  [red]![/red] {} [red]- error: {}[/red]", secret_file, exc))
         state.errors.append(f"{env_config.name}: {exc}")
         return
     if was_decrypted:
-        console.print(f"  [green]+[/green] {secret_file} [dim]- decrypted[/dim]")
+        console.print(styled_text("  [green]+[/green] {} [dim]- decrypted[/dim]", secret_file))
         state.decrypted += 1
         # The result used to be dropped, so an unprotected plaintext secret
         # file got no warning at all (#999).
@@ -657,7 +700,9 @@ def _pull_combined_environment(
         else:
             state.unprotected.append(secret_file)
     else:
-        console.print(f"  [dim]=[/dim] {secret_file} [dim]- skipped (already decrypted)[/dim]")
+        console.print(
+            styled_text("  [dim]=[/dim] {} [dim]- skipped (already decrypted)[/dim]", secret_file)
+        )
         state.skipped += 1
     if merge:
         _merge_pull_environment(env_config, secret_file, state, runtime)
@@ -674,7 +719,7 @@ def _print_partial_pull_summary(state: _PullPartialState, merge: bool) -> None:
     if state.errors:
         print_warning("Some partial encryption files had errors")
         for error in state.errors:
-            console.print(f"  • {error}")
+            console.print(Text(f"  • {error}"))
         # Files decrypted before an error are plaintext too.
         _warn_unprotected(state)
         raise typer.Exit(code=1)

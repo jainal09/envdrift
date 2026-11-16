@@ -25,7 +25,9 @@ Pre-commit hooks ensure that:
 
 ### `--config`
 
-Show the pre-commit configuration snippet to copy into your `.pre-commit-config.yaml`.
+Show the pre-commit configuration snippet to copy into your `.pre-commit-config.yaml`. The
+snippet is printed exactly as it is and never wrapped at the terminal width, so a long line
+copies as one line.
 
 ```bash
 envdrift hook --config
@@ -117,6 +119,12 @@ markers so it can be removed cleanly later. Re-running the command when the hook
 already present is a no-op (it reports "already installed"). If the file is malformed
 YAML or its top level is not a mapping, the command fails with a clean error and exit
 code 1 without touching the file.
+
+Files without a final newline are supported: existing hooks stay in their original
+repository entries, and a newline separates the last line from the appended envdrift block.
+If that separator would change an existing YAML value, such as a block-scalar hook
+argument, installation fails with exit code 1 and leaves the file unchanged. Add
+the hooks manually in that case; the error includes the configuration snippet command.
 
 ## Manual Setup
 
