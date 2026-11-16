@@ -16,18 +16,14 @@ elsewhere a rename onto the file that is made to fail.
 
 from __future__ import annotations
 
-import contextlib
 import errno
 import os
 import re
 import shlex
 import shutil
-import signal
 import stat
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -36,7 +32,7 @@ import pytest
 from envdrift.encryption.base import EncryptionBackendError
 from envdrift.encryption.dotenvx import DotenvxEncryptionBackend
 from envdrift.integrations.dotenvx import DotenvxError
-from tests.helpers import unreadable_file
+from tests.helpers import file_size_limit, unreadable_file
 
 # A dotenvx-encrypted file whose second value is under another key, with CRLF
 # line endings so a restore that is not byte for byte would show.
@@ -108,37 +104,6 @@ def _fail_writes(monkeypatch: pytest.MonkeyPatch, target: Path) -> None:
         real_replace(src, dst)
 
     monkeypatch.setattr(os, "replace", _replace)
-
-
-@pytest.fixture
-def file_size_limit() -> Callable[[int], AbstractContextManager[None]]:
-    """Make every write past ``size`` bytes of a file fail, for real (``RLIMIT_FSIZE``).
-
-    The kernel refuses the write with ``EFBIG``, as a full disk refuses one with
-    ``ENOSPC``; with ``SIGXFSZ`` ignored the process gets the error instead of
-    being killed. git, run while the limit is on, inherits it. POSIX only.
-    """
-    resource = pytest.importorskip("resource", reason="RLIMIT_FSIZE is POSIX only")
-    if not hasattr(signal, "SIGXFSZ"):
-        pytest.skip("no SIGXFSZ on this platform")
-
-    @contextlib.contextmanager
-    def _limit(size: int) -> Iterator[None]:
-        soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
-        if hard != resource.RLIM_INFINITY and hard < size:
-            pytest.skip(f"the hard file size limit ({hard}) is below {size} bytes")
-        previous = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
-        try:
-            resource.setrlimit(resource.RLIMIT_FSIZE, (size, hard))
-            try:
-                yield
-            finally:
-                resource.setrlimit(resource.RLIMIT_FSIZE, (soft, hard))
-        finally:
-            if previous is not None:
-                signal.signal(signal.SIGXFSZ, previous)
-
-    return _limit
 
 
 def _init_repo(repo: Path) -> None:
@@ -367,7 +332,6 @@ class TestRestoreIsWholeOrNothing:
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        file_size_limit: Callable[[int], AbstractContextManager[None]],
     ) -> None:
         monkeypatch.chdir(tmp_path)
         target = tmp_path / ".env.production"
@@ -420,7 +384,6 @@ class TestRecoveryAdviceActsOnTheFileThePlaintextIsIn:
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
-        file_size_limit: Callable[[int], AbstractContextManager[None]],
     ) -> None:
         _init_repo(tmp_path)
         monkeypatch.chdir(tmp_path)
@@ -457,7 +420,6 @@ class TestRecoveryAdviceActsOnTheFileThePlaintextIsIn:
         tmp_path: Path,
         tmp_path_factory: pytest.TempPathFactory,
         monkeypatch: pytest.MonkeyPatch,
-        file_size_limit: Callable[[int], AbstractContextManager[None]],
     ) -> None:
         inner = tmp_path_factory.mktemp("inner")
         _init_repo(inner)
