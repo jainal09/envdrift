@@ -34,6 +34,13 @@ pytestmark = [
 PRODUCTION = "DOTENV_PRIVATE_KEY_PRODUCTION"
 
 
+class _KnownFalsePassError(AssertionError):
+    """The false verdict its issue reports: only this one makes a test an expected failure.
+
+    A Vault, CLI or setup failure is still a real failure, never mistaken for the bug.
+    """
+
+
 @dataclass
 class _VaultCli:
     """The live HashiCorp Vault container, and the real CLI run against it."""
@@ -66,7 +73,9 @@ def vault_cli(
 @pytest.mark.vault
 @pytest.mark.skipif(importlib.util.find_spec("hvac") is None, reason="hvac not installed")
 @pytest.mark.xfail(
-    strict=False, reason="verify-vault passes a file with no encrypted value (see #1023)"
+    strict=False,
+    raises=_KnownFalsePassError,
+    reason="verify-vault passes a file with no encrypted value (see #1023)",
 )
 @pytest.mark.parametrize("header", [False, True], ids=["plaintext", "decrypted-dotenvx-file"])
 def test_verify_vault_fails_a_file_with_no_encrypted_value(
@@ -93,6 +102,8 @@ def test_verify_vault_fails_a_file_with_no_encrypted_value(
             kv.delete_metadata_and_all_versions(path=path, mount_point="secret")
 
     output = " ".join((result.stdout + result.stderr).split())
+    if "keys are in sync" in output and result.returncode == 0:
+        raise _KnownFalsePassError(output)
     assert "keys are in sync" not in output, output
     assert result.returncode == 1, output
 
@@ -117,6 +128,7 @@ def test_sync_decryption_check_skips_a_plaintext_file(tmp_path: Path) -> None:
 
 @pytest.mark.xfail(
     strict=False,
+    raises=_KnownFalsePassError,
     reason="the decryption check reads a comment holding encrypted: as ciphertext (see #1024)",
 )
 def test_sync_decryption_check_skips_a_plaintext_file_whose_comment_says_encrypted(
@@ -127,4 +139,6 @@ def test_sync_decryption_check_skips_a_plaintext_file_whose_comment_says_encrypt
 
     result = _decryption_check(tmp_path, content)
 
+    if result == DecryptionTestResult.PASSED:
+        raise _KnownFalsePassError("a plaintext file passed the decryption check")
     assert result == DecryptionTestResult.SKIPPED

@@ -142,8 +142,9 @@ Decryption succeeded, but git skip-worktree could not be applied to these decryp
 The other 1 decrypted file(s) are marked skip-worktree.
 ```
 
-A file that was plaintext already is still marked `skip-worktree`, but it is not
-counted as protected, because this run did not decrypt it. Decrypting succeeded,
+envdrift still tries to mark a file that was plaintext already `skip-worktree`, but it
+does not count it as protected, because this run did not decrypt it, and it does not
+warn when that mark fails. Decrypting succeeded,
 so the command still exits 0 when only the protection failed; re-encrypt with
 `envdrift push` before you commit.
 

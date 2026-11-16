@@ -54,7 +54,8 @@ exits 1 with `git does not ignore <key file>, ...` before any environment runs, 
 nothing is encrypted or decrypted. The check fails closed: when git cannot answer
 for a key file in a repository (git fails, times out or is not installed), `push`
 exits 1 the same way, with `git could not say whether it ignores <key file> (<why>), ...`.
-`pull-partial` and `pull --merge` make the same check.
+`pull-partial` and `pull --merge` make the same check. `push --check` changes nothing, so it
+writes no entries and makes no such check.
 
 This command requires partial encryption to be configured in `envdrift.toml`.
 

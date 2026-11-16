@@ -242,6 +242,8 @@ class TestDecryptSnapshotRestore:
 
         The advice was ``git checkout -- <file>``, and that `git add .` WILL stage it.
         """
+        if shutil.which("git") is None:
+            pytest.skip("git not available: the reason would be that git is missing")
         monkeypatch.chdir(tmp_path)  # not a git repository: no protection possible
         target = tmp_path / ".env.production"
         target.write_bytes(_ENCRYPTED)

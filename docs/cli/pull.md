@@ -171,7 +171,7 @@ envdrift pull --profile local
 
 ## Output
 
-The command shows progress in two steps:
+The command shows progress in up to three steps:
 
 ### Step 1: Sync Keys
 
