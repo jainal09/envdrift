@@ -1146,26 +1146,29 @@ def dotenvx_key_files(env_config: PartialEncryptionEnvironmentConfig) -> list[Pa
     raw_dir = env_config.secrets_dir.strip()
     if not raw_dir:
         return []
-    secrets_dir = Path(raw_dir)
-    if secrets_dir.exists() and not secrets_dir.is_dir():
-        # push and pull refuse it for this environment, so dotenvx writes no key
-        # under it; a path below a regular file made git crash the whole command.
-        return []
-    folders = [secrets_dir]
-    if secrets_dir.is_dir():
-        try:
-            matched = sorted(secrets_dir.glob(env_config.pattern))
-        except (ValueError, NotImplementedError, OSError):
-            # Path.glob raises ValueError for an empty pattern and NotImplementedError
-            # for an absolute one; the push/pull step reports either for this environment.
-            matched = []
-        folders.extend(file.parent for file in matched if _is_pushable_secret_file(file))
     keys: list[Path] = []
-    for folder in folders:
+    for folder in _secrets_only_key_folders(Path(raw_dir), env_config.pattern):
         key_file = folder / ".env.keys"
         if key_file not in keys:
             keys.append(key_file)
     return keys
+
+
+def _secrets_only_key_folders(secrets_dir: Path, pattern: str) -> list[Path]:
+    """``secrets_dir``, then the folder of every secret file ``pattern`` matches in it."""
+    if secrets_dir.exists() and not secrets_dir.is_dir():
+        # push and pull refuse it for this environment, so dotenvx writes no key
+        # under it; a path below a regular file made git crash the whole command.
+        return []
+    if not secrets_dir.is_dir():
+        return [secrets_dir]
+    try:
+        matched = sorted(secrets_dir.glob(pattern))
+    except (ValueError, NotImplementedError, OSError):
+        # Path.glob raises ValueError for an empty pattern and NotImplementedError
+        # for an absolute one; the push/pull step reports either for this environment.
+        matched = []
+    return [secrets_dir, *(file.parent for file in matched if _is_pushable_secret_file(file))]
 
 
 def _encrypt_secrets_only_file(dotenvx: DotenvxWrapper, file: Path, *, check: bool) -> bool:
