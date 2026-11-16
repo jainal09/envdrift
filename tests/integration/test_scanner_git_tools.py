@@ -305,6 +305,34 @@ class TestGitSecretsRealBinary:
             ("git-secrets-aws-secret-key", FindingSeverity.CRITICAL)
         ]
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="a symbolic link needs a privilege on Windows"
+    )
+    def test_a_history_finding_keeps_the_path_its_commit_held(self, scanner_test_env):
+        """``prod/app.env`` is reported as its commit held it, though ``prod`` links to the root.
+
+        The path was resolved through today's link to the root's ``app.env``, and the engine
+        judged the finding by that file of the commit (#1014).
+        """
+        work_dir = scanner_test_env["work_dir"].resolve()
+        self._init_repo_with_aws_patterns(work_dir)
+        (work_dir / "prod").mkdir()
+        (work_dir / "prod" / "app.env").write_text("AWS_KEY=" + "AKIA" + "Z9Q8W7E6R5T4Y3U2" + "\n")
+        for args in (
+            ["add", "--", "prod/app.env"],
+            ["-c", "user.name=Test", "-c", "user.email=test@test.com", "commit", "-qm", "key"],
+        ):
+            subprocess.run(["git", *args], cwd=str(work_dir), check=True, capture_output=True)
+        shutil.rmtree(work_dir / "prod")
+        (work_dir / "prod").symlink_to(".", target_is_directory=True)
+
+        scanner = GitSecretsScanner(auto_install=False, register_aws=True)
+        result = scanner.scan([work_dir], include_git_history=True)
+
+        assert result.error is None
+        assert result.findings, "git-secrets reported no history finding"
+        assert {f.file_path for f in result.findings} == {work_dir / "prod" / "app.env"}
+
     def test_scan_grades_a_hash_rocket_secret_access_key_critical(self, scanner_test_env):
         """Puppet, Ruby and PHP assign with ``=>``, which git-secrets' AWS pattern matches too.
 
