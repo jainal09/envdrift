@@ -116,7 +116,8 @@ When this flag is used with partial encryption enabled, the command will:
    with the dotenvx `.env.keys` next to each `.secret` file, as `push` does
 
 This creates a single usable `.env` file for local development. If git still does
-not ignore one of those key files (a `!` rule re-includes it), or cannot say whether
+not ignore one of those key files (a `!` rule re-includes it, or git already tracks
+it), or cannot say whether
 it does, the partial-encryption step stops with exit 1 before it decrypts or merges
 anything, as `push` does.
 

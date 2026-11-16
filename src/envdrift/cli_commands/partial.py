@@ -81,10 +81,13 @@ def _stop_unless_git_ignores(key_files: list[Path]) -> None:
     unconfirmed = [f"{shown} ({reason})" for shown, reason in exposed if reason is not None]
     stopped = "envdrift stopped before it encrypted or decrypted any partial-encryption file."
     if re_included:
+        # git check-ignore does not report a tracked path as ignored, whatever the rules.
         print_error(
             f"git does not ignore {', '.join(re_included)}, where dotenvx keeps the private "
             "key, so `git add .` would stage it. A rule in your git ignore files "
-            f"re-includes it (a `!` pattern, for example). Fix that and run again: {stopped}"
+            "re-includes it (a `!` pattern, for example), or git already tracks it: then the "
+            "key is in the repository, so run `git rm --cached` on it and rotate the key. "
+            f"Fix that and run again: {stopped}"
         )
     if unconfirmed:
         print_error(

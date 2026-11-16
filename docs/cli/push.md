@@ -49,9 +49,11 @@ the same entries.
 
 It then asks git, in each key file's own repository, whether it ignores the file.
 A rule can still re-include one after the entry, such as `!.env.keys` in a deeper
-`.gitignore`, and then `git add .` would stage the private key. In that case `push`
-exits 1 with `git does not ignore <key file>, ...` before any environment runs, so
-nothing is encrypted or decrypted. The check fails closed: when git cannot answer
+`.gitignore`, and then `git add .` would stage the private key. git also never ignores
+a file it already tracks: then the key is in the repository, and the message says to run
+`git rm --cached` on it and rotate the key. In either case `push` exits 1 with
+`git does not ignore <key file>, ...` before any environment runs, so nothing is
+encrypted or decrypted. The check fails closed: when git cannot answer
 for a key file in a repository (git fails, times out or is not installed), `push`
 exits 1 the same way, with `git could not say whether it ignores <key file> (<why>), ...`.
 `pull-partial` and `pull --merge` make the same check. `push --check` changes nothing, so it
