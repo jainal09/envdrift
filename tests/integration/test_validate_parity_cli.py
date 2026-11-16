@@ -106,6 +106,44 @@ class TestValidateCiParity:
         assert result.returncode == expected_exit, out
         assert ("Validation PASSED" in out) is (expected_exit == 0)
 
+    @pytest.mark.parametrize(
+        ("config", "field"),
+        [
+            ("", 'ENVDRIFT_TEST_952_KEY: str = Field("", min_length=1)'),
+            ("str_min_length=1", 'ENVDRIFT_TEST_952_KEY: str = ""'),
+        ],
+        ids=["field-min-length", "model-str-min-length"],
+    )
+    def test_encrypted_value_is_not_judged_by_its_default(
+        self, tmp_path, integration_env, config, field
+    ):
+        """An encrypted value cannot be checked, so neither may its default be.
+
+        Left out of the constraint pass, the value fell back to its empty default,
+        which fails min_length=1, and validate --ci exited 1 for a file whose real
+        value it never saw.
+        """
+        _write_schema(
+            tmp_path,
+            f"""
+            from pydantic import Field
+            from pydantic_settings import BaseSettings, SettingsConfigDict
+
+            class Settings(BaseSettings):
+                model_config = SettingsConfigDict({config})
+                {field}
+            """,
+        )
+        (tmp_path / ".env").write_text(
+            "ENVDRIFT_TEST_952_KEY=encrypted:BAAAexample\n", encoding="utf-8"
+        )
+
+        result = _validate_ci(tmp_path, integration_env)
+
+        out = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == 0, out
+        assert "Validation PASSED" in out, out
+
     def test_bool_spelling_on_exits_zero(self, tmp_path, integration_env):
         """#472: DEBUG=on loads in pydantic-settings; --ci must exit 0."""
         _write_schema(

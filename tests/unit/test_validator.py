@@ -418,6 +418,47 @@ NEW_FEATURE_FLAG=enabled
         # The real app sees NOTES='' and raises string_too_short at startup.
         assert "NOTES" in result.type_errors
 
+    @pytest.mark.parametrize(
+        "constraint",
+        ["field", "model"],
+        ids=["field-min-length", "model-str-min-length"],
+    )
+    def test_constraint_pass_does_not_judge_an_encrypted_value_by_its_default(
+        self, tmp_path, constraint
+    ):
+        """An encrypted value is left out, so the model checks the default instead.
+
+        An empty default fails ``min_length=1``, whether the field or the model
+        config sets it, and ``validate --ci`` failed a file whose real value it
+        never saw. The error is dropped for that field only: an empty plaintext
+        value and a field the file leaves out still fail, as in the real app.
+        """
+        if constraint == "field":
+
+            class Settings(BaseSettings):
+                API_KEY: str = Field("", min_length=1)
+                NOTES: str = Field("x", min_length=1)
+                ABSENT: str = Field("", min_length=1)
+
+        else:
+
+            class Settings(BaseSettings):
+                model_config = SettingsConfigDict(str_min_length=1)
+                API_KEY: str = ""
+                NOTES: str = "x"
+                ABSENT: str = ""
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("API_KEY=encrypted:BAAAexample\nNOTES=\n")
+
+        env = EnvParser().parse(env_file)
+        schema = SchemaLoader().extract_metadata(Settings)
+        result = Validator().validate(env, schema, check_encryption=False)
+
+        assert "API_KEY" not in result.type_errors, result.type_errors
+        assert "NOTES" in result.type_errors  # empty plaintext: the app sees ''
+        assert "ABSENT" in result.type_errors  # the app validates this default too
+
     def test_constraint_pass_skips_empty_when_env_ignore_empty(self, tmp_path):
         """With env_ignore_empty=True the env source drops '' (the field is
         unset), so the constraint pass must not feed it to the model (#472)."""

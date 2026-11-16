@@ -38,6 +38,9 @@ Type validation mirrors what the real app does at startup:
 - Integer parsing is ASCII-only, matching Pydantic (fullwidth digits are rejected).
 - Model-level `SettingsConfigDict(str_min_length=..., str_max_length=...)` limits
   are enforced even when string fields have no individual `Field` constraints.
+- An encrypted value (`encrypted:...` or `ENC[...]`) is not checked against its field's
+  constraints, since its plaintext is unknown. Nor is the field's default, which the real
+  app does not use when the file supplies a value.
 - Field and model validators run against the assembled settings values. A model-level
   rejection appears as a `Model validation` type error instead of a false pass.
 - If custom validation raises an unexpected non-validation exception, validation
