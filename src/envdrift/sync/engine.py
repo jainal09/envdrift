@@ -94,10 +94,11 @@ class SyncMode:
     validate_schema: bool = False
     schema_path: str | None = None
     service_dir: Path | None = None
-    # ``[validation].strict_extra``: False skips the check for undeclared variables, as in validate.
-    check_extra: bool = True
     # Sync-capable workflows can promise verification without becoming read-only.
     verify_skipped_secrets: bool = False
+    # ``[validation].strict_extra``: False skips the check for undeclared variables, as in validate.
+    # Last, so a positional SyncMode(...) call keeps its meaning.
+    check_extra: bool = True
 
 
 class _ServiceSyncContext(NamedTuple):

@@ -142,6 +142,13 @@ def test_sync_follows_strict_extra_as_validate_does(
     assert result.services[0].schema_valid is valid
 
 
+def test_check_extra_leaves_the_positional_sync_mode_fields_as_they_were() -> None:
+    """The new field goes last: a positional ``SyncMode(...)`` call keeps its meaning."""
+    mode = SyncMode(False, False, False, True, "schema:Settings", None, True)
+    assert mode.verify_skipped_secrets is True
+    assert mode.check_extra is True  # the default, not the seventh argument
+
+
 def test_strict_extra_comes_from_the_config_sync_runs_with(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
