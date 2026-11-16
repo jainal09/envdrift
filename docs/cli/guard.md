@@ -140,6 +140,12 @@ envdrift guard --detect-secrets
 envdrift runs the `detect-secrets` package installed next to it (`python -m detect_secrets`) with every
 plugin enabled, and installs the pinned version when the package is missing and auto-install is on.
 
+envdrift runs detect-secrets with `--no-verify`, so a scan stays on your machine. Without that flag
+detect-secrets sends each secret it finds to the provider's API (AWS, Stripe, Slack and others) to check
+whether it is live, with no timeout, and drops each finding the provider rejects. A found secret left the
+machine, a revoked or blocked key was not reported, and one slow endpoint could hold the scan for five
+minutes. Older envdrift releases did not pass it.
+
 **Which files it scans.** Inside a git repository detect-secrets scans the files git tracks, so a new
 file is scanned once you `git add` it, and a file git ignores is not. That holds for the top level of
 the repository and for any subdirectory of it: `envdrift guard sub` scans the tracked files below
