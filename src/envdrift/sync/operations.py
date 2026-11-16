@@ -362,20 +362,56 @@ def atomic_write(
 def create_new_file(path: Path, content: str, permissions: int = 0o600) -> None:
     """Write ``path`` whole, but only when no file is there yet.
 
-    The name is claimed with ``O_EXCL`` first, so a file that another writer
-    created in the meantime is never overwritten: ``FileExistsError`` is
-    raised instead. ``atomic_write`` then replaces the empty claim, so the file
-    never holds part of ``content``.
+    The content goes to a temp file next to ``path``, which is then hard-linked
+    to ``path``. The link fails with ``FileExistsError`` when another writer
+    created the file first, so that file is never overwritten, and ``path``
+    never holds part of ``content``. Where the filesystem has no hard links,
+    ``path`` is created with ``O_EXCL`` and written in place.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, permissions))
+    data = content.encode("utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".envdrift-tmp"
+    )
+    tmp_path = Path(tmp_name)
     try:
-        atomic_write(path, content, permissions)
+        _write_fd(fd, data, permissions)
+        try:
+            os.link(tmp_path, path)
+        except FileExistsError:
+            raise
+        except OSError:
+            # No hard links here (FAT, some network shares): O_EXCL still
+            # refuses a file another writer created.
+            _write_new_file(path, data, permissions)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
+
+
+def _write_new_file(path: Path, data: bytes, permissions: int) -> None:
+    """Create ``path`` with ``O_EXCL`` and write ``data`` to it in place.
+
+    A write that fails removes the file it created, so no part of ``data`` is left.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags, permissions)
+    try:
+        _write_fd(fd, data, permissions)
     except BaseException:
         with contextlib.suppress(OSError):
-            if path.stat().st_size == 0:
-                path.unlink()
+            path.unlink()
         raise
+
+
+def _write_fd(fd: int, data: bytes, permissions: int) -> None:
+    """Write ``data`` to the file ``fd`` opens, synced to disk, and close it."""
+    with os.fdopen(fd, "wb") as handle:
+        if hasattr(os, "fchmod"):
+            os.fchmod(handle.fileno(), permissions)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def ensure_directory(path: Path) -> None:

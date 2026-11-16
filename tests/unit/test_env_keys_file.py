@@ -7,6 +7,8 @@ backup is gitignored first: no copy is made while git would still track it.
 
 from __future__ import annotations
 
+import errno
+import os
 import shutil
 import subprocess  # nosec B404
 import sys
@@ -130,6 +132,80 @@ def test_write_key_does_not_overwrite_a_file_created_after_its_check(
         EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=[])
 
     assert keys_path.read_text(encoding="utf-8") == theirs
+
+
+def test_write_key_does_not_overwrite_a_file_created_while_it_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another writer creates the file just before envdrift puts its own in place: it is kept.
+
+    ``os.link`` is that step. ``atomic_write`` was, after an ``O_EXCL`` claim of
+    the name, and it replaced the file the other writer had made.
+    """
+    from envdrift.sync import operations
+
+    keys_path = tmp_path / ".env.keys"
+    theirs = "DOTENV_PRIVATE_KEY_PRODUCTION=theirs\n"
+    real_link, real_atomic_write = os.link, operations.atomic_write
+
+    def other_writer_then(step):
+        def run(*args, **kwargs):
+            keys_path.write_text(theirs, encoding="utf-8")
+            return step(*args, **kwargs)
+
+        return run
+
+    monkeypatch.setattr(os, "link", other_writer_then(real_link))
+    monkeypatch.setattr(operations, "atomic_write", other_writer_then(real_atomic_write))
+
+    with pytest.raises(ValueError, match="changed while envdrift was working on it"):
+        EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=[])
+
+    assert keys_path.read_text(encoding="utf-8") == theirs
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]
+
+
+def _no_hard_links(*args, **kwargs):
+    raise OSError(errno.EPERM, "hard links are not supported here")
+
+
+def test_write_key_creates_a_file_where_there_are_no_hard_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(os, "link", _no_hard_links)
+    keys_path = tmp_path / ".env.keys"
+
+    EnvKeysFile(keys_path).write_key("DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=[])
+
+    assert EnvKeysFile(keys_path).read_values("DOTENV_PRIVATE_KEY_PRODUCTION") == ["new"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == [".env.keys"]
+
+
+def test_write_key_leaves_no_part_of_a_key_it_failed_to_write_without_hard_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The disk fills up while the new file is written in place: no part of it is left."""
+    from envdrift.sync import operations
+
+    real_write_fd = operations._write_fd
+    calls: list[int] = []
+
+    def disk_full_after_the_temp_file(fd: int, data: bytes, permissions: int) -> None:
+        calls.append(fd)
+        if len(calls) == 1:
+            return real_write_fd(fd, data, permissions)
+        real_write_fd(fd, data[:10], permissions)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(os, "link", _no_hard_links)
+    monkeypatch.setattr(operations, "_write_fd", disk_full_after_the_temp_file)
+
+    with pytest.raises(OSError, match="No space left on device"):
+        EnvKeysFile(tmp_path / ".env.keys").write_key(
+            "DOTENV_PRIVATE_KEY_PRODUCTION", "new", expected=[]
+        )
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_write_key_writes_when_the_key_is_still_what_was_read(tmp_path: Path) -> None:

@@ -80,7 +80,8 @@ be rewritten in place: the command fails and `.env.keys` is left unchanged. Writ
 unchanged, rather than change how dotenvx reads any other line of the file, or write a vault key
 that dotenvx would read back as another value, such as one holding `#`; such a key is refused
 before any backup is made. If another process changes the key after `vault-pull` read it,
-nothing is written either, and the error names the backup `--force` made: run the command again.
+nothing is written either: run the command again. With `--force`, the error names the backup it
+made, which is kept.
 
 ## Options
 

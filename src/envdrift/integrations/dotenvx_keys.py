@@ -542,8 +542,10 @@ def held_key_problem(env_text: str, keys_text: str | None, key_name: str) -> str
     against ciphertext in a file without a public key, so that is one.
     """
     values = assignment_values(keys_text, key_name) if keys_text else []
+    if not values:
+        return None
     problem = held_values_problem(env_text, values, key_name)
-    if problem is None and values and unverifiable_ciphertext(env_text):
+    if problem is None and unverifiable_ciphertext(env_text):
         return (
             f"the file holds encrypted values but no DOTENV_PUBLIC_KEY to check {key_name} against"
         )
