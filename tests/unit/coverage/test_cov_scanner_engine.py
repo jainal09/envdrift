@@ -402,9 +402,9 @@ class TestSkipGitignoredWiredIntoScan:
         called = {"hit": False}
         real_filter = engine._filter_gitignored_files
 
-        def spy(findings):
+        def spy(findings, *rest):
             called["hit"] = True
-            return real_filter(findings)
+            return real_filter(findings, *rest)
 
         monkeypatch.setattr(engine, "_filter_gitignored_files", spy)
 

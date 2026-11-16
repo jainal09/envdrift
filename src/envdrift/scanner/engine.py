@@ -38,6 +38,7 @@ from envdrift.scanner.base import (
     exception_message,
 )
 from envdrift.scanner.finding_paths import FindingPathDisplay
+from envdrift.scanner.history_files import CommittedFiles
 from envdrift.scanner.ignores import IgnoreConfig, IgnoreFilter
 from envdrift.scanner.native import NativeScanner, _content_is_encrypted
 from envdrift.scanner.patterns import hash_secret
@@ -707,10 +708,14 @@ class ScanEngine:
         if self.config.skip_clear_files:
             filtered_findings = self._filter_clear_files(filtered_findings)
 
+        # A history finding is judged by its file in the commit it was found in, not by
+        # today's file: that line may now hold an encrypted value or an ignore comment (#1014).
+        committed = CommittedFiles(history=self.config.include_git_history)
+
         # Filter out findings from encrypted files (dotenvx/SOPS markers)
         # Encrypted files contain ciphertext that triggers false positives
         if self.config.skip_encrypted_files:
-            filtered_findings = self._filter_encrypted_files(filtered_findings)
+            filtered_findings = self._filter_encrypted_files(filtered_findings, committed)
 
         # Filter out dotenvx public keys (EC keys starting with 02/03)
         # These are meant to be public and should not be flagged as secrets
@@ -719,7 +724,7 @@ class ScanEngine:
         # Filter out findings from gitignored files if enabled
         # Uses git check-ignore for reliable detection
         if self.config.skip_gitignored:
-            filtered_findings = self._filter_gitignored_files(filtered_findings)
+            filtered_findings = self._filter_gitignored_files(filtered_findings, committed)
 
         # One display form per file (#855). Scanners report a file the way
         # their scan path gave it (native resolves a directory, gitleaks and
@@ -735,7 +740,9 @@ class ScanEngine:
         # a file whichever scanner reported it and however the scan path was
         # spelled, and never match through the directories above the cwd
         # (#859). Absolute patterns match its absolute names.
-        filtered_findings = self._ignore_filter.filter(filtered_findings, display.forms)
+        filtered_findings = self._ignore_filter.filter(
+            filtered_findings, display.forms, committed=committed
+        )
 
         filtered_findings = display.findings(filtered_findings)
         results = [
@@ -947,7 +954,9 @@ class ScanEngine:
         """
         return [finding for finding in findings if not finding.file_path.name.endswith(".clear")]
 
-    def _filter_encrypted_files(self, findings: list[ScanFinding]) -> list[ScanFinding]:
+    def _filter_encrypted_files(
+        self, findings: list[ScanFinding], committed: CommittedFiles | None = None
+    ) -> list[ScanFinding]:
         """Filter out findings from the *encrypted portions* of files.
 
         Encrypted files contain ciphertext which can trigger false positives
@@ -963,14 +972,19 @@ class ScanEngine:
         one with no line information (e.g. a blob flagged by an external scanner),
         is dropped.
 
-        This applies centrally to ALL scanners.
+        This applies centrally to ALL scanners. A finding a history scan made in an old
+        commit is judged by its file in that commit, and kept when git cannot show it (#1014).
 
         Args:
             findings: List of findings to filter.
+            committed: The files of the commits history findings were made in. Defaults to
+                those of this engine's scan.
 
         Returns:
             Filtered list excluding findings on encrypted content.
         """
+        if committed is None:
+            committed = CommittedFiles(history=self.config.include_git_history)
         # Cache per-file encryption status and (lazily) split lines.
         encrypted_files: set[str] = set()
         checked_files: set[str] = set()
@@ -1017,20 +1031,32 @@ class ScanEngine:
             return ""
 
         @lru_cache(maxsize=LINE_CACHE_SIZE)
-        def encrypted_values(file_path: str, line_number: int) -> _LineValues:
+        def encrypted_values(file_path: str, line_number: int, commit: str | None) -> _LineValues:
             # Found once for a line's findings, not once for each: a long line can hold thousands
-            return _line_values(line_at(file_path, line_number))
+            if commit is None:
+                return _line_values(line_at(file_path, line_number))
+            return _line_values(committed.line(file_path, commit, line_number))
+
+        @lru_cache(maxsize=LINE_CACHE_SIZE)
+        def encrypted_in_commit(file_path: str, commit: str) -> bool:
+            text = committed.text(file_path, commit)
+            return text is not None and _content_is_encrypted(text)
 
         def keep(finding: ScanFinding) -> bool:
             file_path = str(finding.file_path)
-            if not is_file_encrypted(file_path):
+            commit = committed.commit_of(finding)
+            if commit is None:
+                encrypted = is_file_encrypted(file_path)
+            else:
+                encrypted = encrypted_in_commit(file_path, commit)
+            if not encrypted:
                 return True
             # File has encryption markers. Keep findings in its plaintext; drop
             # findings in a ciphertext, or with no line info.
             if finding.line_number is None:
                 return False
             return _outside_encrypted_values(
-                encrypted_values(file_path, finding.line_number),
+                encrypted_values(file_path, finding.line_number, commit),
                 finding.column_number,
                 in_bytes=finding.scanner in _BYTE_COLUMN_SCANNERS,
             )
@@ -1117,15 +1143,22 @@ class ScanEngine:
             by_file[file_path] = hashes
         return by_file
 
-    def _filter_gitignored_files(self, findings: list[ScanFinding]) -> list[ScanFinding]:
+    def _filter_gitignored_files(
+        self, findings: list[ScanFinding], committed: CommittedFiles | None = None
+    ) -> list[ScanFinding]:
         """Filter out findings from files that are in .gitignore.
 
         Uses `git check-ignore` to reliably determine if files are gitignored.
         This is the safest approach as it respects all .gitignore rules including
         nested .gitignore files and global gitignore configurations.
 
+        A finding a history scan made in an old commit is kept: the file was committed
+        there, whatever today's .gitignore says, so the secret is in the history (#1014).
+
         Args:
             findings: List of findings to filter.
+            committed: Says which findings a history scan made in an old commit. Defaults
+                to those of this engine's scan.
 
         Returns:
             Filtered list excluding findings from gitignored files.
@@ -1135,9 +1168,13 @@ class ScanEngine:
 
         if not findings:
             return findings
+        if committed is None:
+            committed = CommittedFiles(history=self.config.include_git_history)
 
         # Group file paths by git root for accurate check-ignore behavior
-        file_paths = {Path(f.file_path).resolve() for f in findings}
+        file_paths = {
+            Path(f.file_path).resolve() for f in findings if committed.commit_of(f) is None
+        }
         if not file_paths:
             return findings
 
@@ -1223,7 +1260,8 @@ class ScanEngine:
         filtered = [
             finding
             for finding in findings
-            if Path(finding.file_path).resolve() not in gitignored_files
+            if committed.commit_of(finding) is not None
+            or Path(finding.file_path).resolve() not in gitignored_files
         ]
         after_count = len(filtered)
 

@@ -334,6 +334,12 @@ changed files runs one history scan. A path outside any git repository, or in a 
 commits, is a scanner error for them, never a clean history: with no blocking finding, guard exits 5
 (scan incomplete).
 
+A finding in an old commit is judged by its file in that commit, not by the file you have today.
+A key committed in plaintext and encrypted later is still reported, though its line now holds an
+encrypted value or an `envdrift:ignore` comment, and `--skip-gitignored` keeps it once the file is
+ignored: the commit still holds the key. A finding in a value that was encrypted in its commit is
+dropped as ciphertext, and a finding whose commit git cannot show is kept.
+
 ### `--entropy` / `--no-entropy`, `-e`
 
 Control entropy-based detection in the native scanner. By default (no flag,
@@ -429,6 +435,9 @@ envdrift guard --no-skip-encrypted
 Skip findings from files that are in `.gitignore`. This uses `git check-ignore` for
 reliable detection of ignored files. Useful for filtering out findings from build
 artifacts, dependencies, or other generated files.
+
+A finding `--history` made in an old commit is never skipped: the file was committed there,
+whatever `.gitignore` says now.
 
 ```bash
 # Skip findings from gitignored files
