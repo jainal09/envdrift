@@ -144,6 +144,43 @@ class TestValidateCiParity:
         assert result.returncode == 0, out
         assert "Validation PASSED" in out, out
 
+    def test_an_encrypted_default_does_not_pass_a_model_check_that_never_ran(
+        self, tmp_path, integration_env
+    ):
+        """The default fails its field, so the model's after-validator never runs.
+
+        Dropping that error passed a PORT of 0, which the validator refuses whatever
+        the secret is: validate --ci must still fail the file, and say why.
+        """
+        _write_schema(
+            tmp_path,
+            """
+            from pydantic import Field, model_validator
+            from pydantic_settings import BaseSettings
+
+            class Settings(BaseSettings):
+                ENVDRIFT_TEST_952_KEY: str = Field("", min_length=1)
+                ENVDRIFT_TEST_952_PORT: int = 8080
+
+                @model_validator(mode="after")
+                def port_positive(self):
+                    if self.ENVDRIFT_TEST_952_PORT <= 0:
+                        raise ValueError("PORT must be positive")
+                    return self
+            """,
+        )
+        (tmp_path / ".env").write_text(
+            "ENVDRIFT_TEST_952_KEY=encrypted:BAAAexample\nENVDRIFT_TEST_952_PORT=0\n",
+            encoding="utf-8",
+        )
+
+        result = _validate_ci(tmp_path, integration_env)
+
+        out = " ".join((result.stdout + result.stderr).split())
+        assert result.returncode == 1, out
+        assert "Validation FAILED" in out, out
+        assert "could not run" in out, out
+
     def test_bool_spelling_on_exits_zero(self, tmp_path, integration_env):
         """#472: DEBUG=on loads in pydantic-settings; --ci must exit 0."""
         _write_schema(

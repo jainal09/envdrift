@@ -40,7 +40,9 @@ Type validation mirrors what the real app does at startup:
   are enforced even when string fields have no individual `Field` constraints.
 - An encrypted value (`encrypted:...` or `ENC[...]`) is not checked against its field's
   constraints, since its plaintext is unknown. Nor is the field's default, which the real
-  app does not use when the file supplies a value.
+  app does not use when the file supplies a value. The exception is a schema with a
+  `mode="after"` or `"wrap"` model validator, or `model_post_init`: those do not run once
+  a field fails, so a default that fails is still reported rather than passing them unchecked.
 - Field and model validators run against the assembled settings values. A model-level
   rejection appears as a `Model validation` type error instead of a false pass.
 - If custom validation raises an unexpected non-validation exception, validation
