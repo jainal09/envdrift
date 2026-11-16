@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from envdrift.cli import app
 
@@ -908,6 +908,89 @@ def test_push_stops_before_any_environment_when_git_still_sees_a_key_file(
     output = " ".join(result.output.split())
     assert result.exit_code == 1, output
     assert "git does not ignore config/.env.keys" in output, output
+    assert pushed == []
+
+
+def _push_recording(monkeypatch, environments) -> tuple[Result, str, list[object]]:
+    """Run push over ``environments`` with the encryption step recorded, not run."""
+    config = SimpleNamespace(
+        partial_encryption=SimpleNamespace(enabled=True, environments=environments)
+    )
+    monkeypatch.setattr("envdrift.cli_commands.partial.load_config", lambda: config)
+    pushed: list[object] = []
+    monkeypatch.setattr(
+        "envdrift.cli_commands.partial.push_partial_encryption",
+        lambda env, check=False: pushed.append(env),
+    )
+    result = runner.invoke(app, ["push"])
+    return result, " ".join(result.output.split()), pushed
+
+
+def _combine_env(name: str, folder: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        clear_file=f"{folder}/.env.{name}.clear",
+        secret_file=f"{folder}/.env.{name}.secret",
+        combined_file=f"{folder}/.env.{name}",
+        secrets_only=False,
+    )
+
+
+def test_push_stops_when_git_cannot_say_whether_a_key_file_is_ignored(monkeypatch, tmp_path: Path):
+    """git check-ignore fails (exit 128): exit 1 with git's error, nothing pushed.
+
+    The 128 used to count as ignored, so push went on. The message does not blame a
+    `!` rule that is not there.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".git" / "index").write_bytes(b"not an index")  # check-ignore exits 128
+    monkeypatch.chdir(tmp_path)
+
+    result, output, pushed = _push_recording(monkeypatch, [_combine_env("production", "config")])
+
+    assert result.exit_code == 1, output
+    assert (
+        "git could not say whether it ignores config/.env.keys "
+        "(git check-ignore exited 128: fatal:" in output
+    ), output
+    assert "re-includes" not in output, output
+    assert "stopped before it encrypted or decrypted any partial-encryption file" in output
+    assert pushed == []
+
+
+def test_push_names_each_key_file_git_does_not_confirm_and_why(monkeypatch, tmp_path: Path):
+    """Each key file is asked about in its own repository, and each failure is named.
+
+    ``app`` and ``lib`` are repositories of their own inside the working directory's:
+    a rule in ``app`` re-includes its key, and git fails in ``lib``.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    for repo in (tmp_path, tmp_path / "app", tmp_path / "lib"):
+        repo.mkdir(exist_ok=True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (tmp_path / "app" / "config").mkdir()
+    (tmp_path / "app" / "config" / ".gitignore").write_text("!.env.keys\n", encoding="utf-8")
+    (tmp_path / "lib" / ".git" / "index").write_bytes(b"not an index")
+    monkeypatch.chdir(tmp_path)
+
+    result, output, pushed = _push_recording(
+        monkeypatch,
+        [_combine_env("production", "app/config"), _combine_env("staging", "lib/config")],
+    )
+
+    assert result.exit_code == 1, output
+    assert "git does not ignore app/config/.env.keys, where dotenvx" in output, output
+    assert (
+        "git could not say whether it ignores lib/config/.env.keys "
+        "(git check-ignore exited 128: fatal:" in output
+    ), output
+    # Each entry is in the .gitignore of the repository that would stage the file.
+    assert "config/.env.keys" in (tmp_path / "app" / ".gitignore").read_text(encoding="utf-8")
+    assert "config/.env.keys" in (tmp_path / "lib" / ".gitignore").read_text(encoding="utf-8")
+    assert not (tmp_path / ".gitignore").exists()
     assert pushed == []
 
 

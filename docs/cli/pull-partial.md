@@ -33,7 +33,8 @@ Like `push`, `pull-partial` first makes sure `.gitignore` lists each combined fi
 and the dotenvx private-key file next to each secret file (`<secret dir>/.env.keys`,
 or one per folder in secrets-only mode), so a key you place there for the pull is
 never committed. If git still does not ignore a key file (a `!` rule re-includes it),
-it exits 1 before decrypting anything. See [push](push.md#description).
+or cannot say whether it does, it exits 1 before decrypting anything. See
+[push](push.md#description).
 
 This command requires partial encryption to be configured in `envdrift.toml`.
 

@@ -170,7 +170,8 @@ envdrift pull-partial --env production
 private-key file to `.gitignore`. dotenvx writes that key to the `.env.keys` next
 to the `.secret` file (for `config/.env.production.secret`, `config/.env.keys`), and
 the entry is relative to the repository root, so it holds when you run `push` from
-a subdirectory. You only need:
+a subdirectory. For a `.secret` file in a git submodule, the entries go in the
+submodule's `.gitignore`. You only need:
 
 ```gitignore
 *.bak
@@ -377,7 +378,8 @@ The configs directory is committed as-is since it is never modified by envdrift.
 dotenvx writes a private key file (`.env.keys`) into each folder whose files it
 encrypts. `envdrift push` adds `secrets/production/.env.keys` to `.gitignore`, and
 with a recursive `pattern` like `**/.env*` it adds the `.env.keys` of every nested
-folder it encrypts too. The entries are relative to the repository root.
+folder it encrypts too. The entries are relative to the root of the repository the
+folder is in (a submodule's, for a folder in a submodule).
 
 ```gitignore
 # Optionally ignore decrypted backups if your editor creates them

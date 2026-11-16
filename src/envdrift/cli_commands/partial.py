@@ -56,7 +56,8 @@ def _ensure_combined_gitignore(envs_to_process) -> None:
     # to each secret file, not ./.env.keys. Run from a repository subdirectory,
     # a cwd entry did not cover them and `git add .` staged the key (#961).
     # ensure_gitignore_entries writes repository-root-relative entries, so they
-    # stay anchored wherever push runs.
+    # stay anchored wherever push runs, each in the .gitignore of the file's own
+    # repository (a submodule's, for a file in one).
     key_files = [key for env_config in envs_to_process for key in dotenvx_key_files(env_config)]
     added_entries = ensure_gitignore_entries([*paths, *key_files])
     if added_entries:
@@ -64,17 +65,27 @@ def _ensure_combined_gitignore(envs_to_process) -> None:
         # never parsed as tags (a [/x] folder raised MarkupError) or emoji codes.
         console.print(Text(f"Updated .gitignore: {', '.join(added_entries)}", style="dim"))
     # Fail closed: an entry can still be overridden (by a later `!` rule in a
-    # .gitignore), and then `git add .` stages the private key. Ask git, and stop
-    # before dotenvx touches a partial-encryption file. (pull --merge gets here
-    # after its earlier steps, which may have decrypted mapped files.)
+    # .gitignore), and then `git add .` stages the private key. Ask git, in each key
+    # file's own repository, and stop before dotenvx touches a partial-encryption file
+    # unless git says it ignores every one. (pull --merge gets here after its earlier
+    # steps, which may have decrypted mapped files.)
     exposed = unignored_paths(key_files)
-    if exposed:
+    re_included = [shown for shown, reason in exposed if reason is None]
+    unconfirmed = [f"{shown} ({reason})" for shown, reason in exposed if reason is not None]
+    stopped = "envdrift stopped before it encrypted or decrypted any partial-encryption file."
+    if re_included:
         print_error(
-            f"git does not ignore {', '.join(exposed)}, where dotenvx keeps the private "
+            f"git does not ignore {', '.join(re_included)}, where dotenvx keeps the private "
             "key, so `git add .` would stage it. A rule in your git ignore files "
-            "re-includes it (a `!` pattern, for example). Fix that and run again: "
-            "envdrift stopped before it encrypted or decrypted any partial-encryption file."
+            f"re-includes it (a `!` pattern, for example). Fix that and run again: {stopped}"
         )
+    if unconfirmed:
+        print_error(
+            f"git could not say whether it ignores {', '.join(unconfirmed)}, where dotenvx "
+            "keeps the private key, so envdrift cannot make sure `git add .` would not "
+            f"stage it. Fix that and run again: {stopped}"
+        )
+    if exposed:
         raise typer.Exit(code=1)
 
 

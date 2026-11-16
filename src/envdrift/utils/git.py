@@ -432,23 +432,69 @@ def is_file_tracked(file_path: Path, *, env: Mapping[str, str] | None = None) ->
 
 def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = None) -> list[str]:
     """
-    Ensure the provided paths are listed in the repo's .gitignore.
+    Ensure the provided paths are listed in their repository's .gitignore.
 
-    Each entry is the path relative to the repository root, escaped so that it matches
+    Each path's entry goes in the .gitignore at the root of the repository that would
+    stage it, the one git reports for the path's folder (``_repository_of``). For a path
+    in a submodule that is the submodule, whose ``git add`` never reads the superproject's
+    .gitignore. The entry is the path relative to that root, escaped so that it matches
     that path and nothing else (``gitignore_escape``).
 
     Parameters:
         paths: Iterable of file paths to ignore.
-        git_root: Optional git root override; auto-detected when omitted.
+        git_root: Optional git root override: every entry goes in its .gitignore, and a
+            path outside it is skipped. Auto-detected for each path when omitted.
 
     Returns:
-        List of entries added to .gitignore, as written there.
+        List of entries added, as written in their .gitignore files.
     """
-    path_list = [Path(path) for path in paths]
-    git_root = _gitignore_root(path_list, git_root)
-    if git_root is None:
-        return []
+    added: list[str] = []
+    for root, group in _by_repository(paths, git_root).items():
+        added.extend(_add_gitignore_entries(root, group))
+    return added
 
+
+def _by_repository(paths: Iterable[Path], git_root: Path | None) -> dict[Path, list[Path]]:
+    """``paths`` by the root of the repository that would stage each.
+
+    That is ``git_root`` for every path when it is given, else each path's own repository
+    (``_repository_of``). A path outside every repository is left out.
+    """
+    groups: dict[Path, list[Path]] = {}
+    for path in (Path(path) for path in paths):
+        root = git_root if git_root is not None else _repository_of(path)
+        if root is not None:
+            groups.setdefault(root, []).append(path)
+    return groups
+
+
+def _repository_of(path: Path) -> Path | None:
+    """The root of the repository that would stage the file ``path`` names.
+
+    git reports it for the file's folder, or for its nearest existing parent when the
+    folder does not exist yet. Symlinks are followed: it is the repository of the file the
+    bytes are in. None when that folder is outside every repository, or git cannot say.
+    """
+    folder = _nearest_folder(path.resolve())
+    return None if folder is None else get_git_root(folder)
+
+
+def _nearest_folder(resolved: Path) -> Path | None:
+    """The nearest of the parents of ``resolved`` that is a directory, if any."""
+    for folder in resolved.parents:
+        try:
+            if folder.is_dir():
+                return folder
+        except OSError:  # a parent this process cannot even look at
+            return None
+    return None
+
+
+def _add_gitignore_entries(git_root: Path, path_list: list[Path]) -> list[str]:
+    """Add each path in ``path_list`` that git does not ignore yet to ``git_root``'s .gitignore.
+
+    Returns the entries added, as written there.
+    """
     gitignore_path = git_root / ".gitignore"
     content = ""
     existing_lines: list[str] = []
@@ -501,30 +547,73 @@ def gitignore_escape(name: str) -> str:
     return kept + "\\ " * (len(escaped) - len(kept))
 
 
-def unignored_paths(paths: Iterable[Path], *, git_root: Path | None = None) -> list[str]:
-    """The paths in ``paths`` that git does not ignore, relative to the repository root.
+def unignored_paths(
+    paths: Iterable[Path], *, git_root: Path | None = None
+) -> list[tuple[str, str | None]]:
+    """The paths in ``paths`` that git does not confirm it ignores, each with the reason.
 
     The check behind ``ensure_gitignore_entries``, to run after it: an entry it wrote can
-    still be overridden, by a later ``!`` rule in a .gitignore for example. The
-    repository's own rules count, a user's global excludes file does not. A path outside
-    the repository, or one git cannot answer for (in a submodule, say), is not listed.
+    still be overridden, by a later ``!`` rule in a .gitignore for example. Each path is
+    asked about in the repository that would stage it, where ``ensure_gitignore_entries``
+    writes its entry (``git_root`` when given, and then a path outside it is skipped). The
+    repository's own rules count, a user's global excludes file does not.
+
+    It fails closed: every path in a repository is listed unless git says it ignores it.
+    The reason is None when git says it does not (a rule re-includes it), else why git
+    could not say: it failed, timed out or could not run, for example. A path outside
+    every repository is not listed, since git cannot stage it.
+
+    Each path is shown relative to ``git_root``, else to the root of the working
+    directory's repository (a submodule's key as ``sub/config/.env.keys``, say), and in
+    full when it is not in there.
     """
-    path_list = [Path(path) for path in paths]
-    git_root = _gitignore_root(path_list, git_root)
-    if git_root is None:
+    listed: list[tuple[Path, str | bool]] = []
+    for path in (Path(path) for path in paths):
+        resolved = path.resolve()
+        verdict = _ignore_status(resolved, git_root)
+        if verdict is not None and verdict is not True:
+            listed.append((resolved, verdict))
+    if not listed:
         return []
+    base = git_root if git_root is not None else _working_directory_root()
     return [
-        path.resolve().relative_to(git_root).as_posix()
-        for path in path_list
-        if _check_ignore(path, git_root) == 1
+        (_shown(resolved, base), None if verdict is False else str(verdict))
+        for resolved, verdict in listed
     ]
 
 
-def _gitignore_root(path_list: list[Path], git_root: Path | None) -> Path | None:
-    """``git_root``, else the repository of the first path or of the working directory."""
-    if git_root is not None or not path_list:
-        return git_root
-    return get_git_root(path_list[0]) or get_git_root(Path.cwd())
+def _ignore_status(resolved: Path, git_root: Path | None) -> str | bool | None:
+    """``_ignore_verdict`` for ``resolved`` in the repository that would stage it.
+
+    That is ``git_root`` when it is given, else the one git reports (``_repository_of``).
+    None when there is none: ``resolved`` is outside ``git_root``, or outside every
+    repository. When git reports none although a ``.git`` is above ``resolved``, git
+    failed there, and the verdict says so.
+    """
+    if git_root is not None:
+        return _ignore_verdict(resolved, git_root) if resolved.is_relative_to(git_root) else None
+    root = _repository_of(resolved)
+    if root is not None:
+        return _ignore_verdict(resolved, root)
+    checkout = _checkout_above(resolved.parent)
+    if checkout is None:
+        return None  # outside every repository: git cannot stage it
+    return f"git did not report the repository at {checkout}"
+
+
+def _working_directory_root() -> Path | None:
+    """The root of the working directory's repository, if it is in one."""
+    try:
+        return get_git_root(Path.cwd())
+    except OSError:  # the working directory is gone
+        return None
+
+
+def _shown(resolved: Path, base: Path | None) -> str:
+    """``resolved`` relative to ``base`` when it is in there, else in full (POSIX)."""
+    if base is not None and resolved.is_relative_to(base):
+        return resolved.relative_to(base).as_posix()
+    return resolved.as_posix()
 
 
 def ensure_gitignore_glob(sample: Path, pattern: str) -> str | None:
@@ -542,7 +631,8 @@ def ensure_gitignore_glob(sample: Path, pattern: str) -> str | None:
 
     Raises:
         OSError: ``.gitignore`` could not be read or written, or git could not
-            say where the repository of ``sample`` is although it is in one.
+            say where the repository of ``sample`` is although it is in one, or
+            whether it ignores ``sample`` with the entry in place.
         GitignoreOverrideError: git still does not ignore ``sample`` with the
             entry in place, because a later ``!`` rule (in a nested
             ``.gitignore``, say) re-includes it.
@@ -563,12 +653,15 @@ def ensure_gitignore_glob(sample: Path, pattern: str) -> str | None:
     scope = "/".join(gitignore_escape(part) for part in folder.parts)
     entry = f"{scope}/{pattern}" if scope else pattern
     added = _append_gitignore_entry(git_root / ".gitignore", entry)
-    if not _is_path_ignored(sample, git_root):
+    verdict = _ignore_verdict(sample, git_root)
+    if verdict is False:
         raise GitignoreOverrideError(
             f"git would still track {sample.name}: a '!' rule in a .gitignore re-includes "
             f"files that '{entry}' ignores. Remove that rule or make it more specific, "
             f"and re-run."
         )
+    if verdict is not True:
+        raise OSError(f"envdrift cannot make sure git ignores {sample.name}: {verdict}")
     return added
 
 
@@ -578,13 +671,20 @@ def _require_outside_a_checkout(sample: Path) -> None:
     That is git failing (a timeout, a broken repository), not a folder outside
     a repository: nothing then makes sure git ignores ``sample``.
     """
-    folder = sample.parent.resolve()
+    candidate = _checkout_above(sample.parent.resolve())
+    if candidate is not None:
+        raise OSError(
+            f"git did not report the repository at {candidate}, so envdrift cannot "
+            f"make sure git ignores {sample.name}"
+        )
+
+
+def _checkout_above(folder: Path) -> Path | None:
+    """The nearest of ``folder`` and its parents that holds a ``.git``, if any."""
     for candidate in (folder, *folder.parents):
         if (candidate / ".git").exists():
-            raise OSError(
-                f"git did not report the repository at {candidate}, so envdrift cannot "
-                f"make sure git ignores {sample.name}"
-            )
+            return candidate
+    return None
 
 
 def _append_gitignore_entry(gitignore_path: Path, entry: str) -> str | None:
@@ -605,19 +705,24 @@ def _append_gitignore_entry(gitignore_path: Path, entry: str) -> str | None:
 
 def _is_path_ignored(path: Path, git_root: Path) -> bool:
     """Whether git ignores ``path``; ``False`` too when git cannot say."""
-    return _check_ignore(path, git_root) == 0
+    return _ignore_verdict(path, git_root) is True
 
 
-def _check_ignore(path: Path, git_root: Path) -> int | None:
-    """``git check-ignore``'s exit code for ``path``: 0 ignored, 1 not ignored.
+def _ignore_verdict(path: Path, git_root: Path) -> str | bool:
+    """Whether git ignores ``path`` in the repository at ``git_root``, or why git cannot say.
 
-    None when ``path`` is outside ``git_root`` or git could not be run; git's own fatal
-    errors (a path in a submodule, say) exit 128.
+    True or False is git check-ignore's answer (exit 0 or 1). Anything else is the reason
+    it gave none: ``path`` is outside ``git_root``, git failed (exit 128 for a path in a
+    submodule of ``git_root``, say), timed out or could not run.
+
+    The path follows ``--`` and starts with ``./``, so git reads it as a path. Without
+    them a folder named ``-secrets`` was read as options (exit 129), and one named
+    ``:secrets`` as pathspec magic: git answered for ``secrets/.env.keys`` instead.
     """
     try:
         relative_path = path.resolve().relative_to(git_root)
     except ValueError:
-        return None
+        return f"it is not under the repository root git reports ({git_root})"
 
     try:
         result = run_tool(
@@ -627,7 +732,8 @@ def _check_ignore(path: Path, git_root: Path) -> int | None:
                 "core.excludesfile=/dev/null",
                 "check-ignore",
                 "-q",
-                relative_path.as_posix(),
+                "--",
+                f"./{relative_path.as_posix()}",
             ],
             cwd=str(git_root),
             env=_hook_env(git_root),
@@ -637,6 +743,11 @@ def _check_ignore(path: Path, git_root: Path) -> int | None:
             errors="surrogateescape",
             timeout=10,
         )
-        return result.returncode
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
+    except subprocess.TimeoutExpired:
+        return "git check-ignore timed out"
+    except OSError as exc:  # no git, or git_root is not a directory
+        return f"git could not run: {exc}"
+    if result.returncode in (0, 1):
+        return result.returncode == 0
+    detail = next((line.strip() for line in result.stderr.splitlines() if line.strip()), "")
+    return f"git check-ignore exited {result.returncode}" + (f": {detail}" if detail else "")

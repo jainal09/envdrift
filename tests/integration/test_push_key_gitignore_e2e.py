@@ -205,22 +205,38 @@ _VAULT_SYNC = (
 )
 
 
-@pytest.mark.parametrize(
+# Every command that writes the key files' entries, then asks git about them.
+_EACH_COMMAND = pytest.mark.parametrize(
     "args",
     [["push"], ["pull-partial"], ["pull", "--skip-sync", "--merge"]],
     ids=["push", "pull-partial", "pull-merge"],
 )
-def test_a_rule_that_re_includes_the_key_file_stops_the_command(
-    git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str], args: list[str]
-) -> None:
-    """Fail closed: git still sees the key file after envdrift's entry, so dotenvx never
-    touches a partial-encryption file."""
-    _write_combine_config(git_repo)
+
+
+def _write_command_config(git_repo: Path, args: list[str], folder: str = "config") -> None:
+    """The combine-mode config ``args`` runs with, its files in ``folder``."""
+    _write_combine_config(git_repo, folder)
     if args[0] == "pull":
         config = git_repo / "envdrift.toml"
         config.write_text(_VAULT_SYNC + config.read_text(encoding="utf-8"), encoding="utf-8")
         # The mapping's plaintext .env.production is skipped by the decrypt step.
         (git_repo / ".env.production").write_text("DEBUG=false\n", encoding="utf-8")
+
+
+def _assert_stopped_before_dotenvx(git_repo: Path, folder: str = "config") -> None:
+    """dotenvx wrote no key and left the secret file as it was."""
+    assert not (git_repo / folder / ".env.keys").exists()
+    secret = (git_repo / folder / ".env.production.secret").read_text(encoding="utf-8")
+    assert secret == f"JWT_SECRET={_JWT_VALUE}\n"
+
+
+@_EACH_COMMAND
+def test_a_rule_that_re_includes_the_key_file_stops_the_command(
+    git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str], args: list[str]
+) -> None:
+    """Fail closed: git still sees the key file after envdrift's entry, so dotenvx never
+    touches a partial-encryption file."""
+    _write_command_config(git_repo, args)
     (git_repo / "config" / ".gitignore").write_text("!.env.keys\n", encoding="utf-8")
 
     result = _run_envdrift(
@@ -234,9 +250,122 @@ def test_a_rule_that_re_includes_the_key_file_stops_the_command(
     assert result.returncode == 1, out
     assert "git does not ignore config/.env.keys" in out, out
     assert "stopped before it encrypted or decrypted any partial-encryption file" in out, out
-    assert not (git_repo / "config" / ".env.keys").exists()
-    secret = (git_repo / "config" / ".env.production.secret").read_text(encoding="utf-8")
-    assert secret == f"JWT_SECRET={_JWT_VALUE}\n"
+    _assert_stopped_before_dotenvx(git_repo)
+
+
+@_EACH_COMMAND
+def test_a_key_file_in_a_folder_named_like_an_option_is_checked_too(
+    git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str], args: list[str]
+) -> None:
+    """git read ``-secrets/.env.keys`` as options (exit 129), which counted as ignored.
+
+    So with ``!.env.keys`` in ``-secrets/.gitignore`` the command went on, and dotenvx
+    wrote a private key that ``git add .`` staged.
+    """
+    _write_command_config(git_repo, args, "-secrets")
+    (git_repo / "-secrets" / ".gitignore").write_text("!.env.keys\n", encoding="utf-8")
+
+    result = _run_envdrift(
+        args,
+        cwd=git_repo,
+        integration_pythonpath=integration_pythonpath,
+        envdrift_cmd=envdrift_cmd,
+    )
+
+    out = _flat(result)
+    assert result.returncode == 1, out
+    assert "git does not ignore -secrets/.env.keys" in out, out
+    assert "stopped before it encrypted or decrypted any partial-encryption file" in out, out
+    _assert_stopped_before_dotenvx(git_repo, "-secrets")
+
+
+@_EACH_COMMAND
+def test_git_failing_to_answer_stops_the_command(
+    git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str], args: list[str]
+) -> None:
+    """Fail closed: git check-ignore exits 128 (a corrupt index), so nothing confirms the
+    key file is ignored. The 128 used to count as ignored, and the command went on."""
+    _write_command_config(git_repo, args)
+    (git_repo / ".git" / "index").write_bytes(b"not an index")
+
+    result = _run_envdrift(
+        args,
+        cwd=git_repo,
+        integration_pythonpath=integration_pythonpath,
+        envdrift_cmd=envdrift_cmd,
+    )
+
+    out = _flat(result)
+    assert result.returncode == 1, out
+    assert (
+        "git could not say whether it ignores config/.env.keys "
+        "(git check-ignore exited 128: fatal:" in out
+    ), out
+    assert "re-includes" not in out, out
+    assert "stopped before it encrypted or decrypted any partial-encryption file" in out, out
+    _assert_stopped_before_dotenvx(git_repo)
+
+
+@pytest.mark.parametrize("submodule_first", [False, True], ids=["main-first", "submodule-first"])
+def test_push_ignores_a_submodule_s_key_file_in_the_submodule(
+    git_repo: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    integration_pythonpath: str,
+    envdrift_cmd: list[str],
+    submodule_first: bool,
+) -> None:
+    """One environment in the main checkout, one in a git submodule.
+
+    Every entry went in the first key file's repository. ``git add`` in the submodule
+    never reads the superproject's .gitignore, and check-ignore there exited 128 for the
+    submodule's key, which counted as ignored: push went on, and ``git add .`` in the
+    submodule staged the private key. With the submodule's environment first, the main
+    checkout's key got no entry at all.
+    """
+    upstream = tmp_path_factory.mktemp("upstream")
+    identity = ["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false"]
+    _git(upstream, "init", "-q")
+    _git(upstream, *identity, "commit", "-q", "--allow-empty", "-m", "init")
+    _git(
+        git_repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(upstream), "sub"
+    )
+    submodule = git_repo / "sub"
+    environments = []
+    for name, folder in (("production", "config"), ("staging", "sub/config")):
+        (git_repo / folder).mkdir(parents=True)
+        (git_repo / folder / f".env.{name}.clear").write_text("DEBUG=false\n", encoding="utf-8")
+        (git_repo / folder / f".env.{name}.secret").write_text(
+            f"JWT_SECRET={_JWT_VALUE}\n", encoding="utf-8"
+        )
+        environments.append(
+            "[[partial_encryption.environments]]\n"
+            f'name = "{name}"\n'
+            f'clear_file = "{folder}/.env.{name}.clear"\n'
+            f'secret_file = "{folder}/.env.{name}.secret"\n'
+            f'combined_file = "{folder}/.env.{name}"\n'
+        )
+    if submodule_first:
+        environments.reverse()
+    (git_repo / "envdrift.toml").write_text(
+        "[partial_encryption]\nenabled = true\n\n" + "\n".join(environments), encoding="utf-8"
+    )
+
+    result = _run_envdrift(
+        ["push"],
+        cwd=git_repo,
+        integration_pythonpath=integration_pythonpath,
+        envdrift_cmd=envdrift_cmd,
+    )
+
+    assert result.returncode == 0, _flat(result)
+    _assert_ignored(git_repo, "config/.env.keys")
+    _assert_ignored(submodule, "config/.env.keys")
+    for repo, combined in (
+        (git_repo, "config/.env.production"),
+        (submodule, "config/.env.staging"),
+    ):
+        ignored = _git(repo, "check-ignore", "-q", "--", combined, check=False)
+        assert ignored.returncode == 0, (repo / ".gitignore").read_text(encoding="utf-8")
 
 
 def test_pull_partial_ignores_a_key_file_placed_next_to_the_secret_file(
