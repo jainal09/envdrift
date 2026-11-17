@@ -15,6 +15,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -126,6 +127,48 @@ def _deterministic_child_env() -> dict[str, str]:
     env.pop("FORCE_COLOR", None)
     env["NO_COLOR"] = "1"
     return env
+
+
+@pytest.fixture
+def recording_proxy(monkeypatch: pytest.MonkeyPatch) -> Generator[list[str], None, None]:
+    """Route the HTTP(S) proxy of child processes to a local listener; yield what it was asked.
+
+    The listener records the first line of each request (``CONNECT host:443 ...``) and refuses
+    it, so nothing leaves the machine.
+    """
+    requests: list[str] = []
+    server = socket.create_server(("127.0.0.1", 0))
+    # accept() wakes up to see the stop: closing the socket does not wake it on Linux.
+    server.settimeout(0.2)
+    stop = threading.Event()
+
+    def serve() -> None:
+        while not stop.is_set():
+            try:
+                conn, _ = server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            with conn:
+                conn.settimeout(5)
+                try:
+                    requests.append(conn.recv(4096).decode("latin-1").partition("\r\n")[0])
+                    conn.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                except OSError:
+                    pass
+
+    listener = threading.Thread(target=serve, daemon=True)
+    listener.start()
+    proxy = f"http://127.0.0.1:{server.getsockname()[1]}"
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.setenv(name, proxy)
+    for name in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    yield requests
+    stop.set()
+    listener.join(timeout=5)
+    server.close()
 
 
 def _force_utf8_subprocess_kwargs(kwargs: dict) -> None:

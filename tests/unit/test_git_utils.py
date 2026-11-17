@@ -5,21 +5,41 @@ from __future__ import annotations
 import os
 import subprocess  # nosec B404
 import sys
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePath, PureWindowsPath
 from unittest.mock import patch
 
 import pytest
 
 from envdrift.utils.git import (
+    GitError,
     ensure_gitignore_entries,
+    file_at_commit,
     get_file_from_git,
     get_git_root,
+    git_tracks,
     has_git_head,
     is_file_modified,
     is_file_tracked,
     is_git_repo,
     restore_file_from_git,
 )
+
+
+def _repo_with(tmp_path: Path, files: dict[str, str]) -> Path:
+    """A repository at ``tmp_path`` with ``files`` (name: content) in one commit."""
+    for name, content in files.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        # As bytes, so the line breaks are the same on every platform.
+        (tmp_path / name).write_bytes(content.encode())
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "test@test.com"],
+        ["config", "user.name", "Test"],
+        ["add", "-f", "--", *(f":(literal){name}" for name in files)],
+        ["commit", "-q", "-m", "initial"],
+    ):
+        subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, check=True)
+    return tmp_path
 
 
 class TestIsGitRepo:
@@ -145,6 +165,124 @@ class TestIsFileTracked:
         test_file.write_text("content")
 
         assert is_file_tracked(test_file) is False
+
+    def test_a_file_in_a_folder_whose_name_starts_with_a_dash_is_tracked(self, tmp_path: Path):
+        """git read ``-svc/.env.keys`` as options and exited 129: "not tracked" (#1016)."""
+        repo = _repo_with(tmp_path, {"-svc/.env.keys": "K=1\n"})
+
+        assert is_file_tracked(repo / "-svc" / ".env.keys") is True
+
+    def test_an_untracked_file_whose_name_starts_with_a_dash_is_not_tracked(self, tmp_path: Path):
+        """``-x.env`` was ``-x .env``, an exclude pattern: git listed every file (#1016)."""
+        repo = _repo_with(tmp_path, {"app.txt": "content\n"})
+        (repo / "-x.env").write_text("A=1\n")
+
+        assert is_file_tracked(repo / "-x.env") is False
+
+    def test_a_glob_name_is_not_tracked_because_a_file_it_matches_is(self, tmp_path: Path):
+        """``[prod].env`` matched the tracked ``p.env`` as a glob (#1016)."""
+        repo = _repo_with(tmp_path, {"p.env": "A=1\n"})
+        (repo / "[prod].env").write_text("A=1\n")
+
+        assert is_file_tracked(repo / "[prod].env") is False
+
+    def test_git_tracks_raises_when_git_cannot_tell(self, tmp_path: Path):
+        """A git failure is not "not tracked" (#1016); ``is_file_tracked`` still says False."""
+        repo = _repo_with(tmp_path, {".env.keys": "K=1\n"})
+        (repo / ".git" / "index").write_bytes(b"not an index")
+
+        with pytest.raises(GitError, match="git could not tell whether it tracks"):
+            git_tracks(repo / ".env.keys")
+        assert is_file_tracked(repo / ".env.keys") is False
+
+    def test_git_tracks_raises_when_git_does_not_answer(self, tmp_path: Path):
+        """A timeout is not "not tracked" either (#1016)."""
+        timeout = subprocess.TimeoutExpired(cmd="git", timeout=10)
+        with (
+            patch("envdrift.utils.git.get_git_root", return_value=tmp_path),
+            patch("envdrift.utils.git.run_tool", side_effect=timeout),
+            pytest.raises(GitError, match="git could not tell whether it tracks"),
+        ):
+            git_tracks(tmp_path / "test.txt")
+
+    def test_git_tracks_raises_when_git_cannot_use_the_repository_above(self, tmp_path: Path):
+        """A ``.git`` git cannot use is not "outside a repository" (#1016).
+
+        get_git_root gives None both outside a repository and when git fails, as it does
+        here, where ``HEAD`` is unreadable: that read as "not tracked".
+        """
+        repo = _repo_with(tmp_path, {".env.keys": "K=1\n"})
+        (repo / ".git" / "HEAD").write_text("not a ref\n")
+
+        with pytest.raises(GitError, match="git could not tell whether it tracks"):
+            git_tracks(repo / ".env.keys")
+        assert is_file_tracked(repo / ".env.keys") is False
+
+    def test_a_literal_pathspecs_environment_does_not_change_the_answers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Under GIT_LITERAL_PATHSPECS ``:(literal)x`` named a file called so (#1016).
+
+        The tracked key read as untracked, its change as none, and its restore failed.
+        """
+        repo = _repo_with(tmp_path, {".env.keys": "K=1\n"})
+        monkeypatch.setenv("GIT_LITERAL_PATHSPECS", "1")
+
+        assert git_tracks(repo / ".env.keys") is True
+        (repo / ".env.keys").write_text("K=2\n")
+        assert is_file_modified(repo / ".env.keys") is True
+        assert restore_file_from_git(repo / ".env.keys") is True
+        assert (repo / ".env.keys").read_text() == "K=1\n"
+
+    def test_git_tracks_says_a_file_outside_any_repository_is_not_tracked(self, tmp_path: Path):
+        (tmp_path / ".env.keys").write_text("K=1\n")
+
+        assert git_tracks(tmp_path / ".env.keys") is False
+
+    def test_a_file_outside_the_repository_root_is_not_tracked(self, tmp_path: Path):
+        """A file that resolves outside the root git reports is not one it tracks."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside.env"
+        outside.write_text("A=1\n")
+
+        with patch("envdrift.utils.git.get_git_root", return_value=repo):
+            assert git_tracks(outside) is False
+
+
+class TestFileAtCommit:
+    """The text of a file as a commit holds it, for the history scan (#1014)."""
+
+    def test_reads_the_file_as_the_commit_holds_it(self, tmp_path: Path):
+        repo = _repo_with(tmp_path, {"app.env": "A=1\n"})
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        (repo / "app.env").write_bytes(b"A=2\n")
+
+        assert file_at_commit(repo, PurePath("app.env"), commit) == "A=1\n"
+
+    def test_no_line_break_is_translated(self, tmp_path: Path):
+        """A lone ``\\r`` stays in its line: git and the scanners count lines at ``\\n`` only."""
+        repo = _repo_with(tmp_path, {"app.env": "A=1\rB=2\nC=3\n"})
+
+        assert file_at_commit(repo, PurePath("app.env"), "HEAD") == "A=1\rB=2\nC=3\n"
+
+    def test_a_folder_that_is_no_repository_has_none(self, tmp_path: Path):
+        (tmp_path / "app.env").write_bytes(b"A=1\n")
+
+        assert file_at_commit(tmp_path, PurePath("app.env"), "0123abcd") is None
+
+    def test_a_commit_that_does_not_hold_the_file_has_none(self, tmp_path: Path):
+        repo = _repo_with(tmp_path, {"app.env": "A=1\n"})
+
+        assert file_at_commit(repo, PurePath("other.env"), "HEAD") is None
+
+    def test_git_that_cannot_run_gives_none(self, tmp_path: Path):
+        repo = _repo_with(tmp_path, {"app.env": "A=1\n"})
+
+        with patch("envdrift.utils.git.run_tool", side_effect=OSError("no git")):
+            assert file_at_commit(repo, PurePath("app.env"), "HEAD") is None
 
 
 class TestGetFileFromGit:
@@ -291,6 +429,19 @@ class TestRestoreFileFromGit:
 
         assert restore_file_from_git(test_file) is False
 
+    def test_restores_nothing_but_the_file_it_names(self, tmp_path: Path):
+        """``[p].env`` is not restored by checking out ``p.env`` (#1016).
+
+        As a glob it matched the tracked ``p.env``, so the restore "succeeded" by discarding
+        the local changes to another file.
+        """
+        repo = _repo_with(tmp_path, {"p.env": "committed\n"})
+        (repo / "p.env").write_text("local change\n")
+        (repo / "[p].env").write_text("untracked\n")
+
+        assert restore_file_from_git(repo / "[p].env") is False
+        assert (repo / "p.env").read_text() == "local change\n"
+
 
 class TestIsFileModified:
     """Tests for is_file_modified function."""
@@ -331,6 +482,19 @@ class TestIsFileModified:
         test_file.write_text("modified")
 
         assert is_file_modified(test_file) is True
+
+    def test_an_unchanged_file_whose_name_starts_with_a_dash_is_not_modified(self, tmp_path: Path):
+        """git read ``-x.env`` as options, and the error read as "modified" (#1016)."""
+        repo = _repo_with(tmp_path, {"-x.env": "A=1\n"})
+
+        assert is_file_modified(repo / "-x.env") is False
+
+    def test_a_glob_name_is_not_modified_because_a_file_it_matches_is(self, tmp_path: Path):
+        """``[prod].env`` reported the changes to ``p.env`` (#1016)."""
+        repo = _repo_with(tmp_path, {"p.env": "A=1\n", "[prod].env": "A=1\n"})
+        (repo / "p.env").write_text("A=2\n")
+
+        assert is_file_modified(repo / "[prod].env") is False
 
     def test_returns_true_for_non_git_repo(self, tmp_path: Path):
         """Should return True (treat as modified) when not in a git repo."""
@@ -465,7 +629,10 @@ class TestGitUtilsExceptions:
         """Should return False on exceptions."""
         with (
             patch("envdrift.utils.git.get_git_root", return_value=tmp_path),
-            patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10)),
+            patch(
+                "envdrift.utils.git.run_tool",
+                side_effect=subprocess.TimeoutExpired(cmd="git", timeout=10),
+            ),
         ):
             assert is_file_tracked(tmp_path / "test.txt") is False
 

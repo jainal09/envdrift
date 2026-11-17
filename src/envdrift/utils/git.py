@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import subprocess  # nosec B404
 from collections.abc import Iterable, Mapping
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from envdrift.utils.deadline import run_tool
 
@@ -72,6 +72,24 @@ def without_git_location(environ: Mapping[str, str] | None = None) -> dict[str, 
     """
     source = os.environ if environ is None else environ
     return {key: value for key, value in source.items() if key not in _REPOSITORY_VARIABLES}
+
+
+# Variables that change how git reads a pathspec. Under GIT_LITERAL_PATHSPECS ``:(literal)x``
+# names a file called so, and the tracked ``x`` was "not tracked"; GIT_ICASE_PATHSPECS matches
+# a name in another case.
+_PATHSPEC_VARIABLES = frozenset(
+    {"GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"}
+)
+
+
+def literal_pathspec_env(env: Mapping[str, str] | None) -> dict[str, str]:
+    """``env`` (this process's when None) for a git run that names a file by a literal pathspec.
+
+    Without the variables that change how git reads a pathspec, ``:(literal)<path>`` names
+    that one file whatever the environment says (#1016).
+    """
+    source = os.environ if env is None else env
+    return {key: value for key, value in source.items() if key not in _PATHSPEC_VARIABLES}
 
 
 def _hook_env(git_root: Path) -> dict[str, str] | None:
@@ -363,6 +381,48 @@ def get_file_from_git(file_path: Path, ref: str = "HEAD") -> str | None:
         return None
 
 
+def _git_entry_above(path: Path) -> Path | None:
+    """The nearest ``.git`` (a repository, or the file naming one) above ``path``, or None."""
+    start = (path if path.is_dir() else path.parent).resolve()
+    for folder in (start, *start.parents):
+        if (folder / ".git").exists():
+            return folder / ".git"
+    return None
+
+
+def file_at_commit(root: Path, relative_path: PurePath, commit: str) -> str | None:
+    """The text of ``relative_path`` in the repository at ``root`` as ``commit`` holds it.
+
+    None when git cannot show it. The file is named by its path in the repository, so no
+    symbolic link made since is followed (#1014). Its bytes are read as they are: no line
+    break is translated, so a lone ``\\r`` stays in its line, as git and the scanners count
+    lines at ``\\n`` only.
+    """
+    try:
+        result = run_tool(
+            ["git", "show", f"{commit}:{relative_path.as_posix()}"],
+            cwd=str(root),
+            env=_hook_env(root),
+            capture_output=True,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode("utf-8", errors="surrogateescape")
+
+
+def _literal_pathspec(relative_path: Path) -> str:
+    """``relative_path`` as a pathspec that names that one file and nothing else.
+
+    Pass it after ``--``, so that a name starting with ``-`` is not an option. ``:(literal)``
+    stops git from reading ``[prod]`` as a glob, which matched ``p.env`` too, and a leading
+    ``:`` as pathspec magic, which named another file (#1016).
+    """
+    return f":(literal){relative_path.as_posix()}"
+
+
 def is_file_modified(file_path: Path) -> bool:
     """
     Check if a file has been modified compared to HEAD.
@@ -383,9 +443,9 @@ def is_file_modified(file_path: Path) -> bool:
 
         # Check for both staged and unstaged modifications
         result = run_tool(
-            ["git", "status", "--porcelain", str(relative_path)],
+            ["git", "status", "--porcelain", "--", _literal_pathspec(relative_path)],
             cwd=str(git_root),
-            env=_hook_env(git_root),
+            env=literal_pathspec_env(_hook_env(git_root)),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -421,9 +481,9 @@ def restore_file_from_git(file_path: Path, ref: str = "HEAD") -> bool:
         relative_path = file_path.resolve().relative_to(git_root)
 
         result = run_tool(
-            ["git", "checkout", ref, "--", str(relative_path)],
+            ["git", "checkout", ref, "--", _literal_pathspec(relative_path)],
             cwd=str(git_root),
-            env=_hook_env(git_root),
+            env=literal_pathspec_env(_hook_env(git_root)),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -448,29 +508,83 @@ def is_file_tracked(file_path: Path, *, env: Mapping[str, str] | None = None) ->
             ``without_git_location()`` always asks the index of the file's own repository.
 
     Returns:
-        True if the file is tracked by git, False otherwise.
+        True if the file is tracked by git, False otherwise, and False when git cannot tell.
+        ``git_tracks`` raises instead.
     """
-    git_root = get_git_root(file_path)
-    if not git_root:
+    try:
+        return git_tracks(file_path, env=env)
+    except GitError:
         return False
 
+
+def git_tracks(file_path: Path, *, env: Mapping[str, str] | None = None) -> bool:
+    """Whether git tracks ``file_path``, as ``is_file_tracked`` says, or raise when it cannot tell.
+
+    A file outside any repository is not tracked. git failing, timing out or not running at all
+    is not an answer, so it is not read as "not tracked" (#1016): neither for the file, nor for
+    the repository a ``.git`` above it names, which get_git_root cannot tell from none.
+
+    Raises:
+        GitError: git could not tell whether it tracks the file.
+    """
+    git_root = _tracking_root(file_path)
+    if git_root is None:
+        return False
     try:
         relative_path = file_path.resolve().relative_to(git_root)
+    except ValueError:
+        return False  # not below the repository's root, so not a file it tracks
+    return _listed_by_git(file_path, git_root, relative_path, env)
 
+
+def _tracking_root(file_path: Path) -> Path | None:
+    """The root of the repository that could track ``file_path``; None outside any repository.
+
+    Raises:
+        GitError: a ``.git`` is above the file, and git finds no repository there.
+    """
+    git_root = get_git_root(file_path)
+    if git_root is None and _git_entry_above(file_path) is not None:
+        raise GitError(
+            f"git could not tell whether it tracks {file_path}: it found no repository "
+            "there, though a .git is above it"
+        )
+    return git_root
+
+
+def _listed_by_git(
+    file_path: Path, git_root: Path, relative_path: Path, env: Mapping[str, str] | None
+) -> bool:
+    """Whether ``git ls-files --error-unmatch`` lists ``relative_path``: exit 0 it does, 1 not.
+
+    Raises:
+        GitError: git failed with another exit, timed out or could not run.
+    """
+    try:
         result = run_tool(
-            ["git", "ls-files", "--error-unmatch", str(relative_path)],
+            ["git", "ls-files", "--error-unmatch", "--", _literal_pathspec(relative_path)],
             cwd=str(git_root),
-            env=_hook_env(git_root) if env is None else env,
+            env=literal_pathspec_env(_hook_env(git_root) if env is None else env),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="surrogateescape",
             timeout=10,
         )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise GitError(f"git could not tell whether it tracks {file_path}: {exc}") from exc
+    if result.returncode not in (0, 1):  # 1: the file is not tracked
+        raise GitError(
+            f"git could not tell whether it tracks {file_path} "
+            f"(exit {result.returncode}){_first_line(result.stderr)}"
+        )
+    return result.returncode == 0
 
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
-        return False
+
+def _first_line(stderr: str) -> str:
+    """``": "`` and the first line of git's ``stderr``, or "" when it printed nothing."""
+    lines = stderr.strip().splitlines()
+    return f": {lines[0]}" if lines else ""
 
 
 def ensure_gitignore_entries(paths: Iterable[Path], *, git_root: Path | None = None) -> list[str]:

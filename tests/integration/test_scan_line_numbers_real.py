@@ -153,15 +153,10 @@ def test_a_native_key_after_a_nul_in_an_encrypted_value_is_found(repo: Path):
 
 
 @requires_gitleaks
-@pytest.mark.xfail(
-    strict=False,
-    raises=AssertionError,
-    reason="a history finding is judged by the working-tree line (see #1014)",
-)
 def test_a_secret_in_history_is_kept_when_its_line_is_encrypted_now(repo: Path):
-    """A key committed in plaintext stays in history after its file is encrypted. The engine
-    judged gitleaks' finding of it by line 10 of today's file, which holds an encrypted value, and
-    dropped it, so guard reported a clean scan.
+    """A key committed in plaintext stays in history after its file is encrypted (#1014). The
+    engine judged gitleaks' finding of it by line 10 of today's file, which holds an encrypted
+    value, and dropped it, so guard reported a clean scan.
     """
     lines = [f"SETTING_{index}=value{index}" for index in range(1, 15)]
     lines[9] = f"AWS_ACCESS_KEY_ID={AWS_KEY}"

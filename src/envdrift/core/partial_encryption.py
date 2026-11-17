@@ -19,7 +19,7 @@ from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.env_files import _is_excluded_env_file
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError, DotenvxWrapper
 from envdrift.sync.operations import atomic_write
-from envdrift.utils.git import git_location_for
+from envdrift.utils.git import git_location_for, literal_pathspec_env
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -724,7 +724,7 @@ def unprotected_reason(path: Path) -> str:
             ],
             capture_output=True,
             timeout=10,
-            env=env,
+            env=literal_pathspec_env(env),
         )
     except FileNotFoundError:
         return "skip-worktree failed: git is not installed"

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
     from envdrift.scanner.base import ScanFinding
+    from envdrift.scanner.history_files import CommittedFiles
 
 
 # Regex to match ignore comments in various languages
@@ -53,6 +54,17 @@ IGNORE_PATTERN = re.compile(
 # detectors, ...). Distinctive-prefix detections (ghp_, AKIA, pypi-, ...) never
 # match and are therefore never suppressed by noisy-scoped path ignores (#477).
 NOISY_RULE_ID_MARKERS = ("generic", "entropy", "keyword")
+
+
+def _ignores_rule(match: re.Match[str] | None, rule_id: str) -> bool:
+    """Whether the ignore comment ``match`` found covers ``rule_id``.
+
+    A comment without a rule ignores every rule on its line; one with a rule, only that rule.
+    """
+    if not match:
+        return False
+    ignored_rule = match.group(1)
+    return ignored_rule is None or ignored_rule == rule_id
 
 
 def is_noisy_rule(rule_id: str) -> bool:
@@ -227,6 +239,8 @@ class IgnoreFilter:
         self,
         findings: list[ScanFinding],
         path_forms: Callable[[Path], PathForms | Iterable[Path]] | None = None,
+        *,
+        committed: CommittedFiles | None = None,
     ) -> list[ScanFinding]:
         """Filter out ignored findings.
 
@@ -237,6 +251,9 @@ class IgnoreFilter:
                 same way whichever form a scanner reported it in. Defaults to
                 the finding path alone (:meth:`PathForms.of`). Plain paths, the
                 form 11.0.9 took, are each matched on their own.
+            committed: The files of the commits a history scan made its findings
+                in. The inline ignore comment of such a finding is read from its
+                file in that commit, not from today's file (#1014).
 
         Returns:
             Filtered list with ignored findings removed.
@@ -247,13 +264,18 @@ class IgnoreFilter:
             forms = path_forms(finding.file_path) if path_forms else None
             if forms is not None and not isinstance(forms, PathForms):
                 forms = PathForms.of(*forms)
-            if self._should_ignore(finding, forms):
+            if self._should_ignore(finding, forms, committed):
                 continue
             filtered.append(finding)
 
         return filtered
 
-    def _should_ignore(self, finding: ScanFinding, forms: PathForms | None = None) -> bool:
+    def _should_ignore(
+        self,
+        finding: ScanFinding,
+        forms: PathForms | None = None,
+        committed: CommittedFiles | None = None,
+    ) -> bool:
         """Check if a finding should be ignored.
 
         Checks in order:
@@ -266,17 +288,18 @@ class IgnoreFilter:
             finding: The finding to check.
             forms: The names of the finding's file that path patterns are
                 matched against. Defaults to the finding path alone.
+            committed: The files of the commits a history scan made its findings in.
 
         Returns:
             True if the finding should be ignored.
         """
         file_path = finding.file_path
         rule_id = finding.rule_id
-        line_number = finding.line_number
         forms = PathForms.of(file_path) if forms is None else forms
 
-        # Check 1: Inline ignore comments (read from the file as reported)
-        if line_number is not None and self._has_inline_ignore(file_path, line_number, rule_id):
+        # Check 1: Inline ignore comments (read from the file as reported, or from
+        # the file in the commit a history scan found the finding in)
+        if self._inline_ignored(finding, committed):
             return True
 
         # Check 2: Rule+path combinations
@@ -292,6 +315,20 @@ class IgnoreFilter:
         # Check 4: Global path ignores (already handled by scanner, but double-check)
         return self._matches_global_ignore(forms)
 
+    def _inline_ignored(self, finding: ScanFinding, committed: CommittedFiles | None) -> bool:
+        """Whether an ignore comment on the finding's line covers its rule.
+
+        The line of a finding a history scan made in an old commit is read from its file
+        in that commit: today's file can hold an ignore comment at that line for another
+        value (#1014).
+        """
+        if finding.line_number is None:
+            return False
+        if committed is not None and (commit := committed.commit_of(finding)) is not None:
+            line = committed.line(finding.file_path, commit, finding.line_number)
+            return _ignores_rule(IGNORE_PATTERN.search(line), finding.rule_id)
+        return self._has_inline_ignore(finding.file_path, finding.line_number, finding.rule_id)
+
     def _has_inline_ignore(self, file_path: Path, line_number: int, rule_id: str) -> bool:
         """Check if a specific line has an ignore comment.
 
@@ -303,19 +340,7 @@ class IgnoreFilter:
         Returns:
             True if the line has a matching ignore comment.
         """
-        match = self._ignore_comment(file_path, line_number)
-        if not match:
-            return False
-
-        # Extract the specific rule being ignored (if any)
-        ignored_rule = match.group(1)
-
-        # If no specific rule, ignore all rules on this line
-        if ignored_rule is None:
-            return True
-
-        # If specific rule, only ignore that rule
-        return ignored_rule == rule_id
+        return _ignores_rule(self._ignore_comment(file_path, line_number), rule_id)
 
     def _ignore_comment(self, file_path: Path, line_number: int) -> re.Match[str] | None:
         """The ignore comment on a line, looked for once: a line can hold thousands of findings.

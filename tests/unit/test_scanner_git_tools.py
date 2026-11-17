@@ -1419,6 +1419,23 @@ class TestGitSecretsParseOutputBranches:
         else:
             assert findings[0].file_path == (Path("base") / "C:\\repo\\secrets.env").resolve()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="a symbolic link needs a privilege on Windows"
+    )
+    def test_parse_output_history_path_is_its_path_in_the_commit(self, tmp_path: Path) -> None:
+        """A history finding keeps the path its commit held, though ``prod`` links to the root.
+
+        Resolved through today's link, ``prod/app.env`` became the root's ``app.env``, and the
+        engine judged the finding by that file of the commit (#1014).
+        """
+        (tmp_path / "prod").symlink_to(".", target_is_directory=True)
+        scanner = GitSecretsScanner(auto_install=False)
+        output = "abc1234:prod/app.env:2:AWS_KEY=" + "AKIA" + "Z9Q8W7E6R5T4Y3U2" + "\n"
+
+        findings = scanner._parse_output(output, tmp_path)
+
+        assert [f.file_path for f in findings] == [tmp_path / "prod" / "app.env"]
+
     def test_parse_output_unmatched_line_produces_no_finding(self) -> None:
         """Test _parse_output produces no finding for lines that match no pattern."""
         scanner = GitSecretsScanner(auto_install=False)

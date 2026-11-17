@@ -140,6 +140,12 @@ envdrift guard --detect-secrets
 envdrift runs the `detect-secrets` package installed next to it (`python -m detect_secrets`) with every
 plugin enabled, and installs the pinned version when the package is missing and auto-install is on.
 
+envdrift runs detect-secrets with `--no-verify`, so a scan stays on your machine. Without that flag
+detect-secrets sends each secret it finds to the provider's API (AWS, Stripe, Slack and others) to check
+whether it is live, with no timeout, and drops each finding the provider rejects. A found secret left the
+machine, a revoked or blocked key was not reported, and one slow endpoint could hold the scan for five
+minutes. Older envdrift releases did not pass it.
+
 **Which files it scans.** Inside a git repository detect-secrets scans the files git tracks, so a new
 file is scanned once you `git add` it, and a file git ignores is not. That holds for the top level of
 the repository and for any subdirectory of it: `envdrift guard sub` scans the tracked files below
@@ -328,6 +334,19 @@ changed files runs one history scan. A path outside any git repository, or in a 
 commits, is a scanner error for them, never a clean history: with no blocking finding, guard exits 5
 (scan incomplete).
 
+A finding in an old commit is judged by its file in that commit, not by the file you have today.
+A key committed in plaintext and encrypted later is still reported, though its line now holds an
+encrypted value or an `envdrift:ignore` comment, and `--skip-gitignored` keeps it once the file is
+ignored: the commit still holds the key. A finding in a value that was encrypted in its commit is
+dropped as ciphertext, and a finding whose commit git cannot show is kept.
+
+The file is read from the repository that was scanned, at the finding's path in that commit. A
+symbolic link made since, at the file or at a folder above it, is not followed, and a clone or
+worktree inside the repository is never read in its place. Lines are counted at `\n`, as git
+counts them, so a lone `\r` does not move a finding's line. A finding whose path is in no scanned
+repository, such as one that reaches its repository only through a folder link, is kept, and so
+is one whose path is in two scanned repositories.
+
 ### `--entropy` / `--no-entropy`, `-e`
 
 Control entropy-based detection in the native scanner. By default (no flag,
@@ -423,6 +442,9 @@ envdrift guard --no-skip-encrypted
 Skip findings from files that are in `.gitignore`. This uses `git check-ignore` for
 reliable detection of ignored files. Useful for filtering out findings from build
 artifacts, dependencies, or other generated files.
+
+A finding `--history` made in an old commit is never skipped: the file was committed there,
+whatever `.gitignore` says now.
 
 ```bash
 # Skip findings from gitignored files
@@ -832,6 +854,13 @@ scanned, never the report, which may hold the secrets it found. A report that
 holds no findings is a clean scan: that is what the binaries write when they find
 nothing. So is no report at all after a successful run, except from
 detect-secrets, which always prints one.
+
+The native scanner fails the same way when git cannot say whether a `.env.keys` it found is
+tracked. That happens when git fails, times out or cannot read the index, and also when a `.git`
+is above the file but git finds no repository there. The key may be committed, so the run is
+not reported clean. envdrift asks git about each file by its exact name, so a folder called
+`-svc`, `:sec` or `[ab]` is never read as an option, pathspec magic or a glob, whatever the
+`GIT_*_PATHSPECS` variables say, and the answer is always for the file that was found.
 
 The native scanner fails too when git cannot list some of the files in a
 directory it scans: the untracked files, or the ignored `.env` files it always

@@ -869,7 +869,12 @@ class GitSecretsScanner(ScannerBackend):
         # Resolve file path
         file_path = Path(file_path_str)
         if not file_path.is_absolute():
-            file_path = (base_path / file_path).resolve()
+            file_path = base_path / file_path
+            # A history finding keeps the path its commit held. Resolved, a link made later
+            # would name another file, which the engine would judge the finding by (#1014).
+            file_path = (
+                Path(os.path.normpath(file_path.absolute())) if commit_sha else file_path.resolve()
+            )
 
         # Try to extract the secret value
         secret = self._extract_secret(content)

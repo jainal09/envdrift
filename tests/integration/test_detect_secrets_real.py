@@ -28,6 +28,7 @@ from tests.integration.detect_secrets_support import (
     add_tracked,
     found,
 )
+from tests.severity_policy import class_samples
 
 from envdrift.scanner import detect_secrets as detect_secrets_module
 from envdrift.scanner.base import FindingSeverity
@@ -108,6 +109,49 @@ def test_real_scan_grades_credential_detectors_critical(git_repo: Path):
     assert not missing, f"detect-secrets did not report {sorted(missing)}; got {sorted(graded)}"
     for key in sorted(expected):
         assert graded[key] == FindingSeverity.CRITICAL, f"{key} graded {graded[key]}"
+
+
+def _write_provider_samples(directory: Path) -> None:
+    """Write AWS and Stripe keys, which detect-secrets can check with the provider's API."""
+    for credential_class in ("aws", "stripe-live-key"):
+        for name, text in class_samples()[credential_class].items():
+            (directory / name).write_text(text)
+
+
+def test_scan_sends_nothing_it_finds_to_a_provider(tmp_path: Path, recording_proxy: list[str]):
+    """A scan makes no network request, so a secret it finds never leaves the machine (#1035).
+
+    Unless given ``--no-verify``, detect-secrets sends each AWS, Stripe, Slack, ... candidate to
+    the provider's API, with no timeout, so one stalled endpoint held the whole scan until
+    envdrift's 300 s timeout. The scan's proxy is a local listener that records each request.
+    """
+    _write_provider_samples(tmp_path)
+
+    result = DetectSecretsScanner(auto_install=False).scan([tmp_path])
+
+    assert result.error is None, result.error
+    reported = {(Path(f.file_path).name, f.rule_description) for f in result.findings}
+    expected = {("aws-pair.env", "AWS Access Key"), ("stripe-live.env", "Stripe Access Key")}
+    assert expected <= reported, f"the scan did not report {sorted(expected - reported)}"
+    assert recording_proxy == [], f"detect-secrets sent what it found online: {recording_proxy}"
+
+
+def test_no_finding_depends_on_what_its_provider_says(tmp_path: Path, recording_proxy: list[str]):
+    """The scan drops no finding because of an online check (#1035).
+
+    With verification on, detect-secrets drops each finding its provider rejects, such as a
+    revoked key, so a leaked key went unreported and the same files could scan differently
+    from one network to another. The report lists every filter the scan applied.
+    """
+    _write_provider_samples(tmp_path)
+    plan = detect_secrets_module._plan_scan(tmp_path)
+    env, _ = detect_secrets_module._check_git_file_list(tmp_path, plan)
+
+    report = json.loads(detect_secrets_module._run_detect_secrets(plan, env).stdout)
+
+    applied = [f["path"] for f in report["filters_used"]]
+    assert "detect_secrets.filters.common.is_ignored_due_to_verification_policies" not in applied
+    assert recording_proxy == [], f"detect-secrets sent what it found online: {recording_proxy}"
 
 
 def test_scan_outside_a_git_repo_is_not_silently_clean(tmp_path: Path):

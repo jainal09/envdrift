@@ -513,6 +513,10 @@ def _run_detect_secrets(plan: _ScanPlan, env: dict[str, str]) -> subprocess.Comp
     args.extend(
         [
             "--force-use-all-plugins",  # Enable ALL 27+ detectors
+            # Offline, as trufflehog's scan is: without it detect-secrets sends each secret it
+            # finds to the provider's API (AWS STS, Stripe, Slack, ...) with no timeout, and
+            # drops the findings the provider rejects (#1035).
+            "--no-verify",
             "--exclude-files",
             plan.exclude,
             # A path is not an option, whatever it starts with: a file named

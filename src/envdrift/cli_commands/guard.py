@@ -195,7 +195,7 @@ def _materialize_staged_index(
     edited away (or deleted) in the working tree would otherwise pass with exit
     0 while the commit still ships it (#476). Each repo-root-relative staged
     path (the form ``git diff --cached --name-only`` emits) is read with ``git
-    show :<path>`` and written under the mirror with the same relative layout,
+    show :0:<path>`` and written under the mirror with the same relative layout,
     so filename/suffix rules keep matching. Path-pattern ignores match the
     staged file itself: the scan engine is told the mirror copies the
     repository (#859).
@@ -217,10 +217,13 @@ def _materialize_staged_index(
 
     try:
         for rel in staged_files:
-            # ``:<path>`` reads the staged blob; <path> is repo-root-relative
-            # regardless of cwd, but run from the repo root for unambiguity.
+            # ``:0:<path>`` reads the staged blob; <path> is repo-root-relative
+            # regardless of cwd, but run from the repo root for unambiguity. The
+            # stage is explicit: ``:0:x/.env`` alone is stage 0 of ``x/.env``, so
+            # the staged ``0:x/.env`` went unscanned and another file's blob was
+            # scanned in its place.
             show = subprocess.run(  # nosec B603, B607
-                ["git", "show", f":{rel}"],
+                ["git", "show", f":0:{rel}"],
                 capture_output=True,
                 timeout=30,
                 cwd=str(repo_root),
@@ -258,7 +261,7 @@ def _git_index_mirror(mirror_root: Path) -> None:
     """Stage every mirrored file in a throwaway git repo at ``mirror_root``.
 
     In the real repository every collected file IS staged, and rules that ask
-    git about a file's state (``is_file_tracked`` behind committed-private-key)
+    git about a file's state (``git_tracks`` behind committed-private-key)
     must keep answering "staged" for the mirror copies (#476). Hook-injected
     git env (GIT_DIR/GIT_INDEX_FILE/...) is stripped so the mirror can never
     touch the real repository's index. Failure only degrades those git-state
@@ -424,7 +427,7 @@ def _collect_staged_targets(
         # ``-z`` + a binary pipe: git prints staged paths NUL-terminated and
         # verbatim (no ``core.quotepath`` C-quoting of spaces/non-ASCII), and
         # ``os.fsdecode`` round-trips the raw filesystem bytes so the decoded
-        # path still resolves under ``git show :<path>``. A text pipe with
+        # path still resolves under ``git show :0:<path>``. A text pipe with
         # ``split("\n")`` mis-parsed any name git would quote (spaces, quotes,
         # non-ASCII) — the same class #531 fixed for check-ignore.
         result = subprocess.run(  # nosec B603, B607
