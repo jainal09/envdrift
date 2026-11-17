@@ -211,6 +211,25 @@ def test_a_tool_interrupted_as_it_is_let_run_ends_with_its_job() -> None:
     assert sorted(kernel32.closed()) == [_JOB, _PROCESS]
 
 
+def test_a_tool_interrupted_while_kernel32_loads_is_killed_not_left_suspended(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """kernel32 was loaded before the guard: an interrupt then left the tool suspended."""
+
+    def interrupted() -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(win_job, "_kernel32", interrupted)
+    tool = Tool()
+
+    with monkeypatch.context() as windows:
+        windows.setattr(sys, "platform", "win32")
+        with pytest.raises(KeyboardInterrupt):
+            start_in_job(tool, ntdll=Ntdll(Kernel32()))  # type: ignore[arg-type]
+
+    assert tool.killed is True
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows has job objects")
 def test_there_is_no_job_where_there_are_no_job_objects() -> None:
     assert win_job._kernel32() is None

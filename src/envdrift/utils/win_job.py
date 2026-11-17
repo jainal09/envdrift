@@ -65,19 +65,20 @@ def start_in_job(process: subprocess.Popen, kernel32: Any = None, ntdll: Any = N
             there is none, nothing was started suspended, and the result is None.
         ntdll: The ntdll functions, for a test. Defaults to Windows' own.
     """
-    kernel32 = _kernel32() if kernel32 is None else kernel32
-    if kernel32 is None:
+    if kernel32 is None and sys.platform != "win32":
         return None  # not Windows: nothing was started suspended
     handle: Any = None
     job: Job | None = None
     resumed = False
     try:
+        # Loaded inside the guard: an interrupt while it loads leaves the tool suspended too.
+        kernel32 = _kernel32() if kernel32 is None else kernel32
         handle = _open_suspended(kernel32, process)
         job = _job_holding(kernel32, handle, process)
         resumed = _resume(_ntdll() if ntdll is None else ntdll, handle, process)
         return job
     finally:
-        if handle:
+        if handle and kernel32 is not None:
             kernel32.CloseHandle(handle)
         if not resumed:
             _end_unstarted(process, job)
