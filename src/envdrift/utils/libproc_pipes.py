@@ -109,7 +109,9 @@ def pipe_holders(handles: set[int], ends: float, lib: Any = None) -> list[int]:
     A process that has exited, or that is not this user's, is passed over.
     """
     lib = _libproc() if lib is None else lib
-    if lib is None or not handles or time.monotonic() >= ends:
+    if lib is None or not handles:
+        return []
+    if time.monotonic() >= ends:  # listing every process takes time the kill no longer has
         return []
     me = os.getpid()
     holders = []

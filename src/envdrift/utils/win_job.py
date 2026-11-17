@@ -64,31 +64,45 @@ def start_in_job(process: subprocess.Popen, kernel32: Any = None, ntdll: Any = N
             there is none, nothing was started suspended, and the result is None.
         ntdll: The ntdll functions, for a test. Defaults to Windows' own.
     """
+    kernel32 = _kernel32() if kernel32 is None else kernel32
     if kernel32 is None:
-        kernel32 = _kernel32()
-        if kernel32 is None:
-            return None  # not Windows: nothing was started suspended
+        return None  # not Windows: nothing was started suspended
     handle: Any = None
     job: Job | None = None
     resumed = False
     try:
-        ntdll = _ntdll() if ntdll is None else ntdll
-        access = _PROCESS_SET_QUOTA | _PROCESS_TERMINATE | _PROCESS_SUSPEND_RESUME
-        handle = kernel32.OpenProcess(access, False, process.pid)
-        if not handle:
-            raise OSError(f"could not open {process.args} to let it run")
+        handle = _open_suspended(kernel32, process)
         job = _job_holding(kernel32, handle, process)
-        resumed = ntdll.NtResumeProcess(handle) == _STATUS_SUCCESS
-        if not resumed:
-            raise OSError(f"could not let {process.args} run")
+        resumed = _resume(_ntdll() if ntdll is None else ntdll, handle, process)
         return job
     finally:
-        if handle:
-            kernel32.CloseHandle(handle)
+        _release(kernel32, handle, None if resumed else job)
         if not resumed:
-            if job is not None:
-                job.close()
             process.kill()
+
+
+def _open_suspended(kernel32: Any, process: subprocess.Popen) -> Any:
+    """A handle to ``process`` with the rights to put it in a job and resume it; else OSError."""
+    access = _PROCESS_SET_QUOTA | _PROCESS_TERMINATE | _PROCESS_SUSPEND_RESUME
+    handle = kernel32.OpenProcess(access, False, process.pid)
+    if not handle:
+        raise OSError(f"could not open {process.args} to let it run")
+    return handle
+
+
+def _resume(ntdll: Any, handle: Any, process: subprocess.Popen) -> bool:
+    """Let the suspended process ``handle`` opens run: True, or OSError when Windows refuses."""
+    if ntdll.NtResumeProcess(handle) != _STATUS_SUCCESS:
+        raise OSError(f"could not let {process.args} run")
+    return True
+
+
+def _release(kernel32: Any, handle: Any, job: Job | None) -> None:
+    """Close the process ``handle``, if one was opened, and ``job``, unless it is None."""
+    if handle:
+        kernel32.CloseHandle(handle)
+    if job is not None:
+        job.close()
 
 
 def _job_holding(kernel32: Any, handle: int, process: subprocess.Popen) -> Job | None:
