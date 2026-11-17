@@ -48,30 +48,45 @@ def kill_process_tree(process: subprocess.Popen, job: Job | None = None) -> None
     that none of them can start another one unseen, and then every one is killed: when a listing
     fails, the processes stopped so far are killed before the error is raised. So are the
     processes that hold the output of ``process`` open, with those below them, found on Linux
-    and macOS. On Windows ``taskkill /T`` walks the tree, and then ``job``, the job object that
-    ``process`` was put in, is ended with every process in it: one whose parent has exited too,
-    which the walk cannot reach (#925). ``process`` itself is killed either way, as
-    ``subprocess.run`` would.
+    and macOS. On Windows ``job``, the job object that ``process`` was put in before it ran, is
+    ended with every process in it: one whose parent has exited too, which a walk of the tree
+    cannot reach (#925). ``taskkill /T`` walks the tree where there is no job, or where Windows
+    does not end it. ``process`` itself is killed either way, as ``subprocess.run`` would.
     """
     try:
         if sys.platform == "win32":
-            _taskkill_tree(process.pid)
-            if job is not None and not job.terminate():
-                raise OSError(f"could not end the job object of {process.args}")
+            _kill_windows_tree(process, job)
         else:
-            _kill_posix_tree(process.pid, _output_pipes(process))
+            _kill_posix_tree(process)
     finally:
         with contextlib.suppress(OSError):
             process.kill()
 
 
-def _kill_posix_tree(pid: int, pipes: set[str]) -> None:
-    """Stop ``pid``, the processes below it and the holders of ``pipes``; then kill them all."""
+def _kill_windows_tree(process: subprocess.Popen, job: Job | None) -> None:
+    """End ``job``, which holds every process ``process`` started; walk the tree without one.
+
+    The job is ended first, in one call: ``taskkill /T`` can take up to its 30-second timeout,
+    and the engine waits 5 seconds for a killed tool before guard goes on, and may exit.
+    """
+    if job is not None and job.terminate():
+        return
+    _taskkill_tree(process.pid)
+    if job is not None:
+        raise OSError(f"could not end the job object of {process.args}")
+
+
+def _kill_posix_tree(process: subprocess.Popen) -> None:
+    """Stop ``process``, the processes below it and the holders of its output; then kill them all.
+
+    The tree is stopped before its output pipes are named, so that a failure to name them, which
+    is raised, still kills the processes stopped.
+    """
     stopped: list[int] = []
     try:
         listing_ends = time.monotonic() + _LISTING_SECONDS
-        _stop_tree([pid], stopped, listing_ends)
-        _stop_pipe_holders(pipes, stopped, listing_ends)
+        _stop_tree([process.pid], stopped, listing_ends)
+        _stop_pipe_holders(_output_pipes(process), stopped, listing_ends)
     finally:
         # Even when a listing failed: a stopped process that is not killed never ends.
         for p in stopped:

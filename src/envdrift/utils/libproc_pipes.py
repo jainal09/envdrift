@@ -5,11 +5,16 @@ them: ``proc_listallpids`` the processes, ``proc_pidinfo(PROC_PIDLISTFDS)`` the 
 of each, and ``proc_pidfdinfo(PROC_PIDFDPIPEINFO)`` the two ends of a pipe, each named by a
 handle. The write end of the pipe this process reads a tool's output from is the peer of the read
 end it holds. The structures follow ``<sys/proc_info.h>``.
+
+A process that has exited, or that is not this user's, and a descriptor closed since, are passed
+over, as on Linux. Any other failure of a call is raised, so that the kill warns that it may have
+missed a process.
 """
 
 from __future__ import annotations
 
 import ctypes
+import errno
 import functools
 import os
 import sys
@@ -22,6 +27,9 @@ _PROX_FDTYPE_PIPE = 6
 # Room for the processes and descriptors opened between the call that counts them and the
 # call that lists them.
 _SLACK = 64
+# What a failed call says of a process that has exited, or that is not this user's, or of a
+# descriptor it has closed since; 0 is a call that found nothing.
+_GONE_OR_NOT_OURS = frozenset({0, errno.ESRCH, errno.EPERM, errno.EACCES, errno.EBADF})
 
 
 class _ProcFdInfo(ctypes.Structure):
@@ -101,7 +109,7 @@ def pipe_holders(handles: set[int], ends: float, lib: Any = None) -> list[int]:
     A process that has exited, or that is not this user's, is passed over.
     """
     lib = _libproc() if lib is None else lib
-    if lib is None or not handles:
+    if lib is None or not handles or time.monotonic() >= ends:
         return []
     me = os.getpid()
     holders = []
@@ -125,23 +133,22 @@ def _holds(lib: Any, pid: int, handles: set[int], ends: float) -> bool:
 
 def _all_pids(lib: Any) -> list[int]:
     """Every process that libproc lists."""
-    count = lib.proc_listallpids(None, 0)
-    if count <= 0:
+    count = _call("the processes", lib.proc_listallpids, None, 0)
+    if not count:
         return []
     pids = (ctypes.c_int * (count + _SLACK))()
-    listed = lib.proc_listallpids(pids, ctypes.sizeof(pids))
-    return [pid for pid in pids[: max(listed, 0)] if pid > 0]
+    listed = _call("the processes", lib.proc_listallpids, pids, ctypes.sizeof(pids))
+    return [pid for pid in pids[:listed] if pid > 0]
 
 
 def _pipe_fds(lib: Any, pid: int) -> list[int]:
     """The file descriptors of ``pid`` that are pipes; none once it has gone or is not ours."""
-    size = lib.proc_pidinfo(pid, _PROC_PIDLISTFDS, 0, None, 0)
-    if size <= 0:
+    what = f"the files of process {pid}"
+    size = _call(what, lib.proc_pidinfo, pid, _PROC_PIDLISTFDS, 0, None, 0)
+    if not size:
         return []
     fds = (_ProcFdInfo * (size // ctypes.sizeof(_ProcFdInfo) + _SLACK))()
-    filled = lib.proc_pidinfo(pid, _PROC_PIDLISTFDS, 0, fds, ctypes.sizeof(fds))
-    if filled <= 0:
-        return []
+    filled = _call(what, lib.proc_pidinfo, pid, _PROC_PIDLISTFDS, 0, fds, ctypes.sizeof(fds))
     listed = fds[: filled // ctypes.sizeof(_ProcFdInfo)]
     return [fd.proc_fd for fd in listed if fd.proc_fdtype == _PROX_FDTYPE_PIPE]
 
@@ -149,12 +156,30 @@ def _pipe_fds(lib: Any, pid: int) -> list[int]:
 def _pipe_ends(lib: Any, pid: int, fd: int) -> tuple[int, int] | None:
     """The handles of the end of the pipe ``pid`` holds as ``fd``, and of its peer."""
     info = _PipeFdInfo()
-    filled = lib.proc_pidfdinfo(
-        pid, fd, _PROC_PIDFDPIPEINFO, ctypes.addressof(info), ctypes.sizeof(info)
+    size = ctypes.sizeof(info)
+    what = f"file {fd} of process {pid}"
+    filled = _call(
+        what, lib.proc_pidfdinfo, pid, fd, _PROC_PIDFDPIPEINFO, ctypes.addressof(info), size
     )
-    if filled != ctypes.sizeof(info):
+    if filled != size:
         return None
     return info.pipeinfo.pipe_handle, info.pipeinfo.pipe_peerhandle
+
+
+def _call(what: str, function: Any, *args: Any) -> int:
+    """``function(*args)``, a libproc call that lists ``what``: its result, or 0 for nothing.
+
+    A call that fails because a process has exited or is not ours, or a descriptor was closed
+    since, gives 0. Any other failure raises OSError (#925).
+    """
+    ctypes.set_errno(0)  # errno is only set by a call that fails
+    result = function(*args)
+    if result > 0:
+        return result
+    error = ctypes.get_errno()
+    if error in _GONE_OR_NOT_OURS:
+        return 0
+    raise OSError(error, f"libproc could not list {what}: {os.strerror(error)}")
 
 
 @functools.cache

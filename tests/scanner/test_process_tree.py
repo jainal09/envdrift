@@ -132,6 +132,47 @@ def test_a_failed_listing_still_kills_the_processes_it_stopped(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
+def test_output_pipes_it_cannot_name_still_leave_no_process_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The kill named the tool's output pipes before it stopped a process (#925).
+
+    On macOS libproc names them, and its kill raises a failure it does not expect. The tree was
+    not stopped then, and the tool's child ran on. Now the tree is stopped first and killed all
+    the same, and the error still reaches the caller, which warns.
+    """
+    beat = tmp_path / "beat"
+    heartbeat = tmp_path / "heartbeat.py"
+    heartbeat.write_text(HEARTBEAT)
+    failure = OSError(errno.EFAULT, f"libproc could not list file 3 of process {os.getpid()}")
+
+    def unnamed(process: subprocess.Popen) -> set[str]:
+        raise failure
+
+    monkeypatch.setattr(process_tree, "_output_pipes", unnamed)
+    tool = subprocess.Popen(
+        [sys.executable, "-c", PARENT, str(heartbeat), str(beat)], stdout=subprocess.PIPE
+    )
+    child = None
+    try:
+        child = _beating_pid(beat)
+        with pytest.raises(OSError) as raised:
+            kill_process_tree(tool)
+        assert raised.value is failure
+
+        assert tool.wait(timeout=5) == -signal.SIGKILL
+        assert not _still_beating(beat), "the tool's child still runs"
+    finally:
+        tool.kill()
+        tool.wait()
+        if tool.stdout is not None:
+            tool.stdout.close()
+        if child is not None:
+            with contextlib.suppress(OSError):
+                os.kill(child, signal.SIGKILL)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
 def test_a_failed_listing_does_not_replace_the_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

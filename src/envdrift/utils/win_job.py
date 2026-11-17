@@ -4,8 +4,9 @@
 tool. A child that the tool left running when it exited has no running parent to be found from,
 so it ran on, and when it held the tool's output open, ``communicate()`` waited for it. A job
 object holds every process started by a process in it, whether or not its parent still runs:
-``TerminateJobObject`` ends them all. Elsewhere than on Windows there are no job objects, and
-``job_for`` returns None.
+``TerminateJobObject`` ends them all. The tool is started suspended, and runs only once it is in
+its job: a child it started at once was outside a job made after it had started, and ran on.
+Elsewhere than on Windows there are no job objects, and ``start_in_job`` returns None.
 """
 
 from __future__ import annotations
@@ -18,9 +19,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# OpenProcess access rights that AssignProcessToJobObject needs.
+# The CreateProcess flag that keeps a new process's first thread from running until it is resumed.
+CREATE_SUSPENDED = 0x00000004
+# OpenProcess access rights that AssignProcessToJobObject needs, and NtResumeProcess.
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
+_PROCESS_SUSPEND_RESUME = 0x0800
+_STATUS_SUCCESS = 0
 # The exit code of each process the job ends: that of a process taskkill /F ends.
 _KILLED_EXIT_CODE = 1
 
@@ -45,42 +50,70 @@ class Job:
             self._handle = None
 
 
-def job_for(process: subprocess.Popen, kernel32: Any = None) -> Job | None:
-    """Put ``process`` in a new job object, or None where that cannot be done.
+def start_in_job(process: subprocess.Popen, kernel32: Any = None, ntdll: Any = None) -> Job | None:
+    """Put ``process``, started with ``CREATE_SUSPENDED``, in a new job object; then let it run.
 
-    Called as soon as the process has started: a process it starts before then is not in the
-    job, and is left to ``taskkill /T``. Every failure is logged and gives None, never an error:
-    the tool runs as it would without a job.
+    It runs nothing until it is in the job, so every process it starts is in the job too. A job
+    that cannot be made is logged, and the tool runs without one, under ``taskkill /T`` alone, as
+    before. A tool that is not let run, because Windows refuses or because anything else raises
+    first, a KeyboardInterrupt too, is killed, and the error raised: a suspended tool never ends.
 
     Args:
-        process: A process that has just been started.
+        process: A process started with ``CREATE_SUSPENDED``.
         kernel32: The kernel32 functions, for a test. Defaults to Windows' own; elsewhere
-            there is none and the result is None.
+            there is none, nothing was started suspended, and the result is None.
+        ntdll: The ntdll functions, for a test. Defaults to Windows' own.
     """
     if kernel32 is None:
         kernel32 = _kernel32()
         if kernel32 is None:
-            return None
+            return None  # not Windows: nothing was started suspended
+    handle: Any = None
+    job: Job | None = None
+    resumed = False
+    try:
+        ntdll = _ntdll() if ntdll is None else ntdll
+        access = _PROCESS_SET_QUOTA | _PROCESS_TERMINATE | _PROCESS_SUSPEND_RESUME
+        handle = kernel32.OpenProcess(access, False, process.pid)
+        if not handle:
+            raise OSError(f"could not open {process.args} to let it run")
+        job = _job_holding(kernel32, handle, process)
+        resumed = ntdll.NtResumeProcess(handle) == _STATUS_SUCCESS
+        if not resumed:
+            raise OSError(f"could not let {process.args} run")
+        return job
+    finally:
+        if handle:
+            kernel32.CloseHandle(handle)
+        if not resumed:
+            if job is not None:
+                job.close()
+            process.kill()
+
+
+def _job_holding(kernel32: Any, handle: int, process: subprocess.Popen) -> Job | None:
+    """A new job object holding the process ``handle`` opens; None, logged, when it cannot be."""
     job = kernel32.CreateJobObjectW(None, None)
     if not job:
         logger.debug("Could not create a job object for %s", process.args)
         return None
-    handle = kernel32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, process.pid)
-    try:
-        if not handle or not kernel32.AssignProcessToJobObject(job, handle):
-            logger.debug("Could not put %s in a job object", process.args)
-            kernel32.CloseHandle(job)
-            return None
-    finally:
-        if handle:
-            kernel32.CloseHandle(handle)
+    if not kernel32.AssignProcessToJobObject(job, handle):
+        logger.debug("Could not put %s in a job object", process.args)
+        kernel32.CloseHandle(job)
+        return None
     return Job(kernel32, job)
 
 
 @functools.cache
 def _kernel32() -> Any:
-    """Windows' kernel32, typed for the functions ``job_for`` calls; None elsewhere."""
+    """Windows' kernel32, typed for the functions ``start_in_job`` calls; None elsewhere."""
     return _load_kernel32()
+
+
+@functools.cache
+def _ntdll() -> Any:
+    """Windows' ntdll, typed for ``NtResumeProcess``; None elsewhere."""
+    return _load_ntdll()
 
 
 if sys.platform == "win32":
@@ -101,7 +134,18 @@ if sys.platform == "win32":
         kernel32.CloseHandle.restype = wintypes.BOOL
         return kernel32
 
+    def _load_ntdll() -> Any:
+        # NtResumeProcess resumes every thread of a process from its handle alone; psutil's
+        # Process.resume() calls it too. Popen keeps no handle to the first thread.
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+        ntdll.NtResumeProcess.restype = ctypes.c_long
+        return ntdll
+
 else:
 
     def _load_kernel32() -> Any:
+        return None
+
+    def _load_ntdll() -> Any:
         return None

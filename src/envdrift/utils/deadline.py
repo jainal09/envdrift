@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from envdrift.utils.process_tree import kill_process_tree
-from envdrift.utils.win_job import Job, job_for
+from envdrift.utils.win_job import CREATE_SUSPENDED, Job, start_in_job
 
 logger = logging.getLogger(__name__)
 
@@ -132,9 +132,9 @@ def _run(
     """``subprocess.run``, but a timeout or an interrupt kills the processes the tool started too.
 
     ``subprocess.run`` kills only the process it started (#911). This follows its code, with
-    ``_kill_tree`` where it calls ``process.kill()``. On Windows the tool is put in a job object
-    as soon as it starts, so that the kill reaches a process it left running when it exited
-    (#925).
+    ``_kill_tree`` where it calls ``process.kill()``. On Windows the tool is started suspended
+    and put in a job object before it runs, so that the kill reaches every process it started,
+    one it left running when it exited too (#925).
     """
     if input is not None:
         if kwargs.get("stdin") is not None:
@@ -144,8 +144,12 @@ def _run(
         if kwargs.get("stdout") is not None or kwargs.get("stderr") is not None:
             raise ValueError("stdout and stderr arguments may not be used with capture_output.")
         kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
+    if sys.platform == "win32":
+        # The tool runs only once it is in its job object, so every process it starts is in the
+        # job too (#925).
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | CREATE_SUSPENDED
     with subprocess.Popen(args, **kwargs) as process:  # nosec B603
-        job = job_for(process)
+        job = start_in_job(process)
         try:
             stdout, stderr = process.communicate(input, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
