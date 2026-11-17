@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -209,6 +210,37 @@ def test_a_child_that_outlived_a_tool_ends_with_it_on_every_platform(tmp_path: P
     on, and ``communicate()`` waited for it after the kill. The tool now runs in a job object,
     which holds the child too. On Linux and macOS the child is found by the pipe it holds.
     """
+    _the_child_of_a_leaver_ends_with_it(tmp_path)
+
+
+class _SlowToReturn(subprocess.Popen):
+    """``Popen`` that returns a second after the process was made: a tool running by then has
+    started its child, and exited, before ``run_tool`` could put it in a job object."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        time.sleep(1)
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="a job object holds a tool's processes on Windows"
+)
+def test_a_child_the_tool_starts_before_it_is_in_its_job_ends_with_it_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tool waits, suspended, until it is in its job object, so its child is in the job too.
+
+    The tool ran as soon as it was made. A fast one started its child and exited before
+    ``run_tool`` put it in a job object: the child, outside the job, ran on after the kill, and
+    ``communicate()`` waited for it. Here ``Popen`` returns a second late, as for a fast tool.
+    """
+    monkeypatch.setattr(subprocess, "Popen", _SlowToReturn)
+
+    _the_child_of_a_leaver_ends_with_it(tmp_path)
+
+
+def _the_child_of_a_leaver_ends_with_it(tmp_path: Path) -> None:
+    """Run LEAVER past its timeout; its child must end with it, and run_tool must not wait."""
     beat = tmp_path / "beat"
     heartbeat = tmp_path / "heartbeat.py"
     heartbeat.write_text(HEARTBEAT)
