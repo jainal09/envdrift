@@ -293,6 +293,14 @@ class EncryptionDetector:
         """
         if self.SOPS_ENC_VALUE_MARKER in content:
             return True
+        return self._holds_sops_metadata(content)
+
+    def _holds_sops_metadata(self, content: str) -> bool:
+        """Whether ``content`` holds the metadata SOPS writes beside its ciphertext."""
+        # Each pattern names "sops" in lower case: without it, none of them can match,
+        # and the line-by-line search of a large file is skipped.
+        if "sops" not in content:
+            return False
         return any(pattern.search(content) for pattern in self.SOPS_METADATA_PATTERNS)
 
     def ciphertext_backends(self, content: str) -> set[str]:
@@ -313,14 +321,29 @@ class EncryptionDetector:
         Returns:
             set[str]: A subset of ``{"dotenvx", "sops"}``.
         """
-        from envdrift.integrations.dotenvx_keys import ciphertext_values
-
-        backends = {"dotenvx"} if ciphertext_values(content.replace("\r\n", "\n")) else set()
-        env = EnvParser().parse_string(content, lenient=True, interpolate=False)
-        sops_values = any(var.encryption_backend == "sops" for var in env.assignments)
-        if sops_values or any(pattern.search(content) for pattern in self.SOPS_METADATA_PATTERNS):
+        backends: set[str] = set()
+        if self._holds_dotenvx_ciphertext(content):
+            backends.add("dotenvx")
+        if self._holds_sops_ciphertext(content):
             backends.add("sops")
         return backends
+
+    @staticmethod
+    def _holds_dotenvx_ciphertext(content: str) -> bool:
+        """Whether a value of ``content`` is dotenvx ciphertext, found as dotenvx finds them."""
+        from envdrift.integrations.dotenvx_keys import ENCRYPTED_PREFIX, ciphertext_values
+
+        if ENCRYPTED_PREFIX not in content:  # no scan of every value for a file without one
+            return False
+        return bool(ciphertext_values(content.replace("\r\n", "\n")))
+
+    def _holds_sops_ciphertext(self, content: str) -> bool:
+        """Whether a value of ``content`` is in SOPS's envelope, or SOPS's metadata is there."""
+        if self.SOPS_ENC_VALUE_MARKER in content:  # no parse of a file without SOPS's envelope
+            env = EnvParser().parse_string(content, lenient=True, interpolate=False)
+            if any(var.encryption_backend == "sops" for var in env.assignments):
+                return True
+        return self._holds_sops_metadata(content)
 
     def detect_backend(self, content: str) -> str | None:
         """
@@ -337,14 +360,18 @@ class EncryptionDetector:
         Returns:
             "dotenvx", "sops", or None if no encryption detected.
         """
+        if not self.has_sops_header(content):
+            # No SOPS marker at all: the file is dotenvx's or no backend's, and its header
+            # tells which without a scan of every value.
+            if self.has_dotenvx_header(content):
+                return "dotenvx"
+            return "dotenvx" if self._holds_dotenvx_ciphertext(content) else None
         backends = self.ciphertext_backends(content)
         if len(backends) == 1:
             return next(iter(backends))
         if self.has_dotenvx_header(content):
             return "dotenvx"
-        if self.has_sops_header(content):
-            return "sops"
-        return None
+        return "sops"
 
     def _read_text(self, path: Path) -> str | None:
         """Return the file's UTF-8 text, or None for a missing or unreadable file."""

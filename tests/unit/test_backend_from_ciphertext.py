@@ -95,6 +95,20 @@ class TestDetectBackend:
         # So `decrypt` keeps reporting its honest "Nothing to decrypt".
         assert EncryptionDetector().detect_backend(_DOTENVX_DECRYPTED) == "dotenvx"
 
+    @pytest.mark.parametrize(
+        ("content", "expected"),
+        [
+            ("API_KEY=abc123\n", None),
+            ("VAULT_ADDR=https://sops:8200\n", None),
+            ("API_KEY=encrypted:BJcmM3MTYm+PjK7upMiPNCU1mwz76onUbudP=\n", "dotenvx"),
+            ("sops_version=3.13.3\n", "sops"),
+        ],
+        ids=["plaintext", "sops-in-a-value", "dotenvx-without-its-header", "sops-metadata-only"],
+    )
+    def test_a_file_of_one_backend_or_none(self, content: str, expected: str | None) -> None:
+        """Found without a parse where no SOPS marker is, and the same as with one."""
+        assert EncryptionDetector().detect_backend(content) == expected
+
     def test_both_backends_fall_back_to_the_headers(self) -> None:
         both = _DOTENVX_ENCRYPTED + "OTHER=ENC[AES256_GCM,data:x,iv:y,tag:z,type:str]\n"
 
