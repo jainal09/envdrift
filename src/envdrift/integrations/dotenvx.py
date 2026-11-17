@@ -125,9 +125,13 @@ class DotenvxNotFoundError(Exception):
 
 
 class DotenvxError(Exception):
-    """dotenvx command failed."""
+    """dotenvx command failed.
 
-    pass
+    ``left_as_is`` is true when envdrift wrote nothing to the file the command was run on,
+    so that a ``DecryptSnapshot`` does not put earlier bytes back over another writer's change.
+    """
+
+    left_as_is: bool = False
 
 
 class DotenvxKeyError(DotenvxError):
@@ -1588,24 +1592,28 @@ class DotenvxWrapper:
 
         Raises:
             DotenvxError: If env_file does not exist, is not UTF-8 text, or the
-                decryption fails. The file is then left as it was.
+                decryption fails. envdrift has then written nothing to the file
+                (``left_as_is``): a change another writer saved meanwhile is kept.
             DotenvxNotFoundError: If the dotenvx binary cannot be located when running the command.
         """
         env_file = Path(env_file)
-        if not env_file.exists():
-            raise DotenvxError(f"File not found: {env_file}")
-
-        # Pin -fk to the sibling .env.keys: dotenvx v2 otherwise looks for the
-        # key store in the process cwd (v1 read it next to the file), so a
-        # subfolder file would fail to decrypt (#566).
-        env_keys_file = _sibling_env_keys_file(env_file, env_keys_file)
-
-        data, text = self._decryptable_text(env_file)
-        values = ciphertext_values(text)
-        if not values:
-            return
-        plaintexts = self._decrypted_values(env_file, env_keys_file, values, text, env, cwd)
-        self._write_decrypted(env_file, _with_plaintexts(text, values, plaintexts), data)
+        try:
+            if not env_file.exists():
+                raise DotenvxError(f"File not found: {env_file}")
+            # Pin -fk to the sibling .env.keys: dotenvx v2 otherwise looks for the
+            # key store in the process cwd (v1 read it next to the file), so a
+            # subfolder file would fail to decrypt (#566).
+            env_keys_file = _sibling_env_keys_file(env_file, env_keys_file)
+            data, text = self._decryptable_text(env_file)
+            values = ciphertext_values(text)
+            if not values:
+                return
+            plaintexts = self._decrypted_values(env_file, env_keys_file, values, text, env, cwd)
+            self._write_decrypted(env_file, _with_plaintexts(text, values, plaintexts), data)
+        except DotenvxError as exc:
+            # The file is replaced last, whole or not at all: a failure here wrote nothing.
+            exc.left_as_is = True
+            raise
 
     @staticmethod
     def _decryptable_text(env_file: Path) -> tuple[bytes, str]:

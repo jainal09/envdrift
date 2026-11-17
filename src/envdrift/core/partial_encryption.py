@@ -975,10 +975,10 @@ class DecryptSnapshot:
 
     Used as a context manager, it restores the file on any exception from the
     body and keeps the outcome in ``note`` for the caller's error message. An
-    exception whose ``left_as_is`` is true says envdrift wrote nothing because the
-    file changed while dotenvx ran: the change is another writer's, and is kept.
-    The pull-partial paths and the dotenvx backend (decrypt, pull and vault-pull)
-    share it.
+    exception whose ``left_as_is`` is true says envdrift wrote nothing to the file,
+    as the dotenvx wrapper's do: a change it holds then is another writer's, saved
+    while the decrypt ran, and is kept. The pull-partial paths and the dotenvx
+    backend (decrypt, pull and vault-pull) share it.
     """
 
     def __init__(self, path: Path) -> None:
@@ -1000,11 +1000,22 @@ class DecryptSnapshot:
         """Restore the file when the decrypt raised; the exception propagates."""
         if exc_type is None:
             return
-        if getattr(exc, "left_as_is", False):
-            # The snapshot predates another writer's change: putting it back would destroy it.
-            self.note = f"{self.path} keeps that change."
-        else:
-            self.note = self.restore()
+        # Putting the snapshot back over a file envdrift did not write would undo the change
+        # another writer saved meanwhile.
+        self.note = self._left_as_is() if getattr(exc, "left_as_is", False) else self.restore()
+
+    def _left_as_is(self) -> str:
+        """The note for a decrypt that wrote nothing: what the file holds now, it keeps."""
+        try:
+            unchanged = self.path.read_bytes() == self.original
+        except OSError:
+            unchanged = False
+        if unchanged:
+            return f"{self.path} was left as it was."
+        return (
+            f"{self.path} was left as it is: it changed while it was being decrypted, "
+            "and keeps that change."
+        )
 
     def restore(self) -> str:
         """Put the original bytes back if the file changed; return what happened.

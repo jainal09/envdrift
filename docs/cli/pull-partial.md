@@ -168,16 +168,18 @@ submodule, in that repository's own index. `push` lifts the mark the same way.
 
 ## When a decrypt fails
 
-dotenvx decrypts value by value. When one value was encrypted under another key
-(for example after a merge, or through key drift), dotenvx writes the values it
-could decrypt and then fails. `pull-partial` takes a byte-for-byte copy of each
-secret file before dotenvx runs and writes it back on failure, so the file is left
-as it was (still encrypted, CRLF line endings included) instead of half decrypted
-and unprotected. The error names the value dotenvx could not decrypt:
+When one value was encrypted under another key (for example after a merge, or
+through key drift), dotenvx cannot decrypt it, and the decrypt fails. envdrift
+writes a secret file only once every value in it decrypted, so the file is left as
+it was (still encrypted, CRLF line endings included) instead of half decrypted and
+unprotected, and a change saved to it meanwhile is kept. `pull-partial` also takes a
+byte-for-byte copy of each secret file before the decrypt, and writes it back when
+the decrypt wrote the file but a check after it failed. The error names the value
+dotenvx could not decrypt:
 
 ```text
 ✗ Failed to decrypt .env.production.secret: dotenvx decryption failed: ☠ [DECRYPTION_FAILED] could not decrypt STRIPE_API_KEY. ...
-.env.production.secret was left as it was: envdrift restored the bytes it had before the decrypt.
+.env.production.secret was left as it was.
 ```
 
 The copy goes back whole or not at all: envdrift writes it to a temporary file next

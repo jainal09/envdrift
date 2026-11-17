@@ -270,9 +270,10 @@ tracked file. The error names the value dotenvx could not decrypt:
 ```
 
 envdrift also takes a byte-for-byte copy of the file before it decrypts, and writes it
-back when the file changed and the decrypt failed after all, or exited 0 but left
-ciphertext behind (`Decryption did not take effect`). It is not written back over a
-change saved while dotenvx ran: envdrift wrote nothing then, and the change is kept.
+back when the decrypt wrote the file but then failed, as when it exited 0 but left
+ciphertext behind (`Decryption did not take effect`). A decrypt that fails before it
+writes the file has changed nothing, so the copy is not written back then: a change
+saved to the file meanwhile, as when an editor saves it, is kept.
 The copy goes back whole or not at all: it is written to a
 temporary file next to the file and renamed over it, so if envdrift cannot write
 it back (a full disk, for example), the file is left as dotenvx wrote it, never

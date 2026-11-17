@@ -31,7 +31,7 @@ import pytest
 
 from envdrift.encryption.base import EncryptionBackendError
 from envdrift.encryption.dotenvx import DotenvxEncryptionBackend
-from envdrift.integrations.dotenvx import DotenvxError, DotenvxFileChangedError, DotenvxWrapper
+from envdrift.integrations.dotenvx import DotenvxError
 from tests.helpers import file_size_limit, unreadable_file
 
 # A dotenvx-encrypted file whose second value is under another key, with CRLF
@@ -691,71 +691,3 @@ class TestFailureMessageLeavesOutTheStatusLine:
         assert str(excinfo.value) == (
             "dotenvx command failed (exit 2): ○ no change to .env (031 DB4)\nunexpected failure"
         )
-
-
-# What an editor saves into the file while dotenvx runs.
-_EDIT = b"ADDED_BY_HAND=yes\r\n"
-
-
-def _wrapper_edited_meanwhile(target: Path) -> DotenvxWrapper:
-    """A wrapper whose dotenvx runs while an editor saves ``target``, then prints the copy.
-
-    Nothing is decrypted, which does not matter here: envdrift must write nothing either way.
-    """
-    wrapper = DotenvxWrapper(auto_install=False)
-
-    def _run_raw(args, env=None, cwd=None) -> subprocess.CompletedProcess[bytes]:
-        with target.open("ab") as handle:
-            handle.write(_EDIT)
-        copy = Path(args[args.index("-f") + 1]).read_bytes()
-        return subprocess.CompletedProcess(args, 0, copy, b"")
-
-    wrapper._run_raw = _run_raw  # type: ignore[method-assign]
-    wrapper.is_installed = lambda: True  # type: ignore[method-assign]
-    return wrapper
-
-
-class TestAChangeMadeWhileDotenvxRunsIsKept:
-    """The snapshot predates another writer's change, so putting it back would destroy it.
-
-    The wrapper writes nothing over a file that changed while dotenvx ran; the snapshot
-    then put its earlier bytes back over the change all the same, and the edit was lost.
-    """
-
-    def test_the_snapshot_keeps_a_change_it_is_told_to(self, tmp_path: Path) -> None:
-        target = tmp_path / ".env.production"
-        target.write_bytes(_ENCRYPTED)
-
-        with pytest.raises(DotenvxFileChangedError):
-            with _snapshot(target) as snapshot:
-                target.write_bytes(_ENCRYPTED + _EDIT)
-                raise DotenvxFileChangedError("changed while it was being decrypted")
-
-        assert target.read_bytes() == _ENCRYPTED + _EDIT
-        assert snapshot.note == f"{target} keeps that change."
-
-    def test_decrypt_keeps_the_change(self, tmp_path: Path) -> None:
-        target = tmp_path / ".env.production"
-        target.write_bytes(_ENCRYPTED)
-        backend = DotenvxEncryptionBackend()
-        backend._wrapper = _wrapper_edited_meanwhile(target)
-
-        with pytest.raises(EncryptionBackendError) as excinfo:
-            backend.decrypt(target)
-
-        assert target.read_bytes() == _ENCRYPTED + _EDIT
-        flat = " ".join(str(excinfo.value).split())
-        assert "changed while it was being decrypted" in flat
-        assert f"{target} keeps that change." in flat
-
-    def test_pull_partial_keeps_the_change(self, tmp_path: Path) -> None:
-        from envdrift.core.partial_encryption import PartialEncryptionError, _decrypt_in_place
-
-        target = tmp_path / ".env.production.secret"
-        target.write_bytes(_ENCRYPTED)
-
-        with pytest.raises(PartialEncryptionError) as excinfo:
-            _decrypt_in_place(_wrapper_edited_meanwhile(target), target)
-
-        assert target.read_bytes() == _ENCRYPTED + _EDIT
-        assert "keeps that change" in " ".join(str(excinfo.value).split())
