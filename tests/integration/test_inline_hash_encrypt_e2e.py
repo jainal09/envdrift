@@ -192,3 +192,60 @@ class TestPushRefusesAValueDotenvxWouldCutAtAHash:
         assert "Push complete" not in output
         assert "DB_PASSWORD" in output
         assert secret.read_text(encoding="utf-8") == content
+
+
+_LOCK_CONFIG = """\
+[vault]
+provider = "aws"
+
+[vault.aws]
+region = "us-east-1"
+
+[encryption]
+backend = "dotenvx"
+
+[[vault.sync.mappings]]
+secret_name = "svc-key"
+folder_path = "svc"
+environment = "production"
+"""
+
+
+class TestLockReportsPlaintextInsideTheQuotes:
+    """Inside quotes a ``#`` is value text: ``"encrypted:... #hunter2"`` holds plaintext."""
+
+    def test_lock_check_does_not_call_it_encrypted(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """It was read as ciphertext then a comment, and lock --check passed (exit 0)."""
+        (git_repo / "envdrift.toml").write_text(_LOCK_CONFIG, encoding="utf-8")
+        folder = git_repo / "svc"
+        folder.mkdir()
+        env_file = folder / ".env.production"
+        env_file.write_text("API_KEY=abc123\n", encoding="utf-8")
+        subprocess.run(
+            ["dotenvx", "encrypt", "-f", ".env.production", "-fk", ".env.keys"],
+            cwd=folder,
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+        text = env_file.read_text(encoding="utf-8")
+        ciphertext = next(
+            line.partition("=")[2] for line in text.splitlines() if line.startswith("API_KEY=")
+        )
+        env_file.write_text(
+            text.replace(f"API_KEY={ciphertext}", f'API_KEY="{ciphertext} #hunter2"'),
+            encoding="utf-8",
+        )
+
+        result = _run_envdrift(
+            ["lock", "--check"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        output = _flat(result)
+        assert result.returncode == 1, output
+        assert "plaintext values remain" in output

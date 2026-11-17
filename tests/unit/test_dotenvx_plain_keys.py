@@ -18,7 +18,9 @@ from envdrift.cli_commands.sync_lock_helpers import (
 )
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import (
+    _holds_sops_ciphertext,
     _line_has_plaintext_secret,
+    _own_lines,
     combine_files,
     has_plaintext_secret_value,
     holds_only_plain_keys,
@@ -265,3 +267,52 @@ class TestAFileOfOnlyPlainKeys:
 
         assert not _nothing_dotenvx_encrypts("NOTE_PLAIN=hello\n", EncryptionProvider.DOTENVX)
         assert not is_fully_encrypted(env_file, plain_keys=plain_keys_apply())
+
+
+class TestAPlainKeyValueSpanningLines:
+    """A line inside a quoted value is part of it, not an assignment of its own (#1048)."""
+
+    _CONTENT = f'API_KEY={_CIPHERTEXT}\nNOTE_PLAIN="line one\nTOKEN=hello\nline three"\n'
+
+    def test_its_inner_lines_are_not_read_on_their_own(self) -> None:
+        assert _own_lines(self._CONTENT) == [f"API_KEY={_CIPHERTEXT}", 'NOTE_PLAIN="line one']
+        assert _own_lines(self._CONTENT.replace("\n", "\r\n")) == _own_lines(self._CONTENT)
+
+    def test_a_line_dotenvx_cannot_read_is_still_read(self) -> None:
+        """Its lines are judged one by one, as before: fail closed."""
+        assert _own_lines('OPEN="no closing quote\nTOKEN=hello\n') == [
+            'OPEN="no closing quote',
+            "TOKEN=hello",
+        ]
+
+    def test_the_plain_key_is_no_leftover_plaintext(self, project: Path) -> None:
+        env_file = project / ".env"
+        env_file.write_text(self._CONTENT, encoding="utf-8")
+
+        assert not has_plaintext_secret_value(env_file, plain_keys=True)
+        assert is_fully_encrypted(env_file, plain_keys=True)
+        assert holds_only_plain_keys('NOTE_PLAIN="line one\nTOKEN=hello\nline three"\n')
+
+    def test_another_value_spanning_lines_is_still_plaintext(self, project: Path) -> None:
+        env_file = project / ".env"
+        env_file.write_text(f'API_KEY={_CIPHERTEXT}\nCERT="line one\nline two"\n')
+
+        assert has_plaintext_secret_value(env_file, plain_keys=True)
+
+
+class TestSopsCiphertextIsFoundInValuesOnly:
+    """A mention of SOPS's envelope in a comment does not turn the ``_PLAIN`` rule off."""
+
+    def test_a_comment_is_no_sops_ciphertext(self) -> None:
+        assert not _holds_sops_ciphertext("# SOPS writes ENC[AES256_GCM,data:...]\nNOTE_PLAIN=x\n")
+        assert _holds_sops_ciphertext(f"API_KEY={_SOPS_VALUE}\n")
+        assert _holds_sops_ciphertext(f'API_KEY="{_SOPS_VALUE}"\n')
+
+    def test_the_rule_holds_beside_such_a_comment(self, project: Path) -> None:
+        env_file = project / ".env"
+        env_file.write_text(
+            f"# SOPS writes ENC[AES256_GCM,data:...]\nAPI_KEY={_CIPHERTEXT}\nNOTE_PLAIN=hello\n",
+            encoding="utf-8",
+        )
+
+        assert not has_plaintext_secret_value(env_file, plain_keys=True)

@@ -206,3 +206,38 @@ class TestPullPartialThenPushKeepsSecrets:
         run("pull-partial")
 
         assert _value_lines(secret) == [f"DB_PASSWORD={_PASSWORD}", f"API_TOKEN={_TOKEN}"]
+
+
+def test_decrypt_reads_the_values_back_whatever_the_line_endings_windows_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows writes text with \r\n line endings, and decrypt found no value (#946).
+
+    The copy dotenvx decrypts was written as text, so on Windows its lines ended with
+    \r\n, and dotenvx's output kept them: every decrypt failed with "its output ... did
+    not hold every decrypted value". Here every text write ends its lines as Windows does,
+    and the real dotenvx decrypts the copy.
+    """
+    from envdrift.integrations.dotenvx import DotenvxWrapper
+
+    env_file = tmp_path / ".env.staging"
+    env_file.write_bytes(f"DB_PASSWORD={_PASSWORD}\nAPI_TOKEN={_TOKEN}\n".encode())
+    subprocess.run(
+        ["dotenvx", "encrypt", "-f", env_file.name, "-fk", ".env.keys"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+        timeout=120,
+    )
+    write_text = Path.write_text
+
+    def as_on_windows(path: Path, data: str, *args: object, **kwargs: object) -> int:
+        return write_text(path, data.replace("\n", "\r\n"), *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "write_text", as_on_windows)
+
+    DotenvxWrapper().decrypt(env_file, env_keys_file=tmp_path / ".env.keys", cwd=tmp_path)
+
+    text = env_file.read_bytes().decode()
+    assert text.endswith(f"DB_PASSWORD={_PASSWORD}\nAPI_TOKEN={_TOKEN}\n"), text
+    assert "encrypted:" not in text and "\r" not in text

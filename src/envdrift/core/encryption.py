@@ -301,9 +301,11 @@ class EncryptionDetector:
 
         dotenvx counts only for a value that is dotenvx ciphertext, not for its
         header: ``dotenvx decrypt`` keeps the ``DOTENV_PUBLIC_KEY`` header, and SOPS
-        keeps that key's name when it encrypts such a file (#949). SOPS counts for
-        its structural markers (``has_sops_header``): the ``ENC[AES256_GCM,``
-        envelope, or the metadata SOPS writes only beside its ciphertext.
+        keeps that key's name when it encrypts such a file (#949). Its values are found
+        as dotenvx finds them, so ``KEY=encrypted:...#tail``, which dotenvx decrypts, is
+        its ciphertext too. SOPS counts for a value in its ``ENC[AES256_GCM,`` envelope,
+        or for the metadata SOPS writes only beside its ciphertext; a mention of the
+        envelope in a comment is neither.
 
         Parameters:
             content (str): Raw file content to inspect.
@@ -311,9 +313,12 @@ class EncryptionDetector:
         Returns:
             set[str]: A subset of ``{"dotenvx", "sops"}``.
         """
+        from envdrift.integrations.dotenvx_keys import ciphertext_values
+
+        backends = {"dotenvx"} if ciphertext_values(content.replace("\r\n", "\n")) else set()
         env = EnvParser().parse_string(content, lenient=True, interpolate=False)
-        backends = {"dotenvx" for var in env.assignments if var.encryption_backend == "dotenvx"}
-        if self.has_sops_header(content):
+        sops_values = any(var.encryption_backend == "sops" for var in env.assignments)
+        if sops_values or any(pattern.search(content) for pattern in self.SOPS_METADATA_PATTERNS):
             backends.add("sops")
         return backends
 

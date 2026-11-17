@@ -101,6 +101,11 @@ class TestPlaintextAfterTheHash:
         assert _value_is_only_ciphertext(f"{_CIPHERTEXT} # a comment")
         assert _value_is_only_ciphertext(f'"{_CIPHERTEXT}" # a comment')
 
+    @pytest.mark.parametrize("quote", ['"', "'", "`"])
+    def test_a_hash_inside_the_quotes_is_value_text(self, quote: str) -> None:
+        """Only an unquoted value ends at a comment: ``"encrypted:... #x"`` holds plaintext."""
+        assert not _value_is_only_ciphertext(f"{quote}{_CIPHERTEXT} #hunter2{quote}")
+
     def test_file_with_a_glued_tail_holds_ciphertext_and_plaintext(self, tmp_path: Path) -> None:
         env_file = tmp_path / ".env.production.secret"
         env_file.write_text(f"DB_PASSWORD={_CIPHERTEXT}#Spring2024!\n", encoding="utf-8")

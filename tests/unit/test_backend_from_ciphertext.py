@@ -52,8 +52,19 @@ class TestCiphertextBackends:
                 {"dotenvx", "sops"},
             ),
             ("NOTE=the key is stored encrypted: see docs\n", set()),
+            # dotenvx cut hunter2#Spring2024! at its "#" and encrypted the rest.
+            (_HEADER + "DB_PASSWORD=encrypted:BJcmM3MTYm+PjK7upMiPNC=#Spring2024!\n", {"dotenvx"}),
+            ("# SOPS writes ENC[AES256_GCM,data:...] values\nAPI_KEY=abc123\n", set()),
         ],
-        ids=["dotenvx-decrypted", "dotenvx", "sops-after-dotenvx", "both", "mention"],
+        ids=[
+            "dotenvx-decrypted",
+            "dotenvx",
+            "sops-after-dotenvx",
+            "both",
+            "mention",
+            "dotenvx-cut-at-a-hash",
+            "sops-envelope-in-a-comment",
+        ],
     )
     def test_backends(self, content: str, expected: set[str]) -> None:
         assert EncryptionDetector().ciphertext_backends(content) == expected

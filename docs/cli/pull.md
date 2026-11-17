@@ -27,9 +27,10 @@ key that decrypts the file (`dotenvx decrypt --stdout -f <file> -fk <copy> > /de
 delete the other line.
 
 Just run `envdrift pull` and all encrypted environment files are ready to use.
-A file counts as encrypted when a value holds dotenvx ciphertext, bare or in the quotes
-dotenvx keeps around it (`"`, `'` or backticks); one with none is skipped as
-`skipped (not encrypted)`.
+With dotenvx, a file counts as encrypted when a value holds dotenvx ciphertext, bare or in
+the quotes dotenvx keeps around it (`"`, `'` or backticks), as dotenvx reads its values: a
+mention in a comment does not count. A file with none is skipped as
+`skipped (not encrypted)`. With SOPS, the file's SOPS metadata decides.
 
 Configuration is auto-discovered from:
 

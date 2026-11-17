@@ -220,7 +220,7 @@ def _check_extra_vars(
 
 
 # dotenvx (``encrypted:...``) and SOPS (``ENC[AES256_GCM,...]``) ciphertext prefixes.
-_CIPHERTEXT_PREFIXES = ("encrypted:", "ENC[")
+_CIPHERTEXT_PREFIXES = ("encrypted:", "ENC[AES256_GCM,")
 
 
 def _is_ciphertext(value: str) -> bool:

@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -34,7 +35,7 @@ _needs_dotenvx = pytest.mark.skipif(
 
 # Built by concatenation so push protection never sees a whole secret literal.
 _API_KEY = "sk_" + "test_" + "abc123"
-_STRIPE_LIVE = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc"
+_STRIPE_LIVE = "sk_" + "live_" + "0" * 24  # an obviously made-up key of the live shape
 
 _SCHEMA = """\
 from pydantic_settings import BaseSettings
@@ -64,6 +65,24 @@ def _run_envdrift(
         text=True,
         timeout=120,
     )
+
+
+_Run = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
+
+
+@pytest.fixture
+def envdrift(work_dir: Path, integration_pythonpath: str, envdrift_cmd: list[str]) -> _Run:
+    """The real envdrift CLI, run in ``work_dir``."""
+
+    def run(args: list[str]) -> subprocess.CompletedProcess[str]:
+        return _run_envdrift(
+            args,
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+    return run
 
 
 def _flat(result: subprocess.CompletedProcess[str]) -> str:
@@ -115,18 +134,12 @@ class TestGuardReadsBacktickCiphertextAsEncrypted:
     def test_encrypted_file_has_no_findings(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
-        envdrift_cmd: list[str],
+        envdrift: _Run,
         quote: str,
     ) -> None:
         _encrypted_file(work_dir, quote)
 
-        result = _run_envdrift(
-            ["guard", "--native-only", "--json", ".env.production"],
-            cwd=work_dir,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["guard", "--native-only", "--json", ".env.production"])
 
         report = json.loads(result.stdout)
         rules = sorted(finding["rule_id"] for finding in report["findings"])
@@ -143,15 +156,14 @@ class TestValidateSkipsBacktickCiphertext:
     def test_encrypted_int_field_passes(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
-        envdrift_cmd: list[str],
+        envdrift: _Run,
         quote: str,
         comment: str,
     ) -> None:
         _encrypted_file(work_dir, quote, comment)
         (work_dir / "schema_mod.py").write_text(_SCHEMA, encoding="utf-8")
 
-        result = _run_envdrift(
+        result = envdrift(
             [
                 "validate",
                 ".env.production",
@@ -160,10 +172,7 @@ class TestValidateSkipsBacktickCiphertext:
                 "--service-dir",
                 ".",
                 "--ci",
-            ],
-            cwd=work_dir,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
+            ]
         )
 
         output = _flat(result)
@@ -180,8 +189,7 @@ class TestCheckFindsBacktickPlaintextSecrets:
     def test_plaintext_secret_blocks_the_commit(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
-        envdrift_cmd: list[str],
+        envdrift: _Run,
         quote: str,
         comment: str,
     ) -> None:
@@ -190,12 +198,7 @@ class TestCheckFindsBacktickPlaintextSecrets:
             f"STRIPE={quote}{_STRIPE_LIVE}{quote}{comment}\n", encoding="utf-8"
         )
 
-        result = _run_envdrift(
-            ["encrypt", "--check", ".env"],
-            cwd=work_dir,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["encrypt", "--check", ".env"])
 
         output = _flat(result)
         assert "PLAINTEXT SECRETS DETECTED" in output
@@ -216,18 +219,12 @@ class TestCheckCountsCiphertextBeforeAGluedComment:
     def test_check_reports_the_file_fully_encrypted(
         self,
         work_dir: Path,
-        integration_pythonpath: str,
-        envdrift_cmd: list[str],
+        envdrift: _Run,
         quote: str,
     ) -> None:
         _encrypted_file(work_dir, quote, "#note")
 
-        result = _run_envdrift(
-            ["encrypt", "--check", ".env.production"],
-            cwd=work_dir,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["encrypt", "--check", ".env.production"])
 
         output = _flat(result)
         assert "File is fully encrypted" in output, output

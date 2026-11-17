@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from tests.helpers import native_path
 
 pytestmark = [
     pytest.mark.integration,
@@ -231,6 +232,35 @@ class TestPullAndLockReadQuotedCiphertext:
         output = _flat(pull)
         assert pull.returncode == 0, output
         assert "skipped (not encrypted)" not in output
-        assert "svc/.env.production - decrypted" in output
+        assert f"{native_path('svc/.env.production')} - decrypted" in output
         text = env_file.read_text(encoding="utf-8")
         assert f"API_KEY={quote}{_API_KEY}{quote}" in text and "encrypted:" not in text
+
+    def test_a_quoted_example_in_a_comment_is_no_ciphertext(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """pull called a plaintext file "decrypted" for a comment that shows a quoted value."""
+        (git_repo / "envdrift.toml").write_text(_MAPPING_CONFIG, encoding="utf-8")
+        env_file = git_repo / "svc" / ".env.production"
+        env_file.parent.mkdir()
+        env_file.write_text(
+            f'# example: API_KEY="encrypted:..."\nAPI_KEY={_API_KEY}\n', encoding="utf-8"
+        )
+        before = env_file.read_bytes()
+
+        def run(*args: str) -> subprocess.CompletedProcess[str]:
+            return _run_envdrift(
+                list(args),
+                cwd=git_repo,
+                integration_pythonpath=integration_pythonpath,
+                envdrift_cmd=envdrift_cmd,
+            )
+
+        pull = run("pull", "--skip-sync")
+        check = run("lock", "--check")
+
+        assert pull.returncode == 0, _flat(pull)
+        assert f"{native_path('svc/.env.production')} - skipped (not encrypted)" in _flat(pull)
+        assert env_file.read_bytes() == before
+        assert check.returncode == 1, _flat(check)
+        assert "would be encrypted" in _flat(check)

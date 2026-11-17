@@ -114,6 +114,15 @@ class TestStandInValues:
     def test_missing_or_garbled_output_is_none(self, output: bytes) -> None:
         assert _stand_in_values(output, "STAND_", 2 if b"STAND_1" in output else 1) is None
 
+    def test_a_line_that_ends_with_crlf_ends_its_value_there(self) -> None:
+        """dotenvx ends each line as the copy it read did: \r\n where Windows wrote it (#946).
+
+        No value was found then, and decrypt failed on Windows. A \r inside a value stays.
+        """
+        output = b"PUB=x\r\nSTAND_0='one'\r\nSTAND_1='two\r'\r\n# STAND_END\r\n"
+
+        assert _stand_in_values(output, "STAND_", 2) == ["one", "two\r"]
+
     def test_plaintexts_replace_only_the_ciphertext(self) -> None:
         text = 'A=encrypted:x # c\nB="encrypted:yy"\n'
         values = [CiphertextValue("A", 2, 13, "encrypted:x"), CiphertextValue("B", 21, 33, "")]

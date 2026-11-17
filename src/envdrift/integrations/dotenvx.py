@@ -459,12 +459,30 @@ def _public_key_assignments(text: str) -> list[tuple[str, str]]:
     ]
 
 
+def _refuse_comment_cut_values(env_file: Path, env_text: str) -> None:
+    """Refuse ``env_file`` before anything is written if dotenvx would cut a value at a ``#``.
+
+    dotenvx ends an unquoted value at a ``#`` that touches it and keeps the rest as a
+    plaintext comment (#947).
+    """
+    cut = comment_cut_names(env_text)
+    if cut:
+        raise DotenvxValueError(
+            f"Refusing to encrypt {env_file}: dotenvx ends an unquoted value at a `#` "
+            "that touches it and keeps the rest as a plaintext comment, so it would "
+            f"leave part of {', '.join(cut)} unencrypted. Put each of those values in "
+            "quotes (for example KEY='a#b'), then encrypt again. Nothing was changed."
+        )
+
+
 def _stand_in_values(output: bytes, stand_in: str, count: int) -> list[str] | None:
     """The values ``dotenvx decrypt --stdout`` printed under the stand-in names, or None.
 
     Each line it prints for one reads ``<stand_in><index>='<plaintext>'``. A plaintext
     can hold quotes and line breaks, so it runs to the next stand-in line, or to the
     end marker, which no plaintext holds: the stand-in names carry a random nonce.
+    dotenvx ends each line as the copy it read did, so a line may end with ``\r\n``;
+    that ``\r`` is no part of the plaintext before it, one inside a plaintext is.
     """
     try:
         text = "\n" + output.decode("utf-8")
@@ -476,12 +494,23 @@ def _stand_in_values(output: bytes, stand_in: str, count: int) -> list[str] | No
         opening = f"\n{stand_in}{index}='"
         following = f"{stand_in}{index + 1}='" if index + 1 < count else f"# {stand_in}END"
         start = text.find(opening, position)
-        end = text.find(f"'\n{following}", start + len(opening)) if start >= 0 else -1
+        end = _line_end_before(text, following, start + len(opening)) if start >= 0 else -1
         if end < 0:
             return None
         plaintexts.append(text[start + len(opening) : end])
         position = end
     return plaintexts
+
+
+def _line_end_before(text: str, following: str, start: int) -> int:
+    """Where the quote that ends the value before the ``following`` line is, or -1.
+
+    The line ends with ``\n``, or with the ``\r\n`` of a copy written with Windows
+    line endings.
+    """
+    ends = [text.find(f"'{eol}{following}", start) for eol in ("\n", "\r\n")]
+    found = [end for end in ends if end >= 0]
+    return min(found) if found else -1
 
 
 def _with_plaintexts(text: str, values: list[CiphertextValue], plaintexts: list[str]) -> str:
@@ -1495,14 +1524,7 @@ class DotenvxWrapper:
                 f"replace its undecodable bytes. Nothing was changed."
             ) from None
         env_text = env_text.replace("\r\n", "\n").replace("\r", "\n")
-        cut = comment_cut_names(env_text)
-        if cut:
-            raise DotenvxValueError(
-                f"Refusing to encrypt {env_file}: dotenvx ends an unquoted value at a `#` "
-                "that touches it and keeps the rest as a plaintext comment, so it would "
-                f"leave part of {', '.join(cut)} unencrypted. Put each of those values in "
-                "quotes (for example KEY='a#b'), then encrypt again. Nothing was changed."
-            )
+        _refuse_comment_cut_values(env_file, env_text)
         env_text = self._clean_mismatched_header_text(env_text, env_file.name, environment)
         if environment:
             key_name = f"DOTENV_PRIVATE_KEY_{environment.upper()}"
@@ -1617,7 +1639,8 @@ class DotenvxWrapper:
         lines.append(f"# {stand_in}END")
         with tempfile.TemporaryDirectory(prefix="envdrift-decrypt-") as folder:
             copy = Path(folder) / env_file.name
-            copy.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            # Bytes, so that Windows does not write the line breaks as \r\n (#946).
+            copy.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
             # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
             # misparses them as flags (#474).
             args = ["decrypt", "-f", _dash_safe_path(copy), "-fk", _dash_safe_path(keys_file)]

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -31,7 +32,7 @@ pytestmark = [
 
 # Built by concatenation so push protection never sees a whole secret literal.
 _API_KEY = "abc" + "123"
-_STRIPE_LIVE = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc"
+_STRIPE_LIVE = "sk_" + "live_" + "0" * 24  # an obviously made-up key of the live shape
 
 _LOCK_CONFIG = """\
 [vault]
@@ -93,14 +94,16 @@ def _flat(result: subprocess.CompletedProcess[str]) -> str:
     return " ".join((result.stdout + result.stderr).split())
 
 
+# An assignment dotenvx left as written: neither a comment nor its public key, nor ciphertext.
+_LEFT_AS_WRITTEN_RE = re.compile(
+    r"^(?!#|DOTENV_PUBLIC_KEY)(?:export )?([^=\s]+)\s*=(?!.*encrypted:)"
+)
+
+
 def _plaintext_names(env_file: Path) -> set[str]:
     """The names whose value dotenvx left as written, ``export`` or quotes aside."""
-    names = set()
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        if line.startswith(("#", "DOTENV_PUBLIC_KEY")) or "encrypted:" in line or not line:
-            continue
-        names.add(line.removeprefix("export ").split("=")[0].strip())
-    return names
+    lines = env_file.read_text(encoding="utf-8").splitlines()
+    return {match.group(1) for match in map(_LEFT_AS_WRITTEN_RE.match, lines) if match}
 
 
 class TestTheRuleIsTheBinarys:
@@ -350,3 +353,55 @@ class TestAFileOfOnlyPlainKeysIsDone:
         assert check.returncode == 0, _flat(check)
         assert "not encrypted" not in _flat(check)
         assert secret.read_text(encoding="utf-8") == "NOTE_PLAIN=hello\n"
+
+
+class TestAPlainKeyValueSpanningLines:
+    """A quoted ``_PLAIN`` value that spans lines is one value, which dotenvx leaves as it is.
+
+    Its line ``TOKEN=hello`` was read as an assignment of its own, and as plaintext the
+    encryption missed: encrypt failed, and lock --check never passed (#1048).
+    """
+
+    _VALUE = 'NOTE_PLAIN="line one\nTOKEN=hello\nline three"'
+
+    def test_encrypt_and_lock_check_pass(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        (git_repo / "envdrift.toml").write_text(_LOCK_CONFIG, encoding="utf-8")
+        env_file = git_repo / "svc" / ".env.production"
+        env_file.parent.mkdir()
+        env_file.write_text(f"API_KEY={_API_KEY}\n{self._VALUE}\n", encoding="utf-8")
+        run = TestAFileOfOnlyPlainKeysIsDone._runner(git_repo, integration_pythonpath, envdrift_cmd)
+
+        encrypted = run("encrypt", "svc/.env.production")
+        check = run("lock", "--check")
+
+        assert encrypted.returncode == 0, _flat(encrypted)
+        text = env_file.read_text(encoding="utf-8")
+        assert "API_KEY=encrypted:" in text and self._VALUE in text, text
+        assert check.returncode == 0, _flat(check)
+        assert "plaintext values remain" not in _flat(check)
+
+
+class TestTheRuleHoldsBesideAMentionOfSops:
+    """A comment that names SOPS's envelope does not turn the ``_PLAIN`` rule off."""
+
+    def test_encrypt_succeeds(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        env_file = git_repo / ".env"
+        env_file.write_text(
+            f"# SOPS writes ENC[AES256_GCM,data:...] values\nAPI_KEY={_API_KEY}\nNOTE_PLAIN=hi\n",
+            encoding="utf-8",
+        )
+
+        result = _run_envdrift(
+            ["encrypt", ".env"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        assert result.returncode == 0, _flat(result)
+        assert "did not take effect" not in _flat(result)
+        assert "NOTE_PLAIN=hi" in env_file.read_text(encoding="utf-8")

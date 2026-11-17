@@ -73,6 +73,8 @@ _LINE_RE = re.compile(
     + _EOL
 )
 _SURROUNDING_QUOTES_RE = re.compile(_BOL + r"(['\"`])([\s\S]*)\1" + _EOL)
+# A value that is one token in a single pair of the quotes dotenvx reads.
+_QUOTED_TOKEN_RE = re.compile(r"(['\"`])[\s\S]*\1")
 
 PRIVATE_KEY_PREFIX = "DOTENV_PRIVATE_KEY"
 PUBLIC_KEY_PREFIX = "DOTENV_PUBLIC_KEY"
@@ -242,16 +244,21 @@ def comment_cut_names(text: str) -> list[str]:
     flat = re.sub(r"\r\n?", "\n", text)
     names: list[str] = []
     for match in _LINE_RE.finditer(flat):
-        value = match.group(2)
-        token = (value or "").strip(_JS_SPACE_CHARS)
-        if len(token) >= 2 and token[0] in ("'", '"', "`") and token[-1] == token[0]:
-            continue
-        # The unquoted value runs to the first "#"; without a value, the "#" follows "=".
-        hash_at = match.end(2) if value is not None else flat.find("#", match.end(1), match.end())
-        touches = hash_at > 0 and flat[hash_at - 1] not in _JS_SPACE_CHARS
-        if flat[hash_at : hash_at + 1] == "#" and touches and match.group(1) not in names:
+        if _cut_at_a_hash(flat, match) and match.group(1) not in names:
             names.append(match.group(1))
     return names
+
+
+def _cut_at_a_hash(flat: str, match: re.Match[str]) -> bool:
+    """Whether dotenvx ends the unquoted value of ``match`` at a ``#`` that touches it."""
+    value = match.group(2)
+    if _QUOTED_TOKEN_RE.fullmatch((value or "").strip(_JS_SPACE_CHARS)):
+        return False
+    # The unquoted value runs to the first "#"; without a value, the "#" follows "=".
+    hash_at = match.end(2) if value is not None else flat.find("#", match.end(1), match.end())
+    if flat[hash_at : hash_at + 1] != "#":
+        return False
+    return hash_at > 0 and flat[hash_at - 1] not in _JS_SPACE_CHARS
 
 
 @dataclass(frozen=True)
@@ -282,11 +289,26 @@ def ciphertext_values(text: str) -> list[CiphertextValue]:
             continue
         start = match.start(2) + len(raw) - len(raw.lstrip(_JS_SPACE_CHARS))
         token = raw.strip(_JS_SPACE_CHARS)
-        if len(token) >= 2 and token[0] in ("'", '"', "`") and token[-1] == token[0]:
+        if _QUOTED_TOKEN_RE.fullmatch(token):
             start, token = start + 1, token[1:-1]
         if token.startswith(ENCRYPTED_PREFIX):
             values.append(CiphertextValue(match.group(1), start, start + len(token), token))
     return values
+
+
+def multiline_value_spans(text: str) -> list[tuple[int, int]]:
+    """The ``(start, end)`` of each value of ``text`` that holds a line break (#1048).
+
+    A quoted value can span lines, and dotenvx reads a line inside one, such as
+    ``TOKEN=hello``, as part of the value, never as an assignment of its own. The
+    positions are those of the value, quotes included, in ``text``.
+    """
+    spans: list[tuple[int, int]] = []
+    for match in _LINE_RE.finditer(text):
+        value = match.group(2)
+        if value is not None and any(eol in value for eol in "\n\r\u2028\u2029"):
+            spans.append((match.start(2), match.end(2)))
+    return spans
 
 
 def unverifiable_ciphertext(text: str) -> bool:

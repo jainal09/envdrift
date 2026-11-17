@@ -24,6 +24,8 @@ class EncryptionStatus(Enum):
 
 # A backtick-quoted value followed by a comment, as dotenvx reads ``KEY=`value`#note``.
 _BACKTICK_VALUE_THEN_COMMENT = re.compile(r"`((?:\\`|[^`])*)`\s*#.*", re.DOTALL)
+# A value in one pair of backticks.
+_BACKTICK_WRAPPED = re.compile(r"`([\s\S]*)`")
 
 
 def strip_backtick_quotes(value: str) -> str:
@@ -41,12 +43,8 @@ def strip_backtick_quotes(value: str) -> str:
     ``KEY=`encrypted:...`#note`` is dotenvx ciphertext all the same. dotenvx tries that
     reading first, so it holds even when the comment ends with a backtick.
     """
-    commented = _BACKTICK_VALUE_THEN_COMMENT.fullmatch(value)
-    if commented:
-        return commented.group(1)
-    if len(value) >= 2 and value[0] == "`" and value[-1] == "`":
-        return value[1:-1]
-    return value
+    quoted = _BACKTICK_VALUE_THEN_COMMENT.fullmatch(value) or _BACKTICK_WRAPPED.fullmatch(value)
+    return quoted.group(1) if quoted else value
 
 
 @dataclass

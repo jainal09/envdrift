@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING, NamedTuple, TypedDict
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.env_files import _is_excluded_env_file
 from envdrift.integrations.dotenvx import DotenvxError, DotenvxFilenameError, DotenvxWrapper
-from envdrift.integrations.dotenvx_keys import is_plain_key, plain_keys_apply
+from envdrift.integrations.dotenvx_keys import (
+    is_plain_key,
+    multiline_value_spans,
+    plain_keys_apply,
+)
 from envdrift.sync.operations import atomic_write
 from envdrift.utils.git import git_location_for, literal_pathspec_env
 
@@ -383,8 +387,33 @@ def _value_is_only_ciphertext(value: str) -> bool:
     """
     v = _unquote_value(value)
     if v.startswith(_DOTENVX_CIPHERTEXT_PREFIX):
-        return "#" not in _UNQUOTED_COMMENT_RE.sub("", v)
+        # Only an unquoted value ends at a comment: inside quotes a "#" is value text, so
+        # KEY="encrypted:... #hunter2" holds plaintext too.
+        rest = v if _is_quoted(value) else _UNQUOTED_COMMENT_RE.sub("", v)
+        return "#" not in rest
     return v.startswith(_SOPS_CIPHERTEXT_PREFIX)
+
+
+def _is_quoted(value: str) -> bool:
+    """Whether an assigned VALUE is one quoted value, a comment after its closing quote aside."""
+    return _is_quote_wrapped(_strip_inline_comment_after_quoted_value(value.strip()))
+
+
+def _own_lines(content: str) -> list[str]:
+    """The lines of ``content`` but those inside a value that spans lines, as dotenvx reads it.
+
+    A quoted value can hold line breaks, and a line inside it, such as ``TOKEN=hello``, is
+    part of the value, not an assignment of its own (#1048). The value's first line stays.
+    A line dotenvx cannot read at all stays too, and is judged as before.
+    """
+    spans = multiline_value_spans(content)
+    lines: list[str] = []
+    offset = 0
+    for line in content.splitlines(keepends=True):
+        if not any(start < offset < end for start, end in spans):
+            lines.append(line.splitlines()[0])
+        offset += len(line)
+    return lines
 
 
 def _line_has_plaintext_secret(line: str, *, plain_keys: bool = False) -> bool:
@@ -416,7 +445,18 @@ def _dotenvx_plain_keys(content: str, plain_keys: bool) -> bool:
     Only for a caller that checks a dotenvx encryption, and never for SOPS ciphertext:
     SOPS has no ``_PLAIN`` convention, and a SOPS-encrypted file keeps its own rules.
     """
-    return plain_keys and _SOPS_CIPHERTEXT_PREFIX not in content
+    return plain_keys and not _holds_sops_ciphertext(content)
+
+
+def _holds_sops_ciphertext(content: str) -> bool:
+    """Whether a value of ``content`` is SOPS ciphertext; a mention of it in a comment is not."""
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in stripped:
+            continue
+        if _unquote_value(stripped.partition("=")[2]).startswith(_SOPS_CIPHERTEXT_PREFIX):
+            return True
+    return False
 
 
 def has_plaintext_secret_value(file_path: Path, *, plain_keys: bool = False) -> bool:
@@ -456,7 +496,7 @@ def has_plaintext_secret_value(file_path: Path, *, plain_keys: bool = False) -> 
     plain_keys = _dotenvx_plain_keys(content, plain_keys)
     return any(
         _line_has_plaintext_secret(raw_line, plain_keys=plain_keys)
-        for raw_line in content.splitlines()
+        for raw_line in _own_lines(content)
     )
 
 
@@ -548,7 +588,7 @@ def holds_only_plain_keys(content: str) -> bool:
     """
     names = [
         line.strip().partition("=")[0].strip()
-        for line in content.splitlines()
+        for line in _own_lines(content)
         if _is_secret_var_line(line)
     ]
     return bool(names) and all(is_plain_key(name) for name in names)
@@ -660,11 +700,9 @@ def combine_files(
     if clear_file.exists():
         clear_lines = clear_file.read_text(encoding="utf-8").splitlines()
 
-    secret_lines = []
     secret_file_content = None
     if secret_file.exists():
         secret_file_content = secret_file.read_text(encoding="utf-8")
-        secret_lines = secret_file_content.splitlines()
 
     new_content = _build_combined_content(env_config, clear_lines, secret_file_content)
 
@@ -679,22 +717,27 @@ def combine_files(
         atomic_write(combined_file, new_content, max_permissions=0o600)
         in_sync = True
 
-    # Count real secret variables (excludes comments and dotenvx public-key line).
-    # push reports them as encrypted, so a key dotenvx leaves plaintext by its
-    # _PLAIN rule is not counted (#1048), unless SOPS encrypted the file.
-    plain_keys = _dotenvx_plain_keys(secret_file_content or "", plain_keys_apply())
-    secret_var_count = sum(
-        1
-        for line in secret_lines
-        if _is_secret_var_line(line)
-        and not (plain_keys and is_plain_key(line.strip().partition("=")[0].strip()))
-    )
-
     return {
         "clear_lines": len(clear_lines),
-        "secret_vars": secret_var_count,
+        "secret_vars": _encrypted_var_count(secret_file_content or ""),
         "in_sync": in_sync,
     }
+
+
+def _encrypted_var_count(content: str) -> int:
+    """How many variables of a secret file push reports as encrypted (``combine_files``).
+
+    Comments and dotenvx's public-key line are no variables, nor is a line inside a value
+    that spans lines. A key dotenvx leaves plaintext by its ``_PLAIN`` rule is not encrypted
+    (#1048), unless SOPS encrypted the file.
+    """
+    plain_keys = _dotenvx_plain_keys(content, plain_keys_apply())
+    names = [
+        line.strip().partition("=")[0].strip()
+        for line in _own_lines(content)
+        if _is_secret_var_line(line)
+    ]
+    return sum(1 for name in names if not (plain_keys and is_plain_key(name)))
 
 
 def _written_file(path: Path) -> Path:

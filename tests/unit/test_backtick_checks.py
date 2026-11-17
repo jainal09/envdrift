@@ -18,7 +18,7 @@ from envdrift.scanner._native_filters import (
 
 # Built by concatenation so push protection never sees a whole secret literal.
 _CIPHERTEXT = "encrypted:" + "BJcmM3MTYm+PjK7upMiPNCU1mwz76onUbudP="
-_STRIPE_LIVE = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc"
+_STRIPE_LIVE = "sk_" + "live_" + "0" * 24  # an obviously made-up key of the live shape
 
 
 class TestGuardFilters:
@@ -58,6 +58,13 @@ class TestValidator:
 
     def test_type_check_skips_backtick_ciphertext(self) -> None:
         assert Validator()._check_type(f"`{_CIPHERTEXT}`", int) is None
+
+    def test_type_check_reads_a_value_only_shaped_like_sops_ciphertext(self) -> None:
+        """Only SOPS's ``ENC[AES256_GCM,`` envelope is its ciphertext, as everywhere else."""
+        assert Validator()._check_type("ENC[AES256_GCM,data:a,iv:b,tag:c,type:int]", int) is None
+        assert Validator()._check_type("ENC[not ciphertext]", int) == (
+            "Expected integer, got 'ENC[not ciphertext]'"
+        )
 
     def test_type_check_still_reads_a_backtick_plaintext_value(self) -> None:
         # python-dotenv keeps the backticks, so a pydantic-settings app loads "`8080`".

@@ -373,8 +373,12 @@ def _encrypt_one_file(
     if not result.success:
         print_error(result.message)
         # dotenvx may have written a new private key before the outcome check
-        # failed: gitignore it before exiting, or `git add .` stages it (#950).
-        _protect_private_keys(env_file)
+        # failed: gitignore it before exiting, or `git add .` stages it (#950). A
+        # .gitignore that cannot be read or written must not hide that failure.
+        try:
+            _protect_private_keys(env_file)
+        except (OSError, UnicodeError) as exc:
+            print_warning(f"Could not add .env.keys to .gitignore ({exc}): do not commit it.")
         raise typer.Exit(code=1)
     if result.changed:
         print_success(f"Encrypted {env_file} using {encryption_backend.name}")

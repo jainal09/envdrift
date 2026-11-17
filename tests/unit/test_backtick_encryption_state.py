@@ -135,8 +135,16 @@ class TestPullAndLockSeeQuotedCiphertext:
             'DOTENV_PUBLIC_KEY="02ab"\nAPI_KEY=abc\n',
             'NOTE="the secret is stored encrypted: see docs"\n',
             "# encrypted: values go here\n",
+            '# example: API_KEY="encrypted:..."\nAPI_KEY=abc\n',
+            'CERT="line one\nAPI_KEY=encrypted:abc\nline three"\n',
         ],
-        ids=["plaintext", "a-mention-in-a-value", "a-comment"],
+        ids=[
+            "plaintext",
+            "a-mention-in-a-value",
+            "a-comment",
+            "a-quoted-example-in-a-comment",
+            "a-line-inside-a-value",
+        ],
     )
     def test_plaintext_is_not(self, content: str) -> None:
         backend = DotenvxEncryptionBackend()
@@ -168,3 +176,30 @@ def test_failed_encrypt_still_gitignores_the_key_it_wrote(
 
     assert exc.value.exit_code == 1
     assert ".env.keys" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_a_gitignore_it_cannot_read_does_not_hide_the_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A .gitignore that is not UTF-8 raised from the failure path, in place of its exit (#950).
+
+    The failure is reported and exits 1 all the same, with a warning that the key file
+    may be staged.
+    """
+    from envdrift.cli_commands import encryption
+
+    printed: list[str] = []
+    monkeypatch.setattr(encryption, "print_error", printed.append)
+    monkeypatch.setattr(encryption, "print_warning", printed.append)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".gitignore").write_bytes(b"caf\xe9\n")  # Latin-1, not UTF-8
+    env_file = tmp_path / ".env"
+    env_file.write_text("API_KEY=x\n", encoding="utf-8")
+
+    with pytest.raises(typer.Exit) as exc:
+        _encrypt_one_file(env_file, _FailingBackend(), {}, smart_enabled=False)  # type: ignore[arg-type]
+
+    assert exc.value.exit_code == 1
+    assert printed[0] == "did not take effect"
+    assert printed[1].startswith("Could not add .env.keys to .gitignore")

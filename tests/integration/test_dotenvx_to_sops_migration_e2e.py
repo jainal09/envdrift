@@ -179,3 +179,66 @@ class TestRealCiphertextIsStillRefused:
         assert result.returncode == 1, output
         assert "is already encrypted with dotenvx, but the sops backend was selected" in output
         assert (workspace / ".env.production").read_bytes() == before
+
+
+class TestCiphertextIsFoundAsDotenvxReadsIt:
+    """The refusal judges a file by the ciphertext dotenvx and SOPS really read in it."""
+
+    @staticmethod
+    def _runner(workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]):
+        def run(args: list[str]) -> subprocess.CompletedProcess[str]:
+            return _run_envdrift(
+                args,
+                cwd=workspace,
+                integration_pythonpath=integration_pythonpath,
+                envdrift_cmd=envdrift_cmd,
+            )
+
+        return run
+
+    def test_ciphertext_dotenvx_cut_at_a_hash_is_refused_for_sops(
+        self, workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """dotenvx cut ``hunter2#Spring2024!`` at its ``#``, and decrypts what it encrypted.
+
+        The parser reads such a value as plaintext, so the file held no ciphertext to the
+        check: SOPS wrapped the dotenvx ciphertext, and ``sops -d`` gave that back for the
+        password.
+        """
+        env_file = workspace / ".env.production"
+        env_file.write_text("DB_PASSWORD=hunter2" + "#Spring2024!\n", encoding="utf-8")
+        subprocess.run(
+            ["dotenvx", "encrypt", "-f", ".env.production", "-fk", ".env.keys"],
+            cwd=workspace,
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+        assert "#Spring2024!" in env_file.read_text(encoding="utf-8")
+        before = env_file.read_bytes()
+        run = self._runner(workspace, integration_pythonpath, envdrift_cmd)
+
+        result = run(["encrypt", ".env.production", "--backend", "sops", "--age", _AGE_PUBLIC_KEY])
+
+        output = _flat(result)
+        assert result.returncode == 1, output
+        assert "is already encrypted with dotenvx, but the sops backend was selected" in output
+        assert env_file.read_bytes() == before
+
+    def test_a_comment_that_names_the_sops_envelope_is_no_sops_ciphertext(
+        self, workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """A plaintext file was refused for dotenvx as "already encrypted with sops"."""
+        env_file = workspace / ".env.production"
+        env_file.write_text(
+            "# SOPS writes each value as ENC[AES256_GCM,data:...]\n" + _PLAINTEXT, encoding="utf-8"
+        )
+        run = self._runner(workspace, integration_pythonpath, envdrift_cmd)
+
+        result = run(["encrypt", ".env.production"])
+
+        output = _flat(result)
+        assert result.returncode == 0, output
+        assert "Encrypted .env.production using dotenvx" in output
+        text = env_file.read_text(encoding="utf-8")
+        assert "API_KEY=encrypted:" in text and _API_KEY not in text
