@@ -171,7 +171,8 @@ def _secret_assignment(line: str) -> tuple[str, str] | None:
 
     ``KEY: value`` assigns as ``KEY=value`` does, as dotenvx reads it: skipped as no
     assignment, a secret written that way passed every check while dotenvx left it
-    plaintext. The name keeps an ``export`` before it.
+    plaintext. One whose value is empty to dotenvx, such as ``KEY: # a note``, holds
+    nothing it loads, and is none. The name keeps an ``export`` before it.
     """
     stripped = line.strip()
     if stripped.startswith("#") or stripped.startswith(_DOTENVX_PUBLIC_KEY_PREFIX):
@@ -181,7 +182,19 @@ def _secret_assignment(line: str) -> tuple[str, str] | None:
     name = name.strip()
     if not found or _is_sops_metadata_key(name):
         return None
+    if separator == ":" and _colon_value_is_empty(value):
+        return None
     return name, value
+
+
+def _colon_value_is_empty(value: str) -> bool:
+    """Whether the value of a ``KEY: value`` line is empty, as dotenvx reads it.
+
+    A ``#`` after the colon's whitespace starts a comment, so ``KEY: # a note`` holds an
+    empty value, as ``KEY: ""`` does.
+    """
+    rest = value.lstrip()
+    return rest.startswith("#") or not _unquote_value(rest)
 
 
 class PartialEncryptionError(Exception):

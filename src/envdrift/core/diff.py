@@ -226,10 +226,12 @@ class DiffEngine:
                 diff_type = DiffType.ADDED
             elif in_env1 and not in_env2:
                 diff_type = DiffType.REMOVED
-            elif not self._values_equal(value1, value2, field_meta, normalize) or (
-                other_fields
-                and not all(self._values_equal(value1, value2, f, normalize) for f in other_fields)
+            elif not self._values_equal(value1, value2, field_meta, normalize):
+                diff_type = DiffType.CHANGED
+            elif other_fields and not all(
+                self._values_equal(value1, value2, f, normalize) for f in other_fields
             ):
+                # A name several fields share differs if any one of them reads it differently.
                 diff_type = DiffType.CHANGED
             else:
                 diff_type = DiffType.UNCHANGED

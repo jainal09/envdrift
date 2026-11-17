@@ -378,9 +378,26 @@ class TestAColonAssignmentIsChecked:
             "DB_PASSWORD : hunter2",
             "DB_PASSWORD:",
             "DOTENV_PUBLIC_KEY: 02ab",
+            "DB_PASSWORD: # set in production",
+            "DB_PASSWORD: #",
+            'DB_PASSWORD: ""',
+            "DB_PASSWORD: '' # set in production",
         ],
-        ids=["comment", "no-space", "space-before-the-colon", "no-value", "public-key"],
+        ids=[
+            "comment",
+            "no-space",
+            "space-before-the-colon",
+            "no-value",
+            "public-key",
+            "only-a-comment",
+            "only-a-hash",
+            "quoted-empty",
+            "quoted-empty-and-a-comment",
+        ],
     )
     def test_a_line_dotenvx_reads_as_no_secret_is_none(self, line: str) -> None:
         assert not _line_has_plaintext_secret(line)
         assert not _line_has_plaintext_secret(line, plain_keys=True)
+
+    def test_an_empty_one_beside_plain_keys_leaves_nothing_to_encrypt(self) -> None:
+        assert holds_only_plain_keys("NOTE_PLAIN=hello\nDB_PASSWORD: # set in production\n")

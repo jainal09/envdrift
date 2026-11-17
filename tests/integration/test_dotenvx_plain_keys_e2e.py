@@ -508,6 +508,29 @@ class TestAColonAssignmentIsChecked:
         assert "Encryption did not take effect" in output
         assert self._SECRET_LINE in env_file.read_text(encoding="utf-8")
 
+    def test_encrypt_passes_beside_one_that_holds_only_a_comment(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """dotenvx reads ``KEY: # a note`` as an empty value, which holds no secret to encrypt."""
+        env_file = git_repo / ".env"
+        env_file.write_text(
+            f"API_KEY={_API_KEY}\nDB_PASSWORD: # set in production\n", encoding="utf-8"
+        )
+
+        result = _run_envdrift(
+            ["encrypt", ".env"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        output = _flat(result)
+        assert result.returncode == 0, output
+        assert "did not take effect" not in output
+        text = env_file.read_text(encoding="utf-8")
+        assert "API_KEY=encrypted:" in text and _API_KEY not in text
+        assert "DB_PASSWORD: # set in production\n" in text
+
     def test_lock_check_calls_it_unencrypted(
         self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
     ) -> None:
