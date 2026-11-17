@@ -32,6 +32,22 @@ pytestmark = [
 # Built by concatenation so push protection never sees a whole secret literal.
 _API_KEY = "sk_" + "test_" + "abc123"
 
+_MAPPING_CONFIG = """\
+[vault]
+provider = "aws"
+
+[vault.aws]
+region = "us-east-1"
+
+[encryption]
+backend = "dotenvx"
+
+[[vault.sync.mappings]]
+secret_name = "svc-key"
+folder_path = "svc"
+environment = "production"
+"""
+
 
 def _run_envdrift(
     args: list[str],
@@ -166,3 +182,55 @@ class TestFailedEncryptStillProtectsTheKeyDotenvxWrote:
         assert _is_ignored(git_repo, ".env.keys"), (
             f"exit {result.returncode}, key left unprotected: {_flat(result)}"
         )
+
+
+class TestPullAndLockReadQuotedCiphertext:
+    """``pull`` and ``lock`` see the ciphertext dotenvx keeps inside a value's quotes (#950).
+
+    Their check knew only ``KEY=encrypted:...``. A file whose values were all quoted, in
+    backticks or in ``"`` or ``'``, was "skipped (not encrypted)" by ``pull``, which then
+    printed "[OK] Setup complete!" over a file still encrypted, and ``lock --check`` said it
+    "would be encrypted" (exit 1) after every lock.
+    """
+
+    @pytest.mark.parametrize("quote", ["", '"', "'", "`"], ids=["bare", "double", "single", "tick"])
+    def test_lock_check_passes_and_pull_decrypts(
+        self,
+        git_repo: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+        quote: str,
+    ) -> None:
+        (git_repo / "envdrift.toml").write_text(_MAPPING_CONFIG, encoding="utf-8")
+        folder = git_repo / "svc"
+        folder.mkdir()
+        env_file = folder / ".env.production"
+        env_file.write_text(f"API_KEY={quote}{_API_KEY}{quote}\n", encoding="utf-8")
+        subprocess.run(
+            ["dotenvx", "encrypt", "-f", env_file.name, "-fk", ".env.keys"],
+            cwd=folder,
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+        assert f"API_KEY={quote}encrypted:" in env_file.read_text(encoding="utf-8")
+
+        def run(*args: str) -> subprocess.CompletedProcess[str]:
+            return _run_envdrift(
+                list(args),
+                cwd=git_repo,
+                integration_pythonpath=integration_pythonpath,
+                envdrift_cmd=envdrift_cmd,
+            )
+
+        check = run("lock", "--check")
+        pull = run("pull", "--skip-sync")
+
+        assert check.returncode == 0, _flat(check)
+        assert "skipped (already encrypted)" in _flat(check)
+        output = _flat(pull)
+        assert pull.returncode == 0, output
+        assert "skipped (not encrypted)" not in output
+        assert "svc/.env.production - decrypted" in output
+        text = env_file.read_text(encoding="utf-8")
+        assert f"API_KEY={quote}{_API_KEY}{quote}" in text and "encrypted:" not in text

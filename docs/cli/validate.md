@@ -39,8 +39,8 @@ Type validation mirrors what the real app does at startup:
 - Model-level `SettingsConfigDict(str_min_length=..., str_max_length=...)` limits
   are enforced even when string fields have no individual `Field` constraints.
 - An encrypted value (`encrypted:...` or `ENC[...]`, also inside the backticks dotenvx keeps
-  around a backtick-quoted value's ciphertext) is not checked against its field's
-  constraints, since its plaintext is unknown. Nor is the field's default, which the real
+  around a backtick-quoted value's ciphertext, a comment glued after them or not) is not
+  checked against its field's constraints, since its plaintext is unknown. Nor is the field's default, which the real
   app does not use when the file supplies a value. The exception is a schema with a
   `mode="after"` or `"wrap"` model validator, or `model_post_init`: those do not run once
   a field fails, so a default that fails is still reported rather than passing them unchecked.

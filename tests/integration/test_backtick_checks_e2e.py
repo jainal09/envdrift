@@ -83,16 +83,28 @@ def _dotenvx_encrypt(env_file: Path) -> None:
     )
 
 
-def _encrypted_file(folder: Path, quote: str) -> Path:
-    """A ``.env.production`` whose values dotenvx encrypted inside ``quote``."""
+def _encrypted_file(folder: Path, quote: str, comment: str = "") -> Path:
+    """A ``.env.production`` whose values dotenvx encrypted inside ``quote``.
+
+    ``comment`` follows each closing quote, as in ``PORT=`8080`#note``: dotenvx keeps it
+    after the ciphertext.
+    """
     env_file = folder / ".env.production"
     env_file.write_text(
-        f"API_KEY={quote}{_API_KEY}{quote}\nPORT={quote}8080{quote}\n", encoding="utf-8"
+        f"API_KEY={quote}{_API_KEY}{quote}{comment}\nPORT={quote}8080{quote}{comment}\n",
+        encoding="utf-8",
     )
     _dotenvx_encrypt(env_file)
     text = env_file.read_text(encoding="utf-8")
     assert f"API_KEY={quote}encrypted:" in text and _API_KEY not in text
+    for name in ("API_KEY", "PORT"):
+        line = next(line for line in text.splitlines() if line.startswith(f"{name}="))
+        assert line.endswith(f"{quote}{comment}"), line
     return env_file
+
+
+# A comment glued to the closing quote: dotenvx ends the value at that quote.
+_COMMENTS = pytest.mark.parametrize("comment", ["", "#note"], ids=["no-comment", "glued-comment"])
 
 
 @_needs_dotenvx
@@ -127,14 +139,16 @@ class TestValidateSkipsBacktickCiphertext:
     """#964.2: validate does not type-check ciphertext inside backticks."""
 
     @pytest.mark.parametrize("quote", ['"', "`"], ids=["double", "tick"])
+    @_COMMENTS
     def test_encrypted_int_field_passes(
         self,
         work_dir: Path,
         integration_pythonpath: str,
         envdrift_cmd: list[str],
         quote: str,
+        comment: str,
     ) -> None:
-        _encrypted_file(work_dir, quote)
+        _encrypted_file(work_dir, quote, comment)
         (work_dir / "schema_mod.py").write_text(_SCHEMA, encoding="utf-8")
 
         result = _run_envdrift(
@@ -162,15 +176,19 @@ class TestCheckFindsBacktickPlaintextSecrets:
     """#964.3: ``encrypt --check`` reports a plaintext secret inside backticks."""
 
     @pytest.mark.parametrize("quote", ['"', "`"], ids=["double", "tick"])
+    @_COMMENTS
     def test_plaintext_secret_blocks_the_commit(
         self,
         work_dir: Path,
         integration_pythonpath: str,
         envdrift_cmd: list[str],
         quote: str,
+        comment: str,
     ) -> None:
         # STRIPE does not look sensitive by name: only the value gives it away.
-        (work_dir / ".env").write_text(f"STRIPE={quote}{_STRIPE_LIVE}{quote}\n", encoding="utf-8")
+        (work_dir / ".env").write_text(
+            f"STRIPE={quote}{_STRIPE_LIVE}{quote}{comment}\n", encoding="utf-8"
+        )
 
         result = _run_envdrift(
             ["encrypt", "--check", ".env"],
@@ -183,3 +201,35 @@ class TestCheckFindsBacktickPlaintextSecrets:
         assert "PLAINTEXT SECRETS DETECTED" in output
         assert "'STRIPE' has a value that looks like a secret" in output
         assert result.returncode == 1, output
+
+
+@_needs_dotenvx
+class TestCheckCountsCiphertextBeforeAGluedComment:
+    """``encrypt --check`` counts ciphertext with a comment glued after it as encrypted (#950).
+
+    dotenvx ends a quoted value at its closing quote and keeps a comment after it:
+    ``PORT=`encrypted:...`#note``. python-dotenv takes no backtick as a quote and keeps a
+    glued comment in the value, so the backtick form was counted as plaintext.
+    """
+
+    @pytest.mark.parametrize("quote", ['"', "`"], ids=["double", "tick"])
+    def test_check_reports_the_file_fully_encrypted(
+        self,
+        work_dir: Path,
+        integration_pythonpath: str,
+        envdrift_cmd: list[str],
+        quote: str,
+    ) -> None:
+        _encrypted_file(work_dir, quote, "#note")
+
+        result = _run_envdrift(
+            ["encrypt", "--check", ".env.production"],
+            cwd=work_dir,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        output = _flat(result)
+        assert "File is fully encrypted" in output, output
+        assert "Plaintext: 0" in output
+        assert result.returncode == 0, output

@@ -65,8 +65,11 @@ exit code (dotenvx can exit `0` without encrypting):
   every plaintext value counts again. SOPS has no `_PLAIN` rule, so nothing changes for it.
 - **Reads ciphertext in every quote style dotenvx keeps.** dotenvx keeps a value's
   quotes around its ciphertext, backticks included (`` API_KEY=`encrypted:...` ``), so
-  the outcome check, `encrypt --check` and `decrypt` read ciphertext inside `"`, `'` or
-  backticks alike, instead of calling a backtick-quoted encryption a key problem.
+  the outcome check, `encrypt --check`, `decrypt`, `pull` and `lock` read ciphertext
+  inside `"`, `'` or backticks alike, instead of calling a backtick-quoted encryption a
+  key problem, or a file whose values are all quoted unencrypted. A comment glued to the
+  closing quote (`` PORT=`encrypted:...`#note ``) is no part of the value, as dotenvx
+  reads it.
 - **Gitignores the key file on failure too.** `.env.keys` is added to `.gitignore`
   after a run that fails its outcome check as well, since dotenvx may already have
   written a new private key to it.
@@ -125,7 +128,8 @@ command line. Without `--check`, each file is encrypted in turn.
 
 Only check encryption status without modifying the file. Exits with code 1 if plaintext secrets are detected.
 A backtick-quoted value is judged by the value inside the backticks, which is what dotenvx
-encrypts, so `` STRIPE=`sk_live_...` `` is reported as a plaintext secret.
+encrypts, so `` STRIPE=`sk_live_...` `` is reported as a plaintext secret, with a comment
+glued after the closing backtick or not.
 
 ```bash
 envdrift encrypt .env.production --check

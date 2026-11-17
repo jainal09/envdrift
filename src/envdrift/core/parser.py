@@ -22,6 +22,10 @@ class EncryptionStatus(Enum):
     EMPTY = "empty"  # No value (KEY= or KEY="")
 
 
+# A backtick-quoted value followed by a comment, as dotenvx reads ``KEY=`value`#note``.
+_BACKTICK_VALUE_THEN_COMMENT = re.compile(r"`((?:\\`|[^`])*)`\s*#.*", re.DOTALL)
+
+
 def strip_backtick_quotes(value: str) -> str:
     """Return ``value`` without one surrounding pair of backticks, as dotenvx reads it.
 
@@ -30,7 +34,16 @@ def strip_backtick_quotes(value: str) -> str:
     ``EnvParser``, keeps them as part of the value, which is what a
     pydantic-settings app loads. Checks about encryption look inside them, as
     dotenvx does (#950, #964).
+
+    dotenvx ends the value at its closing backtick, and reads a ``#`` after it as a
+    comment, glued to it or not. python-dotenv takes no backtick as a quote, and starts
+    a comment only after whitespace, so it keeps a glued one in the value:
+    ``KEY=`encrypted:...`#note`` is dotenvx ciphertext all the same. dotenvx tries that
+    reading first, so it holds even when the comment ends with a backtick.
     """
+    commented = _BACKTICK_VALUE_THEN_COMMENT.fullmatch(value)
+    if commented:
+        return commented.group(1)
     if len(value) >= 2 and value[0] == "`" and value[-1] == "`":
         return value[1:-1]
     return value
