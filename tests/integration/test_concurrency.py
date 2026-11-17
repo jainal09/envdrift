@@ -100,12 +100,14 @@ max_workers = {num_services}
 """
             (work_dir / "envdrift.toml").write_text(config_content)
 
-            # Create service directories
+            # Create service directories. Their env files hold no ciphertext: pull syncs the
+            # keys, and has nothing to decrypt with them. A made-up "encrypted:" value cannot
+            # be decrypted, and pull reports that it failed (#950).
             for i in range(num_services):
                 service_dir = work_dir / f"service-{i}"
                 service_dir.mkdir()
                 (service_dir / ".env.production").write_text(
-                    'DOTENV_PUBLIC_KEY_PRODUCTION="key"\nSECRET="encrypted:..."'
+                    'DOTENV_PUBLIC_KEY_PRODUCTION="key"\nSECRET=plain-value'
                 )
 
             env = aws_test_env.copy()
@@ -202,12 +204,14 @@ max_workers = {num_services}
 """
             (work_dir / "envdrift.toml").write_text(config_content)
 
-            # Create service directories
+            # Create service directories. Their env files hold no ciphertext: pull syncs the
+            # keys, and has nothing to decrypt with them. A made-up "encrypted:" value cannot
+            # be decrypted, and pull reports that it failed (#950).
             for i in range(num_services):
                 service_dir = work_dir / f"vault-service-{i}"
                 service_dir.mkdir()
                 (service_dir / ".env.production").write_text(
-                    'DOTENV_PUBLIC_KEY_PRODUCTION="key"\nSECRET="encrypted:..."'
+                    'DOTENV_PUBLIC_KEY_PRODUCTION="key"\nSECRET=plain-value'
                 )
 
             env = vault_test_env.copy()

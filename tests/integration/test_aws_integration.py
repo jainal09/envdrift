@@ -202,15 +202,12 @@ environment = "production"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        # Create a minimal encrypted .env file (simulated)
+        # The env file the mapping names. It holds no ciphertext: pull syncs the key, and has
+        # nothing to decrypt with it. A made-up "encrypted:" value cannot be decrypted, and
+        # pull reports that it failed (#950).
         env_content = """\
-#/-------------------[DOTENV][Load]--------------------/#
-#/         public-key encryption for .env files        /#
-#/  https://github.com/dotenvx/dotenvx-pro?encrypted   /#
-#/--------------------------------------------------/#
 DOTENV_PUBLIC_KEY_PRODUCTION="034a5e..."
-# encrypted values below
-DATABASE_URL="encrypted:abc123..."
+DATABASE_URL=postgres://localhost/app
 """
         (work_dir / ".env.production").write_text(env_content)
 
@@ -283,12 +280,14 @@ environment = "production"
 """
         (work_dir / "envdrift.toml").write_text(config_content)
 
-        # Create service directories with encrypted env files
+        # Create service directories with env files. They hold no ciphertext: pull syncs the
+        # keys, and has nothing to decrypt with them. A made-up "encrypted:" value cannot be
+        # decrypted, and pull reports that it failed (#950).
         for service in ["service-a", "service-b"]:
             service_dir = work_dir / service
             service_dir.mkdir()
             (service_dir / ".env.production").write_text(
-                'DOTENV_PUBLIC_KEY_PRODUCTION="key"\nSECRET="encrypted:..."\n'
+                'DOTENV_PUBLIC_KEY_PRODUCTION="key"\nSECRET=plain-value\n'
             )
 
         env = aws_test_env.copy()
