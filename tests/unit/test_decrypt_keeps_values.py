@@ -222,10 +222,10 @@ class TestDecrypt:
         content = f"A={_ct('a')}\n"
         env_file.write_text(content, encoding="utf-8")
 
-        def _disk_full(_path: Path, _data: bytes) -> None:
+        def _disk_full(_path: Path, _before: bytes, _content: str) -> bool:
             raise OSError(errno.ENOSPC, "No space left on device")
 
-        monkeypatch.setattr("envdrift.integrations.dotenvx._replace_file", _disk_full)
+        monkeypatch.setattr("envdrift.sync.operations.replace_if_unchanged", _disk_full)
 
         with pytest.raises(DotenvxError, match="Cannot write the decrypted values"):
             _wrapper(_StandInDotenvx()).decrypt(env_file)

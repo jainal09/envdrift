@@ -974,8 +974,10 @@ class DecryptSnapshot:
     endings survive the wrapper's LF normalization).
 
     Used as a context manager, it restores the file on any exception from the
-    body and keeps the outcome in ``note`` for the caller's error message. The
-    pull-partial paths and the dotenvx backend (decrypt, pull and vault-pull)
+    body and keeps the outcome in ``note`` for the caller's error message. An
+    exception whose ``left_as_is`` is true says envdrift wrote nothing because the
+    file changed while dotenvx ran: the change is another writer's, and is kept.
+    The pull-partial paths and the dotenvx backend (decrypt, pull and vault-pull)
     share it.
     """
 
@@ -996,7 +998,12 @@ class DecryptSnapshot:
         tb: TracebackType | None,
     ) -> None:
         """Restore the file when the decrypt raised; the exception propagates."""
-        if exc_type is not None:
+        if exc_type is None:
+            return
+        if getattr(exc, "left_as_is", False):
+            # The snapshot predates another writer's change: putting it back would destroy it.
+            self.note = f"{self.path} keeps that change."
+        else:
             self.note = self.restore()
 
     def restore(self) -> str:

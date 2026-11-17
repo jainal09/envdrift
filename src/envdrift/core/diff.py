@@ -30,20 +30,24 @@ class _SchemaFields:
     def __init__(self, schema: SchemaMetadata) -> None:
         self._schema = schema
         self._sensitive_names = set(schema.sensitive_fields)
-        self._by_env_name = {
-            key: field_meta
-            for field_meta in schema.fields.values()
-            for key in _field_lookup_keys(field_meta, schema.case_sensitive)
-        }
+        self._by_env_name: dict[str, FieldMetadata] = {}
+        # A name several fields bind to sets each of them, so it is sensitive if any one is.
+        self._sensitive_env_names: set[str] = set()
+        for field_meta in schema.fields.values():
+            for key in _field_lookup_keys(field_meta, schema.case_sensitive):
+                self._by_env_name.setdefault(key, field_meta)
+                if field_meta.sensitive:
+                    self._sensitive_env_names.add(key)
 
     def lookup(self, var_name: str) -> tuple[FieldMetadata | None, bool]:
         """The field ``var_name`` sets, or None, and whether ``var_name`` is sensitive.
 
         A sensitive field's own name is sensitive, and so is each name it binds to.
         """
-        bound = self._by_env_name.get(_normalize_env_name(var_name, self._schema.case_sensitive))
+        key = _normalize_env_name(var_name, self._schema.case_sensitive)
+        bound = self._by_env_name.get(key)
         field_meta = bound if bound is not None else self._schema.fields.get(var_name)
-        sensitive = var_name in self._sensitive_names or bool(field_meta and field_meta.sensitive)
+        sensitive = var_name in self._sensitive_names or key in self._sensitive_env_names
         return field_meta, sensitive
 
 

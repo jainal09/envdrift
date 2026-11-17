@@ -150,6 +150,17 @@ class DotenvxValueError(DotenvxError):
     """
 
 
+class DotenvxFileChangedError(DotenvxError):
+    """The file changed while dotenvx decrypted it, and envdrift left it as it is.
+
+    Another writer saved it in the meantime, so the decrypted values, read before
+    that change, were not written over it. ``left_as_is`` tells a
+    ``DecryptSnapshot`` not to put its earlier bytes back over the change either.
+    """
+
+    left_as_is = True
+
+
 class DotenvxInstallError(Exception):
     """Failed to install dotenvx."""
 
@@ -1693,25 +1704,26 @@ class DotenvxWrapper:
         """Write the decrypted ``text`` over ``env_file`` whole, through any symlink to it.
 
         dotenvx's own write went through a symlinked file into its target, so the
-        link stays a link and the plaintext lands where it did before. A file that no
-        longer holds the ``read`` bytes was changed while dotenvx ran, and is left as
-        it is: ``text`` holds the file as it was before the change.
+        link stays a link and the plaintext lands where it did before. The file is
+        replaced only while it still holds the ``read`` bytes, checked after the new
+        bytes are written to a temp file and just before the rename: a file changed
+        while dotenvx ran is left as it is, since ``text`` holds it as it was before.
         """
+        from envdrift.sync.operations import replace_if_unchanged
+
         try:
             target = env_file.resolve()
         except (OSError, RuntimeError):  # a symlink loop: write the path itself
             target = env_file
         try:
-            changed = target.read_bytes() != read
-            if not changed:
-                _replace_file(target, text.encode("utf-8"))
+            written = replace_if_unchanged(target, read, text)
         except OSError as exc:
             raise DotenvxError(
                 f"Cannot write the decrypted values to {env_file}: {exc.strerror or exc}. "
                 "Nothing was changed."
             ) from None
-        if changed:
-            raise DotenvxError(
+        if not written:
+            raise DotenvxFileChangedError(
                 f"{env_file} changed while it was being decrypted, so the decrypted values "
                 "were not written over the change. Nothing was changed: run decrypt again."
             )

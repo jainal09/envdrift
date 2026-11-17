@@ -222,3 +222,37 @@ class TestAliasedFields:
             assert (by_name[name].value1, by_name[name].value2) == ("********", "********")
         # PORT-NUMBER=true crashes the app's int field, so it is drift, not a bool alias of 1.
         assert "PORT-NUMBER" in by_name
+
+    @pytest.mark.parametrize("settings", ["SensitiveFirst", "SensitiveLast"])
+    def test_a_name_fields_share_is_masked_if_one_of_them_is_sensitive(
+        self, tmp_path: Path, settings: str
+    ) -> None:
+        """The field declared last took the name: a later plain field unmasked it."""
+        (tmp_path / "settings_shared_954.py").write_text(_SHARED_ALIAS_SETTINGS, encoding="utf-8")
+        env1, env2 = tmp_path / ".env.dev", tmp_path / ".env.prod"
+        env1.write_text("SHARED_KEY=" + _DEV_VALUES["API_TOKEN"] + "\n", encoding="utf-8")
+        env2.write_text("SHARED_KEY=" + _PROD_VALUES["API_TOKEN"] + "\n", encoding="utf-8")
+
+        result = envdrift.diff(
+            env1, env2, schema=f"settings_shared_954:{settings}", service_dir=tmp_path
+        )
+
+        [shared] = result.get_changed()
+        assert (shared.name, shared.value1, shared.value2) == ("SHARED_KEY", "********", "********")
+        assert shared.is_sensitive
+
+
+_SHARED_ALIAS_SETTINGS = """\
+from pydantic import Field
+from pydantic_settings import BaseSettings
+
+
+class SensitiveFirst(BaseSettings):
+    token: str = Field(alias="SHARED_KEY", json_schema_extra={"sensitive": True})
+    label: str = Field(default="", alias="SHARED_KEY")
+
+
+class SensitiveLast(BaseSettings):
+    label: str = Field(default="", alias="SHARED_KEY")
+    token: str = Field(alias="SHARED_KEY", json_schema_extra={"sensitive": True})
+"""

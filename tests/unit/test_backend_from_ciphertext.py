@@ -144,15 +144,24 @@ class TestEncryptRefusal:
         )
         return backend
 
-    def test_sops_encrypts_a_file_dotenvx_decrypted(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    @pytest.mark.parametrize(
+        ("content", "backend_name"),
+        [
+            (_DOTENVX_DECRYPTED, "sops"),
+            # The value's line ``sops_version=3.13.3`` refused the file as SOPS's.
+            (_HEADER + _SOPS_METADATA_IN_A_VALUE, "dotenvx"),
+        ],
+        ids=["sops-after-dotenvx-decrypt", "dotenvx-beside-sops-metadata-text-in-a-value"],
+    )
+    def test_a_file_without_the_other_backends_ciphertext_is_encrypted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, content: str, backend_name: str
     ) -> None:
         monkeypatch.chdir(tmp_path)
         env_file = tmp_path / ".env.production"
-        env_file.write_text(_DOTENVX_DECRYPTED, encoding="utf-8")
-        backend = self._stub_backend(monkeypatch, "sops")
+        env_file.write_text(content, encoding="utf-8")
+        backend = self._stub_backend(monkeypatch, backend_name)
 
-        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "sops"])
+        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", backend_name])
 
         assert result.exit_code == 0, result.output
         assert backend.encrypt_calls == [env_file]
@@ -172,17 +181,3 @@ class TestEncryptRefusal:
         assert "is already encrypted with sops, but the dotenvx backend was selected" in out
         assert backend.encrypt_calls == []
         assert env_file.read_text(encoding="utf-8") == _SOPS_AFTER_DOTENVX
-
-    def test_dotenvx_encrypts_a_file_a_value_of_which_reads_like_sops_metadata(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """The value's line ``sops_version=3.13.3`` refused the file as SOPS's."""
-        monkeypatch.chdir(tmp_path)
-        env_file = tmp_path / ".env.production"
-        env_file.write_text(_HEADER + _SOPS_METADATA_IN_A_VALUE, encoding="utf-8")
-        backend = self._stub_backend(monkeypatch, "dotenvx")
-
-        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "dotenvx"])
-
-        assert result.exit_code == 0, result.output
-        assert backend.encrypt_calls == [env_file]
