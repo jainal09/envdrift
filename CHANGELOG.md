@@ -1,5 +1,12 @@
 # Changelog
 
+## [11.1.9](https://github.com/jainal09/envdrift/compare/v11.1.8...v11.1.9) (2026-11-17)
+
+
+### Bug Fixes
+
+* **guard:** keep found secrets local and never miss a committed one ([#1046](https://github.com/jainal09/envdrift/issues/1046)) ([a0e9f07](https://github.com/jainal09/envdrift/commit/a0e9f071de78ff461ec918d01ae43f48132e9552))
+
 ## [11.1.8](https://github.com/jainal09/envdrift/compare/v11.1.7...v11.1.8) (2026-11-16)
 
 
