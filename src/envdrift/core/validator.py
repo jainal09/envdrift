@@ -585,7 +585,7 @@ class Validator:
         Returns:
             `true` if the value matches any secret-like pattern, `false` otherwise.
         """
-        if value.startswith("`"):  # a call per value costs every validation
+        if value.startswith("`"):  # most values hold none: they skip the call
             value = strip_backtick_quotes(value)
         for pattern in self.SECRET_PATTERNS:
             if pattern.search(value):

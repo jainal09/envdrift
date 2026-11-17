@@ -382,10 +382,8 @@ class EnvParser:
 
         Parameters:
             content (str): The complete text content of a .env file to parse.
-            lenient (bool): When True, accept non-identifier / non-ASCII keys too
-                (see ``LENIENT_LINE_PATTERN``).
-            interpolate (bool): When False, keep ``${VAR}`` references unexpanded
-                (see ``parse``).
+            lenient (bool): Accept non-identifier and non-ASCII keys too (``LENIENT_LINE_PATTERN``).
+            interpolate (bool): When False, keep ``${VAR}`` references unexpanded (see ``parse``).
 
         Returns:
             EnvFile: An EnvFile populated with parsed EnvVar entries keyed by variable name and a list of comment lines.
