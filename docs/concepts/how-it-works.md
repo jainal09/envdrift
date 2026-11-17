@@ -67,7 +67,8 @@ Two backends are supported:
 dotenvx reads an unquoted value only up to its first `#`, while envdrift reads it the
 python-dotenv way described above. So envdrift refuses to encrypt with dotenvx a value
 whose `#` touches it (`PASSWORD=abc#def`) rather than leave the part after the `#` in
-plaintext: quote such a value first.
+plaintext: quote such a value first. A `_PLAIN` key, which dotenvx leaves plaintext as a
+whole, is not refused.
 
 See [Encryption Backends](encryption-backends.md) for a detailed comparison.
 

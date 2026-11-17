@@ -279,8 +279,8 @@ class DotenvxEncryptionBackend(EncryptionBackend):
     def _decrypt_under(
         self, snapshot: DecryptSnapshot, env_file: Path, keys_file: Path | str | None, kwargs
     ) -> None:
-        """Run dotenvx's decrypt; on a failure the snapshot puts the file back, and says so."""
-        from envdrift.integrations.dotenvx import DotenvxError
+        """Run dotenvx's decrypt; the error for a failure says what became of the file."""
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxNotFoundError
 
         try:
             with snapshot:
@@ -290,8 +290,9 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                     env=kwargs.get("env"),
                     cwd=kwargs.get("cwd"),
                 )
-        except DotenvxError as e:
-            # dotenvx's own output names the value it could not decrypt.
+        except (DotenvxError, DotenvxNotFoundError) as e:
+            # dotenvx's own output names the value it could not decrypt. dotenvx can also go
+            # missing after the check before this; the file is then left as it is, too.
             raise EncryptionBackendError(
                 f"{_dotenvx_failure_message('decryption', e)}\n{snapshot.note}"
             ) from e

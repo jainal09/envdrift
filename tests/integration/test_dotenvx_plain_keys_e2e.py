@@ -405,3 +405,140 @@ class TestTheRuleHoldsBesideAMentionOfSops:
         assert result.returncode == 0, _flat(result)
         assert "did not take effect" not in _flat(result)
         assert "NOTE_PLAIN=hi" in env_file.read_text(encoding="utf-8")
+
+
+class TestAPlainKeyMayHoldAHash:
+    """dotenvx encrypts none of a ``_PLAIN`` key, so a ``#`` in its value leaves none of it out.
+
+    encrypt refused such a value as one dotenvx would cut at the ``#`` and leave partly
+    unencrypted (#947), though it leaves the whole of it plaintext by design.
+    """
+
+    def test_encrypt_encrypts_the_rest(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        env_file = git_repo / ".env"
+        env_file.write_text(
+            f"DOCS_URL_PLAIN=https://example.com/docs#setup\nAPI_KEY={_API_KEY}\n",
+            encoding="utf-8",
+        )
+
+        result = _run_envdrift(
+            ["encrypt", ".env"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        output = _flat(result)
+        assert result.returncode == 0, output
+        assert "Refusing" not in output
+        text = env_file.read_text(encoding="utf-8")
+        assert "DOCS_URL_PLAIN=https://example.com/docs#setup\n" in text
+        assert "API_KEY=encrypted:" in text and _API_KEY not in text
+
+    def test_with_an_envfile_it_is_refused(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        """There dotenvx encrypts the ``_PLAIN`` keys too, and would cut this one at the ``#``."""
+        (git_repo / "Envfile").write_text("", encoding="utf-8")
+        env_file = git_repo / ".env"
+        content = f"DOCS_URL_PLAIN=https://example.com/docs#setup\nAPI_KEY={_API_KEY}\n"
+        env_file.write_text(content, encoding="utf-8")
+
+        result = _run_envdrift(
+            ["encrypt", ".env"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        output = _flat(result)
+        assert result.returncode == 1, output
+        assert "leave part of DOCS_URL_PLAIN unencrypted" in output
+        assert env_file.read_text(encoding="utf-8") == content
+
+
+class TestAColonAssignmentIsChecked:
+    """dotenvx loads ``KEY: value``, and its encrypt leaves such a value plaintext.
+
+    envdrift's checks read only ``KEY=value`` lines. Beside a ``_PLAIN`` key, such a secret
+    passed encrypt, push, push --check and lock --check; beside ciphertext, it passed encrypt.
+    """
+
+    _SECRET_LINE = f"DB_PASSWORD: {_API_KEY}"
+
+    def test_dotenvx_loads_it_and_leaves_it_plaintext(self, tmp_path: Path) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"API_KEY={_API_KEY}\n{self._SECRET_LINE}\n", encoding="utf-8")
+        dotenvx = ["dotenvx", "encrypt", "-f", ".env", "-fk", ".env.keys"]
+        subprocess.run(dotenvx, cwd=tmp_path, capture_output=True, check=True, timeout=120)
+
+        loaded = subprocess.run(
+            ["dotenvx", "get", "DB_PASSWORD", "-f", ".env", "-fk", ".env.keys"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=120,
+        )
+
+        assert loaded.stdout.strip() == _API_KEY
+        text = env_file.read_text(encoding="utf-8")
+        assert "API_KEY=encrypted:" in text and f"{self._SECRET_LINE}\n" in text
+
+    @pytest.mark.parametrize(
+        "beside", ["NOTE_PLAIN=hello", f"API_KEY={_API_KEY}"], ids=["a-plain-key", "a-secret"]
+    )
+    def test_encrypt_fails_while_it_is_plaintext(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str], beside: str
+    ) -> None:
+        env_file = git_repo / ".env"
+        env_file.write_text(f"{beside}\n{self._SECRET_LINE}\n", encoding="utf-8")
+
+        result = _run_envdrift(
+            ["encrypt", ".env"],
+            cwd=git_repo,
+            integration_pythonpath=integration_pythonpath,
+            envdrift_cmd=envdrift_cmd,
+        )
+
+        output = _flat(result)
+        assert result.returncode == 1, output
+        assert "Encryption did not take effect" in output
+        assert self._SECRET_LINE in env_file.read_text(encoding="utf-8")
+
+    def test_lock_check_calls_it_unencrypted(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        (git_repo / "envdrift.toml").write_text(_LOCK_CONFIG, encoding="utf-8")
+        env_file = git_repo / "svc" / ".env.production"
+        env_file.parent.mkdir()
+        env_file.write_text(f"NOTE_PLAIN=hello\n{self._SECRET_LINE}\n", encoding="utf-8")
+
+        check = TestAFileOfOnlyPlainKeysIsDone._runner(
+            git_repo, integration_pythonpath, envdrift_cmd
+        )("lock", "--check")
+
+        output = _flat(check)
+        assert check.returncode == 1, output
+        assert "would be encrypted" in output
+        assert "skipped (already encrypted)" not in output
+
+    def test_push_fails_and_check_calls_it_out_of_date(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        (git_repo / "envdrift.toml").write_text(_PARTIAL_CONFIG, encoding="utf-8")
+        (git_repo / ".env.production.clear").write_text("APP=shop\n", encoding="utf-8")
+        secret = git_repo / ".env.production.secret"
+        secret.write_text(f"NOTE_PLAIN=hello\n{self._SECRET_LINE}\n", encoding="utf-8")
+        run = TestAFileOfOnlyPlainKeysIsDone._runner(git_repo, integration_pythonpath, envdrift_cmd)
+
+        push = run("push")
+        check = run("push", "--check")
+
+        assert push.returncode == 1, _flat(push)
+        assert "Encryption did not take effect" in _flat(push)
+        assert "Push complete" not in _flat(push)
+        assert check.returncode == 1, _flat(check)
+        assert "out of date" in _flat(check)

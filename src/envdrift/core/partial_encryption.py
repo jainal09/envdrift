@@ -153,8 +153,14 @@ def _build_warning_header(clear_file: str, secret_file: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _is_secret_var_line(line: str) -> bool:
-    """Return True if ``line`` is a real secret variable assignment.
+# dotenvx reads ``KEY: value`` as an assignment too: a name, a colon, then whitespace. Its
+# encrypt rewrites only ``KEY=value`` lines, so it leaves such a value plaintext, and sops
+# refuses the line.
+_COLON_ASSIGNMENT_RE = re.compile(r"(?:export\s+)?[A-Za-z0-9_.-]+:\s")
+
+
+def _secret_assignment(line: str) -> tuple[str, str] | None:
+    """Return the name and raw value ``line`` assigns, if it is a real secret assignment.
 
     Excludes comments, dotenvx's ``DOTENV_PUBLIC_KEY_*`` artifact and SOPS's
     metadata trailer (version/timestamp/recipient/mac bookkeeping, not real
@@ -162,14 +168,20 @@ def _is_secret_var_line(line: str) -> bool:
     reflect only the actual secrets. The SOPS exclusion matches the EXACT
     metadata key family (``_is_sops_metadata_key``), not a bare ``sops_`` prefix,
     so a real user variable such as ``sops_token=…`` is still scanned.
+
+    ``KEY: value`` assigns as ``KEY=value`` does, as dotenvx reads it: skipped as no
+    assignment, a secret written that way passed every check while dotenvx left it
+    plaintext. The name keeps an ``export`` before it.
     """
     stripped = line.strip()
-    if "=" not in stripped or stripped.startswith("#"):
-        return False
-    key = stripped.partition("=")[0].strip()
-    if _is_sops_metadata_key(key):
-        return False
-    return not stripped.startswith(_DOTENVX_PUBLIC_KEY_PREFIX)
+    if stripped.startswith("#") or stripped.startswith(_DOTENVX_PUBLIC_KEY_PREFIX):
+        return None
+    separator = ":" if _COLON_ASSIGNMENT_RE.match(stripped) else "="
+    name, found, value = stripped.partition(separator)
+    name = name.strip()
+    if not found or _is_sops_metadata_key(name):
+        return None
+    return name, value
 
 
 class PartialEncryptionError(Exception):
@@ -420,7 +432,7 @@ def _line_has_plaintext_secret(line: str, *, plain_keys: bool = False) -> bool:
     """Return True if a single ``.secret`` line is a PLAINTEXT secret assignment.
 
     Comments, blank lines, non-assignments and dotenvx's ``DOTENV_PUBLIC_KEY_*``
-    artifact (a public key is not a secret) are filtered by ``_is_secret_var_line``
+    artifact (a public key is not a secret) are filtered by ``_secret_assignment``
     and return False. Among real secret assignments, empty values
     (``KEY=`` / ``KEY=""`` / ``KEY=''``) carry no secret to leak, and ciphertext
     values are already encrypted; only a non-empty plaintext value, or ciphertext
@@ -430,10 +442,11 @@ def _line_has_plaintext_secret(line: str, *, plain_keys: bool = False) -> bool:
     an ``export`` prefix leaves the name's ``_PLAIN`` end as it is) is not leftover
     plaintext either (#1048). The default is SOPS's view, which has no such rule.
     """
-    if not _is_secret_var_line(line):
+    assignment = _secret_assignment(line)
+    if assignment is None:
         return False
-    name, _, value = line.strip().partition("=")
-    if plain_keys and is_plain_key(name.strip()):
+    name, value = assignment
+    if plain_keys and is_plain_key(name):
         return False
     # Empty assignment (KEY=, KEY="", KEY='') carries no secret to leak.
     return bool(_unquote_value(value)) and not _value_is_only_ciphertext(value)
@@ -591,12 +604,20 @@ def holds_only_plain_keys(content: str) -> bool:
     for, though a dotenvx push or lock has nothing left to do in it. Content with no
     variable is not such a file.
     """
-    names = [
-        line.strip().partition("=")[0].strip()
-        for line in _own_lines(content)
-        if _is_secret_var_line(line)
-    ]
+    names = _secret_names(content)
     return bool(names) and all(is_plain_key(name) for name in names)
+
+
+def _secret_names(content: str) -> list[str]:
+    """The name of each secret assignment of ``content`` (``_secret_assignment``), in order.
+
+    A line inside a value that spans lines is part of that value (``_own_lines``).
+    """
+    return [
+        assignment[0]
+        for assignment in map(_secret_assignment, _own_lines(content))
+        if assignment is not None
+    ]
 
 
 def _file_holds_only_plain_keys(file_path: Path) -> bool:
@@ -737,12 +758,7 @@ def _encrypted_var_count(content: str) -> int:
     (#1048), unless SOPS encrypted the file.
     """
     plain_keys = _dotenvx_plain_keys(content, plain_keys_apply())
-    names = [
-        line.strip().partition("=")[0].strip()
-        for line in _own_lines(content)
-        if _is_secret_var_line(line)
-    ]
-    return sum(1 for name in names if not (plain_keys and is_plain_key(name)))
+    return sum(1 for name in _secret_names(content) if not (plain_keys and is_plain_key(name)))
 
 
 def _written_file(path: Path) -> Path:
@@ -976,9 +992,9 @@ class DecryptSnapshot:
     Used as a context manager, it restores the file on any exception from the
     body and keeps the outcome in ``note`` for the caller's error message. An
     exception whose ``left_as_is`` is true says envdrift wrote nothing to the file,
-    as the dotenvx wrapper's do: a change it holds then is another writer's, saved
-    while the decrypt ran, and is kept. The pull-partial paths and the dotenvx
-    backend (decrypt, pull and vault-pull) share it.
+    as every one the dotenvx wrapper's decrypt raises does: a change it holds then is
+    another writer's, saved while the decrypt ran, and is kept. The pull-partial paths
+    and the dotenvx backend (decrypt, pull and vault-pull) share it.
     """
 
     def __init__(self, path: Path) -> None:

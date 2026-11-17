@@ -143,6 +143,64 @@ class TestEncryptRefusesBeforeDotenvxRuns:
         assert env_file.read_bytes() == content.encode("utf-8")
         assert not (tmp_path / ".env.keys").exists()
 
+    def test_a_plain_key_is_not_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """dotenvx encrypts none of a ``_PLAIN`` key, so a ``#`` leaves none of it out (#1048)."""
+        monkeypatch.chdir(tmp_path)  # where dotenvx runs, and no Envfile there
+        env_file = tmp_path / ".env.production"
+        env_file.write_text(
+            f"DOCS_URL_PLAIN=https://example.com/a#b\nDB_PASSWORD={_PASSWORD}\n", encoding="utf-8"
+        )
+        wrapper = DotenvxWrapper(auto_install=False)
+
+        def _no_dotenvx(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("dotenvx must not run")
+
+        wrapper._run = _no_dotenvx  # type: ignore[method-assign]
+
+        with pytest.raises(DotenvxValueError) as excinfo:
+            wrapper.encrypt(env_file)
+
+        message = " ".join(str(excinfo.value).split())
+        assert "leave part of DB_PASSWORD unencrypted" in message
+        assert "DOCS_URL_PLAIN" not in message
+
+    def test_a_file_whose_only_cut_value_is_a_plain_key_goes_to_dotenvx(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        env_file = tmp_path / ".env.production"
+        content = "DOCS_URL_PLAIN=https://example.com/a#b\nAPI_KEY=abc\n"
+        env_file.write_text(content, encoding="utf-8")
+        wrapper = DotenvxWrapper(auto_install=False)
+
+        class _DotenvxRanError(Exception):
+            pass
+
+        def _dotenvx(*_args: object, **_kwargs: object) -> None:
+            raise _DotenvxRanError
+
+        wrapper._run = _dotenvx  # type: ignore[method-assign]
+
+        with pytest.raises(_DotenvxRanError):
+            wrapper.encrypt(env_file)
+
+        assert env_file.read_text(encoding="utf-8") == content  # put back after the stand-in
+
+    def test_with_an_envfile_a_plain_key_is_refused_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An Envfile's policy has dotenvx encrypt the ``_PLAIN`` keys too, cut at the ``#``."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "Envfile").write_text("", encoding="utf-8")
+        env_file = tmp_path / ".env.production"
+        env_file.write_text("DOCS_URL_PLAIN=https://example.com/a#b\n", encoding="utf-8")
+        wrapper = DotenvxWrapper(auto_install=False)
+
+        with pytest.raises(DotenvxValueError, match="DOCS_URL_PLAIN unencrypted"):
+            wrapper.encrypt(env_file)
+
     def test_backend_reports_the_refusal_as_a_failed_result(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

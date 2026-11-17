@@ -54,7 +54,9 @@ exit code (dotenvx can exit `0` without encrypting):
 - **Reports silent encryption failures.** When the key is missing or malformed
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails
-  loudly instead of printing `[OK]`.
+  loudly instead of printing `[OK]`. A value written as `DB_PASSWORD: hunter2`, which
+  dotenvx loads like `DB_PASSWORD=hunter2` but never encrypts, is such a plaintext value,
+  for `push` and `lock` too: write it with `=` instead.
 - **Leaves dotenvx's `_PLAIN` keys to dotenvx.** dotenvx never encrypts a key whose name
   ends with `_PLAIN` (case-sensitive: `NOTE_PLAIN` and `_PLAIN`, not `note_plain`),
   unless an `Envfile` in the directory it runs in sets its own policy. So with the
@@ -84,7 +86,9 @@ exit code (dotenvx can exit `0` without encrypting):
   `COLOR=#FF0000` not at all. dotenvx `encrypt`, `lock`, `vault-push` and `push` refuse such
   a file before dotenvx runs, name the variables, and change nothing: put each value in
   quotes (`DB_PASSWORD='hunter2#Spring2024!'`) and encrypt again. `NOTE=plain # comment`
-  is fine. `encrypt --check` reports a file dotenvx already cut this way as holding
+  is fine, and so is a `_PLAIN` key, which dotenvx encrypts none of unless an `Envfile`
+  sets its own policy (it still reads `DOCS_PLAIN=https://example.com/a#b` only up to the
+  `#`). `encrypt --check` reports a file dotenvx already cut this way as holding
   plaintext, not as fully encrypted.
 - **Encrypts with the key the folder already holds.** dotenvx 2.x creates a brand-new
   key whenever a file has no `DOTENV_PUBLIC_KEY` header, even when `.env.keys` already

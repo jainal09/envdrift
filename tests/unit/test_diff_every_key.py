@@ -241,6 +241,37 @@ class TestAliasedFields:
         assert (shared.name, shared.value1, shared.value2) == ("SHARED_KEY", "********", "********")
         assert shared.is_sensitive
 
+    @pytest.mark.parametrize("settings", ["FlagThenPort", "PortThenFlag"])
+    def test_a_name_fields_of_two_types_share_differs_if_one_of_them_reads_it_differently(
+        self, tmp_path: Path, settings: str
+    ) -> None:
+        """Only the field declared first typed the name: as a bool, ``t`` and ``1`` are equal.
+
+        The int field fails on ``t``, so the app loads one file and not the other.
+        """
+        (tmp_path / "settings_shared_954.py").write_text(_SHARED_ALIAS_SETTINGS, encoding="utf-8")
+        env1, env2 = tmp_path / ".env.dev", tmp_path / ".env.prod"
+        env1.write_text("SHARED_KEY=t\n", encoding="utf-8")
+        env2.write_text("SHARED_KEY=1\n", encoding="utf-8")
+
+        result = envdrift.diff(
+            env1, env2, schema=f"settings_shared_954:{settings}", service_dir=tmp_path
+        )
+
+        assert [d.name for d in result.get_changed()] == ["SHARED_KEY"]
+
+    def test_a_name_only_bool_fields_share_still_reads_t_as_1(self, tmp_path: Path) -> None:
+        (tmp_path / "settings_shared_954.py").write_text(_SHARED_ALIAS_SETTINGS, encoding="utf-8")
+        env1, env2 = tmp_path / ".env.dev", tmp_path / ".env.prod"
+        env1.write_text("SHARED_KEY=t\n", encoding="utf-8")
+        env2.write_text("SHARED_KEY=1\n", encoding="utf-8")
+
+        result = envdrift.diff(
+            env1, env2, schema="settings_shared_954:TwoFlags", service_dir=tmp_path
+        )
+
+        assert result.get_changed() == []
+
 
 _SHARED_ALIAS_SETTINGS = """\
 from pydantic import Field
@@ -255,4 +286,19 @@ class SensitiveFirst(BaseSettings):
 class SensitiveLast(BaseSettings):
     label: str = Field(default="", alias="SHARED_KEY")
     token: str = Field(alias="SHARED_KEY", json_schema_extra={"sensitive": True})
+
+
+class FlagThenPort(BaseSettings):
+    flag: bool = Field(default=False, alias="SHARED_KEY")
+    port: int = Field(default=0, alias="SHARED_KEY")
+
+
+class PortThenFlag(BaseSettings):
+    port: int = Field(default=0, alias="SHARED_KEY")
+    flag: bool = Field(default=False, alias="SHARED_KEY")
+
+
+class TwoFlags(BaseSettings):
+    flag: bool = Field(default=False, alias="SHARED_KEY")
+    other_flag: bool = Field(default=False, alias="SHARED_KEY")
 """

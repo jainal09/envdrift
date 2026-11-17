@@ -25,7 +25,11 @@ from envdrift.core.partial_encryption import (
 )
 from envdrift.encryption.base import EncryptionBackendError
 from envdrift.encryption.dotenvx import DotenvxEncryptionBackend
-from envdrift.integrations.dotenvx import DotenvxFileChangedError, DotenvxWrapper
+from envdrift.integrations.dotenvx import (
+    DotenvxFileChangedError,
+    DotenvxNotFoundError,
+    DotenvxWrapper,
+)
 
 # A dotenvx-encrypted file, with CRLF line endings so that any rewrite of it would show.
 _ENCRYPTED = (
@@ -36,8 +40,9 @@ _ENCRYPTED = (
 # What the editor saves into the file meanwhile.
 _EDIT = b"ADDED_BY_HAND=yes\r\n"
 # How the decrypt ends after the save: dotenvx prints the values and the wrapper finds the
-# file changed, dotenvx fails on a value under another key, or the copy cannot be made.
-_ENDINGS = ["file-changed", "dotenvx-failed", "copy-failed"]
+# file changed, dotenvx fails on a value under another key, the copy cannot be made, or
+# dotenvx has gone missing since the caller checked for it.
+_ENDINGS = ["file-changed", "dotenvx-failed", "copy-failed", "dotenvx-gone"]
 
 
 def _save_edit(target: Path) -> None:
@@ -59,6 +64,8 @@ def _wrapper(
     def _run_raw(args, env=None, cwd=None) -> subprocess.CompletedProcess[bytes]:
         if edit:
             _save_edit(target)
+        if ending == "dotenvx-gone":  # what _run_raw raises when the binary is not there
+            raise DotenvxNotFoundError("dotenvx binary not found: [Errno 2] No such file")
         if ending == "dotenvx-failed":
             stderr = b"[DECRYPTION_FAILED] could not decrypt STRIPE_API_KEY"
             return subprocess.CompletedProcess(args, 1, b"", stderr)
@@ -119,7 +126,7 @@ def test_pull_partial_keeps_the_change(
     assert "keeps that change" in " ".join(str(excinfo.value).split())
 
 
-@pytest.mark.parametrize("ending", ["dotenvx-failed", "copy-failed"])
+@pytest.mark.parametrize("ending", ["dotenvx-failed", "copy-failed", "dotenvx-gone"])
 def test_a_failed_decrypt_of_a_file_nobody_changed_says_it_was_left_as_it_was(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str
 ) -> None:

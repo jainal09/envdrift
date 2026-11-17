@@ -45,9 +45,11 @@ from envdrift.integrations.dotenvx_keys import (
     distinct_keys,
     dotenvx_key_names,
     has_encrypted_values,
+    is_plain_key,
     key_outcome_problem,
     normalize_public_key,
     parse_assignments,
+    plain_keys_apply,
     plan_key_reuse,
     private_key_candidates,
     value_continuation_lines,
@@ -129,6 +131,7 @@ class DotenvxError(Exception):
 
     ``left_as_is`` is true when envdrift wrote nothing to the file the command was run on,
     so that a ``DecryptSnapshot`` does not put earlier bytes back over another writer's change.
+    ``DotenvxWrapper.decrypt`` sets it on any exception it raises, this one or another.
     """
 
     left_as_is: bool = False
@@ -474,13 +477,14 @@ def _public_key_assignments(text: str) -> list[tuple[str, str]]:
     ]
 
 
-def _refuse_comment_cut_values(env_file: Path, env_text: str) -> None:
+def _refuse_comment_cut_values(env_file: Path, env_text: str, *, plain_keys: bool) -> None:
     """Refuse ``env_file`` before anything is written if dotenvx would cut a value at a ``#``.
 
     dotenvx ends an unquoted value at a ``#`` that touches it and keeps the rest as a
-    plaintext comment (#947).
+    plaintext comment (#947). A ``_PLAIN`` key is no such value where dotenvx leaves those
+    keys plain (``plain_keys``, as ``plain_keys_apply`` says): it encrypts none of it (#1048).
     """
-    cut = comment_cut_names(env_text)
+    cut = [name for name in comment_cut_names(env_text) if not (plain_keys and is_plain_key(name))]
     if cut:
         raise DotenvxValueError(
             f"Refusing to encrypt {env_file}: dotenvx ends an unquoted value at a `#` "
@@ -1484,7 +1488,7 @@ class DotenvxWrapper:
         # Snapshot both files before anything changes, so every refusal or
         # failure below restores the exact original bytes (CRLF included).
         snapshot = _EncryptSnapshot.take(env_file, keys_file)
-        plan = self._plan_encryption(env_file, keys_file, snapshot, environment)
+        plan = self._plan_encryption(env_file, keys_file, snapshot, environment, cwd)
 
         # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
         # misparses them as flags and fabricates a different file (#474).
@@ -1523,6 +1527,7 @@ class DotenvxWrapper:
         keys_file: Path,
         snapshot: _EncryptSnapshot,
         environment: str | None,
+        cwd: Path | str | None = None,
     ) -> KeyReusePlan:
         """Prepare the text dotenvx will encrypt, refusing before anything is written.
 
@@ -1539,7 +1544,7 @@ class DotenvxWrapper:
                 f"replace its undecodable bytes. Nothing was changed."
             ) from None
         env_text = env_text.replace("\r\n", "\n").replace("\r", "\n")
-        _refuse_comment_cut_values(env_file, env_text)
+        _refuse_comment_cut_values(env_file, env_text, plain_keys=plain_keys_apply(cwd))
         env_text = self._clean_mismatched_header_text(env_text, env_file.name, environment)
         if environment:
             key_name = f"DOTENV_PRIVATE_KEY_{environment.upper()}"
@@ -1592,9 +1597,11 @@ class DotenvxWrapper:
 
         Raises:
             DotenvxError: If env_file does not exist, is not UTF-8 text, or the
-                decryption fails. envdrift has then written nothing to the file
-                (``left_as_is``): a change another writer saved meanwhile is kept.
+                decryption fails.
             DotenvxNotFoundError: If the dotenvx binary cannot be located when running the command.
+
+            envdrift has written nothing to the file when any exception leaves this method
+            (``left_as_is``): a change another writer saved meanwhile is kept.
         """
         env_file = Path(env_file)
         try:
@@ -1610,9 +1617,10 @@ class DotenvxWrapper:
                 return
             plaintexts = self._decrypted_values(env_file, env_keys_file, values, text, env, cwd)
             self._write_decrypted(env_file, _with_plaintexts(text, values, plaintexts), data)
-        except DotenvxError as exc:
-            # The file is replaced last, whole or not at all: a failure here wrote nothing.
-            exc.left_as_is = True
+        except Exception as exc:
+            # The file is replaced last, whole or not at all: any failure here wrote nothing,
+            # dotenvx gone missing since the caller checked for it too.
+            exc.left_as_is = True  # type: ignore[attr-defined]
             raise
 
     @staticmethod

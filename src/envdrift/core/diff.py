@@ -20,9 +20,9 @@ _BOOL_TRUTHY = {"true", "yes", "on", "1"}
 
 
 class _SchemaFields:
-    """The schema field each variable sets, found as pydantic-settings and ``validate`` find it.
+    """The schema fields each variable sets, found as pydantic-settings and ``validate`` find them.
 
-    A variable sets the field it is an alias of, or whose name it is after the ``env_prefix``,
+    A variable sets each field it is an alias of, or whose name it is after the ``env_prefix``,
     in the schema's case policy: ``X-API-KEY`` sets a field ``api_key`` that has it as its alias.
     A variable that binds to no field but is a field's own name keeps that field, as before.
     """
@@ -31,24 +31,28 @@ class _SchemaFields:
         self._schema = schema
         self._sensitive_names = set(schema.sensitive_fields)
         self._by_env_name: dict[str, FieldMetadata] = {}
-        # A name several fields bind to sets each of them, so it is sensitive if any one is.
+        # A name several fields bind to sets each of them: it is sensitive if any one is, and
+        # its values differ if any one of them reads them differently.
+        self._other_fields: dict[str, tuple[FieldMetadata, ...]] = {}
         self._sensitive_env_names: set[str] = set()
         for field_meta in schema.fields.values():
             for key in _field_lookup_keys(field_meta, schema.case_sensitive):
-                self._by_env_name.setdefault(key, field_meta)
+                if self._by_env_name.setdefault(key, field_meta) is not field_meta:
+                    self._other_fields[key] = (*self._other_fields.get(key, ()), field_meta)
                 if field_meta.sensitive:
                     self._sensitive_env_names.add(key)
 
-    def lookup(self, var_name: str) -> tuple[FieldMetadata | None, bool]:
-        """The field ``var_name`` sets, or None, and whether ``var_name`` is sensitive.
+    def lookup(self, var_name: str) -> tuple[FieldMetadata | None, tuple[FieldMetadata, ...], bool]:
+        """The field ``var_name`` sets or None, the other fields it sets, and if it is sensitive.
 
         A sensitive field's own name is sensitive, and so is each name it binds to.
         """
         key = _normalize_env_name(var_name, self._schema.case_sensitive)
         bound = self._by_env_name.get(key)
         field_meta = bound if bound is not None else self._schema.fields.get(var_name)
+        others = self._other_fields.get(key, ()) if self._other_fields else ()
         sensitive = var_name in self._sensitive_names or key in self._sensitive_env_names
-        return field_meta, sensitive
+        return field_meta, others, sensitive
 
 
 class DiffType(Enum):
@@ -199,7 +203,9 @@ class DiffEngine:
         for var_name in sorted(all_vars):
             in_env1 = var_name in env1_vars
             in_env2 = var_name in env2_vars
-            field_meta, is_sensitive = fields.lookup(var_name) if fields else (None, False)
+            field_meta, other_fields, is_sensitive = (
+                fields.lookup(var_name) if fields else (None, (), False)
+            )
 
             var1 = env1.variables.get(var_name)
             var2 = env2.variables.get(var_name)
@@ -220,7 +226,10 @@ class DiffEngine:
                 diff_type = DiffType.ADDED
             elif in_env1 and not in_env2:
                 diff_type = DiffType.REMOVED
-            elif not self._values_equal(value1, value2, field_meta, normalize):
+            elif not self._values_equal(value1, value2, field_meta, normalize) or (
+                other_fields
+                and not all(self._values_equal(value1, value2, f, normalize) for f in other_fields)
+            ):
                 diff_type = DiffType.CHANGED
             else:
                 diff_type = DiffType.UNCHANGED

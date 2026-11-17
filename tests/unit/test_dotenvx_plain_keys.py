@@ -334,3 +334,53 @@ class TestSopsCiphertextIsFoundInValuesOnly:
 
         assert not has_plaintext_secret_value(env_file, plain_keys=True)
         assert is_fully_encrypted(env_file, plain_keys=True)
+
+
+class TestAColonAssignmentIsChecked:
+    """dotenvx reads ``KEY: value`` as an assignment, and its encrypt leaves the value plaintext.
+
+    The checks read only ``KEY=value``. So beside a ``_PLAIN`` key, such a secret made a file of
+    nothing but ``_PLAIN`` keys, done for encrypt, push and lock, and beside ciphertext it was
+    no plaintext left over: the secret stayed plaintext while every check passed.
+    """
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "DB_PASSWORD: hunter2",
+            "export DB_PASSWORD: hunter2",
+            "DB_PASSWORD:\thunter2",
+            "DB_URL: postgres://db.example.com/app?sslmode=require",
+        ],
+        ids=["colon-space", "export", "colon-tab", "equals-sign-in-the-value"],
+    )
+    def test_a_secret_written_that_way_is_plaintext(self, project: Path, line: str) -> None:
+        env_file = project / ".env"
+        env_file.write_text(f"NOTE_PLAIN=hello\nAPI_KEY={_CIPHERTEXT}\n{line}\n", encoding="utf-8")
+        only_plain = f"NOTE_PLAIN=hello\n{line}\n"
+
+        assert _line_has_plaintext_secret(line, plain_keys=True)
+        assert has_plaintext_secret_value(env_file, plain_keys=True)
+        assert not is_fully_encrypted(env_file, plain_keys=True)
+        assert not holds_only_plain_keys(only_plain)
+        assert not _nothing_dotenvx_encrypts(only_plain, EncryptionProvider.DOTENVX)
+
+    def test_a_plain_key_written_that_way_is_still_plain(self, project: Path) -> None:
+        assert holds_only_plain_keys("NOTE_PLAIN=hello\nREGION_PLAIN: eu\n")
+        assert not _line_has_plaintext_secret("REGION_PLAIN: eu", plain_keys=True)
+        assert _line_has_plaintext_secret("REGION_PLAIN: eu")  # SOPS's view
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "# DB_PASSWORD: hunter2",
+            "DB_PASSWORD:hunter2",
+            "DB_PASSWORD : hunter2",
+            "DB_PASSWORD:",
+            "DOTENV_PUBLIC_KEY: 02ab",
+        ],
+        ids=["comment", "no-space", "space-before-the-colon", "no-value", "public-key"],
+    )
+    def test_a_line_dotenvx_reads_as_no_secret_is_none(self, line: str) -> None:
+        assert not _line_has_plaintext_secret(line)
+        assert not _line_has_plaintext_secret(line, plain_keys=True)
