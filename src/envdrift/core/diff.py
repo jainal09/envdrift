@@ -13,9 +13,38 @@ from typing import Any
 from envdrift.core.env_semantics import coerce_env_value
 from envdrift.core.parser import EnvFile
 from envdrift.core.schema import FieldMetadata, SchemaMetadata
+from envdrift.core.validator import _field_lookup_keys, _normalize_env_name
 
 _BOOL_RE = re.compile(r"^(true|false|yes|no|on|off|1|0)$", re.IGNORECASE)
 _BOOL_TRUTHY = {"true", "yes", "on", "1"}
+
+
+class _SchemaFields:
+    """The schema field each variable sets, found as pydantic-settings and ``validate`` find it.
+
+    A variable sets the field it is an alias of, or whose name it is after the ``env_prefix``,
+    in the schema's case policy: ``X-API-KEY`` sets a field ``api_key`` that has it as its alias.
+    A variable that binds to no field but is a field's own name keeps that field, as before.
+    """
+
+    def __init__(self, schema: SchemaMetadata) -> None:
+        self._schema = schema
+        self._sensitive_names = set(schema.sensitive_fields)
+        self._by_env_name = {
+            key: field_meta
+            for field_meta in schema.fields.values()
+            for key in _field_lookup_keys(field_meta, schema.case_sensitive)
+        }
+
+    def lookup(self, var_name: str) -> tuple[FieldMetadata | None, bool]:
+        """The field ``var_name`` sets, or None, and whether ``var_name`` is sensitive.
+
+        A sensitive field's own name is sensitive, and so is each name it binds to.
+        """
+        bound = self._by_env_name.get(_normalize_env_name(var_name, self._schema.case_sensitive))
+        field_meta = bound if bound is not None else self._schema.fields.get(var_name)
+        sensitive = var_name in self._sensitive_names or bool(field_meta and field_meta.sensitive)
+        return field_meta, sensitive
 
 
 class DiffType(Enum):
@@ -160,12 +189,13 @@ class DiffEngine:
         env2_vars = set(env2.variables.keys())
 
         all_vars = env1_vars | env2_vars
-        sensitive_fields = set(schema.sensitive_fields) if schema else set()
+        # Through each field's environment names, so an alias is masked and typed too.
+        fields = _SchemaFields(schema) if schema else None
 
         for var_name in sorted(all_vars):
             in_env1 = var_name in env1_vars
             in_env2 = var_name in env2_vars
-            is_sensitive = var_name in sensitive_fields
+            field_meta, is_sensitive = fields.lookup(var_name) if fields else (None, False)
 
             var1 = env1.variables.get(var_name)
             var2 = env2.variables.get(var_name)
@@ -180,8 +210,6 @@ class DiffEngine:
             else:
                 display_value1 = value1
                 display_value2 = value2
-
-            field_meta = schema.fields.get(var_name) if schema else None
 
             # Determine diff type
             if not in_env1 and in_env2:

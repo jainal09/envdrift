@@ -144,3 +144,81 @@ class TestPythonApi:
 
         assert not result.valid
         assert result.type_errors
+
+
+_ALIASED_SETTINGS = """\
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="APP_")
+
+    api_key: str = Field(alias="X-API-KEY", json_schema_extra={"sensitive": True})
+    token: str = Field(alias="API_TOKEN", json_schema_extra={"sensitive": True})
+    secret: str = Field(default="", json_schema_extra={"sensitive": True})
+    port_number: int = Field(default=1, alias="PORT-NUMBER")
+"""
+# Built by concatenation so push protection never sees a whole secret literal.
+_DEV_VALUES = {"X-API-KEY": "sk_" + "dev_value", "API_TOKEN": "tok_dev", "APP_SECRET": "s_dev"}
+_PROD_VALUES = {"X-API-KEY": "sk_" + "prod_value", "API_TOKEN": "tok_prod", "APP_SECRET": "s_prod"}
+
+
+class TestAliasedFields:
+    """A variable is matched to the field it sets as pydantic-settings matches it.
+
+    The lenient parse compares ``X-API-KEY``, so its sensitive field's mask must reach it;
+    a field's alias and its ``env_prefix`` name were matched against the field's own name.
+    """
+
+    def _write(self, tmp_path: Path) -> tuple[Path, Path]:
+        (tmp_path / "settings_aliased_954.py").write_text(_ALIASED_SETTINGS, encoding="utf-8")
+        env1, env2 = tmp_path / ".env.dev", tmp_path / ".env.prod"
+        env1.write_text(
+            "".join(f"{k}={v}\n" for k, v in _DEV_VALUES.items()) + "PORT-NUMBER=1\n",
+            encoding="utf-8",
+        )
+        env2.write_text(
+            "".join(f"{k}={v}\n" for k, v in _PROD_VALUES.items()) + "PORT-NUMBER=true\n",
+            encoding="utf-8",
+        )
+        return env1, env2
+
+    def test_the_cli_masks_a_sensitive_field_under_each_of_its_names(self, tmp_path: Path) -> None:
+        env1, env2 = self._write(tmp_path)
+
+        result = runner.invoke(
+            app,
+            [
+                "diff",
+                str(env1),
+                str(env2),
+                "--schema",
+                "settings_aliased_954:Settings",
+                "--service-dir",
+                str(tmp_path),
+                "--format",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        for value in [*_DEV_VALUES.values(), *_PROD_VALUES.values()]:
+            assert value not in result.stdout
+        changed = {d["name"]: d for d in json.loads(result.stdout)["differences"]}
+        for name in _DEV_VALUES:
+            assert changed[name]["sensitive"] is True
+            assert changed[name]["value_env1"] == changed[name]["value_env2"] == "********"
+
+    def test_the_api_masks_and_types_each_alias(self, tmp_path: Path) -> None:
+        env1, env2 = self._write(tmp_path)
+
+        result = envdrift.diff(
+            env1, env2, schema="settings_aliased_954:Settings", service_dir=tmp_path
+        )
+
+        by_name = {d.name: d for d in result.get_changed()}
+        for name in _DEV_VALUES:
+            assert (by_name[name].value1, by_name[name].value2) == ("********", "********")
+        # PORT-NUMBER=true crashes the app's int field, so it is drift, not a bool alias of 1.
+        assert "PORT-NUMBER" in by_name

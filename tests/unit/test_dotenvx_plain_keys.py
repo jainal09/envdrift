@@ -316,3 +316,21 @@ class TestSopsCiphertextIsFoundInValuesOnly:
         )
 
         assert not has_plaintext_secret_value(env_file, plain_keys=True)
+
+    def test_a_line_of_a_value_spanning_lines_is_no_sops_ciphertext(self) -> None:
+        """A ``_PLAIN`` value's line ``TOKEN=ENC[...]`` turned the rule off for the file."""
+        content = f'API_KEY={_CIPHERTEXT}\nNOTE_PLAIN="line one\nTOKEN={_SOPS_VALUE}\nend"\n'
+
+        assert not _holds_sops_ciphertext(content)
+        assert not _holds_sops_ciphertext(content.replace("\n", "\r\n"))
+        assert _holds_sops_ciphertext(f"API_KEY={_SOPS_VALUE}\n" + content)  # a value of its own
+
+    def test_the_rule_holds_for_such_a_value(self, project: Path) -> None:
+        env_file = project / ".env"
+        env_file.write_text(
+            f'API_KEY={_CIPHERTEXT}\nNOTE_PLAIN="line one\nTOKEN={_SOPS_VALUE}\nend"\n',
+            encoding="utf-8",
+        )
+
+        assert not has_plaintext_secret_value(env_file, plain_keys=True)
+        assert is_fully_encrypted(env_file, plain_keys=True)

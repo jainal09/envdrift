@@ -15,6 +15,7 @@ import errno
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -230,6 +231,42 @@ class TestDecrypt:
             _wrapper(_StandInDotenvx()).decrypt(env_file)
 
         assert env_file.read_text(encoding="utf-8") == content
+
+    def test_a_file_changed_while_dotenvx_ran_is_left_as_it_is(self, tmp_path: Path) -> None:
+        """The text read before dotenvx ran was written over the change, and lost it."""
+        env_file = tmp_path / ".env"
+        content = f"A={_ct('a')}\n"
+        env_file.write_text(content, encoding="utf-8")
+        dotenvx = _StandInDotenvx()
+
+        def _edited_meanwhile(args, env=None, cwd=None) -> subprocess.CompletedProcess[bytes]:
+            with env_file.open("a", encoding="utf-8") as handle:  # an editor saves the file
+                handle.write("B=new\n")
+            return dotenvx(args, env=env, cwd=cwd)
+
+        wrapper = DotenvxWrapper(auto_install=False)
+        wrapper._run_raw = _edited_meanwhile  # type: ignore[method-assign]
+
+        with pytest.raises(DotenvxError, match="changed while it was being decrypted"):
+            wrapper.decrypt(env_file)
+
+        assert env_file.read_text(encoding="utf-8") == content + "B=new\n"
+
+    def test_a_copy_that_cannot_be_made_is_a_dotenvx_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Its OSError escaped as it was, past each caller's handling of a DotenvxError."""
+        env_file = tmp_path / ".env"
+        content = f"A={_ct('a')}\n"
+        env_file.write_text(content, encoding="utf-8")
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "no-such-folder"))
+        dotenvx = _StandInDotenvx()
+
+        with pytest.raises(DotenvxError, match=r"Cannot decrypt .*Nothing was changed"):
+            _wrapper(dotenvx).decrypt(env_file)
+
+        assert env_file.read_text(encoding="utf-8") == content
+        assert dotenvx.copies == []
 
     @pytest.mark.skipif(not hasattr(os, "symlink"), reason="needs symlinks")
     def test_a_symlinked_file_is_written_through_the_link(self, tmp_path: Path) -> None:

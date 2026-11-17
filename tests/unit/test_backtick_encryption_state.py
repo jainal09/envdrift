@@ -7,6 +7,7 @@ ciphertext it writes. These are the checks ``encrypt``, ``decrypt``, ``push`` an
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -153,6 +154,9 @@ class TestPullAndLockSeeQuotedCiphertext:
         assert not should_attempt_decryption(EncryptionProvider.DOTENVX, backend, content)
 
 
+_requires_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+
+
 class _FailingBackend:
     """A backend whose encryption wrote a new key, then failed its outcome check."""
 
@@ -163,6 +167,7 @@ class _FailingBackend:
         return EncryptionResult(success=False, message="did not take effect", file_path=env_file)
 
 
+@_requires_git
 def test_failed_encrypt_still_gitignores_the_key_it_wrote(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -178,6 +183,7 @@ def test_failed_encrypt_still_gitignores_the_key_it_wrote(
     assert ".env.keys" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
 
 
+@_requires_git
 def test_a_gitignore_it_cannot_read_does_not_hide_the_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

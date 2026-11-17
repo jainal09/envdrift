@@ -296,12 +296,23 @@ class EncryptionDetector:
         return self._holds_sops_metadata(content)
 
     def _holds_sops_metadata(self, content: str) -> bool:
-        """Whether ``content`` holds the metadata SOPS writes beside its ciphertext."""
+        """Whether ``content`` holds the metadata SOPS writes beside its ciphertext.
+
+        A line inside a value that spans lines is that value's text, as dotenvx reads it,
+        not metadata: ``CERT="...\\nsops_version=3.13.3\\n..."`` holds none. SOPS writes
+        no such value: it escapes a value's line breaks.
+        """
+        from envdrift.integrations.dotenvx_keys import multiline_value_spans
+
         # Each pattern names "sops" in lower case: without it, none of them can match,
         # and the line-by-line search of a large file is skipped.
         if "sops" not in content:
             return False
-        return any(pattern.search(content) for pattern in self.SOPS_METADATA_PATTERNS)
+        found = [m.start() for p in self.SOPS_METADATA_PATTERNS for m in p.finditer(content)]
+        if not found:  # no scan of every value for a file without any
+            return False
+        spans = multiline_value_spans(content)
+        return any(all(not start < at < end for start, end in spans) for at in found)
 
     def ciphertext_backends(self, content: str) -> set[str]:
         """

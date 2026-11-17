@@ -1589,16 +1589,16 @@ class DotenvxWrapper:
         # subfolder file would fail to decrypt (#566).
         env_keys_file = _sibling_env_keys_file(env_file, env_keys_file)
 
-        text = self._decryptable_text(env_file)
+        data, text = self._decryptable_text(env_file)
         values = ciphertext_values(text)
         if not values:
             return
         plaintexts = self._decrypted_values(env_file, env_keys_file, values, text, env, cwd)
-        self._write_decrypted(env_file, _with_plaintexts(text, values, plaintexts))
+        self._write_decrypted(env_file, _with_plaintexts(text, values, plaintexts), data)
 
     @staticmethod
-    def _decryptable_text(env_file: Path) -> str:
-        """``env_file``'s text with LF line ends, or a ``DotenvxError`` with it untouched."""
+    def _decryptable_text(env_file: Path) -> tuple[bytes, str]:
+        """``env_file``'s bytes and its text with LF line ends, or a ``DotenvxError``."""
         try:
             data = env_file.read_bytes()
         except OSError as exc:
@@ -1611,7 +1611,7 @@ class DotenvxWrapper:
                 "be written back exactly. Nothing was changed."
             ) from None
         # Normalize CRLF -> LF for cross-platform consistency (see encrypt()).
-        return text.replace("\r\n", "\n").replace("\r", "\n")
+        return data, text.replace("\r\n", "\n").replace("\r", "\n")
 
     def _decrypted_values(
         self,
@@ -1637,14 +1637,17 @@ class DotenvxWrapper:
         lines = [f'{name}="{key}"' for name, key in _public_key_assignments(text)]
         lines += [f"{stand_in}{index}='{value.ciphertext}'" for index, value in enumerate(values)]
         lines.append(f"# {stand_in}END")
-        with tempfile.TemporaryDirectory(prefix="envdrift-decrypt-") as folder:
-            copy = Path(folder) / env_file.name
-            # Bytes, so that Windows does not write the line breaks as \r\n (#946).
-            copy.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
-            # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
-            # misparses them as flags (#474).
-            args = ["decrypt", "-f", _dash_safe_path(copy), "-fk", _dash_safe_path(keys_file)]
-            result = self._run_raw([*args, "--stdout"], env=env, cwd=cwd)
+        try:
+            with tempfile.TemporaryDirectory(prefix="envdrift-decrypt-") as folder:
+                copy = Path(folder) / env_file.name
+                # Bytes, so that Windows does not write the line breaks as \r\n (#946).
+                copy.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
+                # Leading-dash paths must be ./-prefixed or dotenvx's commander CLI
+                # misparses them as flags (#474).
+                args = ["decrypt", "-f", _dash_safe_path(copy), "-fk", _dash_safe_path(keys_file)]
+                result = self._run_raw([*args, "--stdout"], env=env, cwd=cwd)
+        except OSError as exc:  # the copy could not be made, run or removed
+            raise DotenvxError(f"Cannot decrypt {env_file}: {exc}. Nothing was changed.") from None
         # dotenvx names a value it could not decrypt: by its real name in the error.
         stderr = re.sub(
             rf"{stand_in}(\d+)",
@@ -1686,23 +1689,32 @@ class DotenvxWrapper:
             raise DotenvxNotFoundError(f"dotenvx binary not found: {e}") from e
 
     @staticmethod
-    def _write_decrypted(env_file: Path, text: str) -> None:
+    def _write_decrypted(env_file: Path, text: str, read: bytes) -> None:
         """Write the decrypted ``text`` over ``env_file`` whole, through any symlink to it.
 
         dotenvx's own write went through a symlinked file into its target, so the
-        link stays a link and the plaintext lands where it did before.
+        link stays a link and the plaintext lands where it did before. A file that no
+        longer holds the ``read`` bytes was changed while dotenvx ran, and is left as
+        it is: ``text`` holds the file as it was before the change.
         """
         try:
             target = env_file.resolve()
         except (OSError, RuntimeError):  # a symlink loop: write the path itself
             target = env_file
         try:
-            _replace_file(target, text.encode("utf-8"))
+            changed = target.read_bytes() != read
+            if not changed:
+                _replace_file(target, text.encode("utf-8"))
         except OSError as exc:
             raise DotenvxError(
                 f"Cannot write the decrypted values to {env_file}: {exc.strerror or exc}. "
                 "Nothing was changed."
             ) from None
+        if changed:
+            raise DotenvxError(
+                f"{env_file} changed while it was being decrypted, so the decrypted values "
+                "were not written over the change. Nothing was changed: run decrypt again."
+            )
 
     def run(self, env_file: Path | str, command: list[str]) -> subprocess.CompletedProcess:
         """

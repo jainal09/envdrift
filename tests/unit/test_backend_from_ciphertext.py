@@ -36,6 +36,8 @@ _SOPS_AFTER_DOTENVX = (
     "sops_version=3.13.3\n"
 )
 _DOTENVX_ENCRYPTED = _HEADER + "API_KEY=encrypted:BJcmM3MTYm+PjK7upMiPNCU1mwz76onUbudP=\n"
+# A plaintext file one value of which spans lines, a line of it reading as SOPS's metadata.
+_SOPS_METADATA_IN_A_VALUE = 'CERT="first\nsops_version=3.13.3\nlast"\nAPI_KEY=abc123\n'
 
 
 class TestCiphertextBackends:
@@ -55,6 +57,8 @@ class TestCiphertextBackends:
             # dotenvx cut hunter2#Spring2024! at its "#" and encrypted the rest.
             (_HEADER + "DB_PASSWORD=encrypted:BJcmM3MTYm+PjK7upMiPNC=#Spring2024!\n", {"dotenvx"}),
             ("# SOPS writes ENC[AES256_GCM,data:...] values\nAPI_KEY=abc123\n", set()),
+            # A line of a value that spans lines is the value's text, not SOPS's metadata.
+            (_HEADER + _SOPS_METADATA_IN_A_VALUE, set()),
         ],
         ids=[
             "dotenvx-decrypted",
@@ -64,6 +68,7 @@ class TestCiphertextBackends:
             "mention",
             "dotenvx-cut-at-a-hash",
             "sops-envelope-in-a-comment",
+            "sops-metadata-text-in-a-value",
         ],
     )
     def test_backends(self, content: str, expected: set[str]) -> None:
@@ -102,8 +107,15 @@ class TestDetectBackend:
             ("VAULT_ADDR=https://sops:8200\n", None),
             ("API_KEY=encrypted:BJcmM3MTYm+PjK7upMiPNCU1mwz76onUbudP=\n", "dotenvx"),
             ("sops_version=3.13.3\n", "sops"),
+            (_SOPS_METADATA_IN_A_VALUE, None),
         ],
-        ids=["plaintext", "sops-in-a-value", "dotenvx-without-its-header", "sops-metadata-only"],
+        ids=[
+            "plaintext",
+            "sops-in-a-value",
+            "dotenvx-without-its-header",
+            "sops-metadata-only",
+            "sops-metadata-text-in-a-value",
+        ],
     )
     def test_a_file_of_one_backend_or_none(self, content: str, expected: str | None) -> None:
         """Found without a parse where no SOPS marker is, and the same as with one."""
@@ -160,3 +172,17 @@ class TestEncryptRefusal:
         assert "is already encrypted with sops, but the dotenvx backend was selected" in out
         assert backend.encrypt_calls == []
         assert env_file.read_text(encoding="utf-8") == _SOPS_AFTER_DOTENVX
+
+    def test_dotenvx_encrypts_a_file_a_value_of_which_reads_like_sops_metadata(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The value's line ``sops_version=3.13.3`` refused the file as SOPS's."""
+        monkeypatch.chdir(tmp_path)
+        env_file = tmp_path / ".env.production"
+        env_file.write_text(_HEADER + _SOPS_METADATA_IN_A_VALUE, encoding="utf-8")
+        backend = self._stub_backend(monkeypatch, "dotenvx")
+
+        result = runner.invoke(app, ["encrypt", str(env_file), "--backend", "dotenvx"])
+
+        assert result.exit_code == 0, result.output
+        assert backend.encrypt_calls == [env_file]

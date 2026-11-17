@@ -449,8 +449,13 @@ def _dotenvx_plain_keys(content: str, plain_keys: bool) -> bool:
 
 
 def _holds_sops_ciphertext(content: str) -> bool:
-    """Whether a value of ``content`` is SOPS ciphertext; a mention of it in a comment is not."""
-    for line in content.splitlines():
+    """Whether a value of ``content`` is SOPS ciphertext; a mention of it in a comment is not.
+
+    Nor is a line inside a value that spans lines, such as a ``_PLAIN`` value's (#1048).
+    """
+    if _SOPS_CIPHERTEXT_PREFIX not in content:  # no line-by-line scan of a file without it
+        return False
+    for line in _own_lines(content):
         stripped = line.strip()
         if stripped.startswith("#") or "=" not in stripped:
             continue

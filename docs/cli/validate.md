@@ -44,6 +44,9 @@ Type validation mirrors what the real app does at startup:
   app does not use when the file supplies a value. The exception is a schema with a
   `mode="after"` or `"wrap"` model validator, or `model_post_init`: those do not run once
   a field fails, so a default that fails is still reported rather than passing them unchecked.
+  A value the parser reads as plaintext is checked like any other: `encrypted:` text with a
+  `#` in it, which dotenvx leaves unencrypted, and a SOPS envelope in backticks, which SOPS
+  never writes.
 - Field and model validators run against the assembled settings values. A model-level
   rejection appears as a `Model validation` type error instead of a false pass.
 - If custom validation raises an unexpected non-validation exception, validation

@@ -41,6 +41,9 @@ This is useful for:
 ### `--schema`, `-s`
 
 Schema for sensitive field detection. When provided, sensitive fields are masked in output.
+A variable is matched to its field as pydantic-settings matches it: by the field's alias,
+or by its name after the `env_prefix`, in the schema's case policy. So `X-API-KEY` is
+masked when it is the alias of a sensitive field, and compared through that field's type.
 
 ```bash
 envdrift diff .env.dev .env.prod --schema config.settings:Settings

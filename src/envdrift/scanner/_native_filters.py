@@ -122,9 +122,10 @@ def _line_is_sops_metadata(line: str) -> bool:
 # The extent of an already-encrypted value on a line, its assignment included: a dotenvx value
 # runs to the end of its ``encrypted:`` token (and its closing quote), a SOPS value to the end of
 # its ``ENC[AES256_GCM,...]`` envelope. Neither holds whitespace, so whatever follows on the line
-# is plaintext.
+# is plaintext. Nor does dotenvx's base64 hold a ``#``: text after one, inside the quotes or not,
+# is plaintext that dotenvx left as it was (#947), and is scanned.
 _DOTENVX_VALUE_SPAN_RE = re.compile(
-    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"'`]?encrypted:[^\s\"'`]*[\"'`]?",
+    r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*[\"'`]?encrypted:[^\s\"'`#]*[\"'`]?",
 )
 # A SOPS value runs from its envelope to the envelope's ``]``, or to the end of the line. Its
 # assignment, ``NAME=`` or ``"name": "``, is found by stepping back from the envelope, not by a

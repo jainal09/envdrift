@@ -6,6 +6,10 @@ ciphertext it writes, so each check judges the value inside them, as dotenvx doe
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from envdrift.core.encryption import EncryptionDetector
 from envdrift.core.parser import EnvParser
 from envdrift.core.schema import FieldMetadata, SchemaMetadata
@@ -15,10 +19,20 @@ from envdrift.scanner._native_filters import (
     _encrypted_value_spans,
     _line_is_dotenvx_encrypted,
 )
+from envdrift.scanner.native import NativeScanner
 
 # Built by concatenation so push protection never sees a whole secret literal.
 _CIPHERTEXT = "encrypted:" + "BJcmM3MTYm+PjK7upMiPNCU1mwz76onUbudP="
 _STRIPE_LIVE = "sk_" + "live_" + "0" * 24  # an obviously made-up key of the live shape
+_GITHUB_TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0" + "K1l2M3n4O5p6Q7r8"  # made up, of the PAT shape
+# Values the parser reads as plaintext though they start like ciphertext: dotenvx's base64
+# holds no "#" (#947), and SOPS writes no backticks.
+_PLAINTEXT_LOOKALIKES = [
+    f"`{_CIPHERTEXT}#tail`",
+    f"{_CIPHERTEXT}#tail",
+    "`ENC[AES256_GCM,data:a,iv:b,tag:c,type:int]`",
+]
+_PLAINTEXT_LOOKALIKE_IDS = ["backticks-with-a-hash", "bare-with-a-hash", "sops-in-backticks"]
 
 
 class TestGuardFilters:
@@ -37,6 +51,23 @@ class TestGuardFilters:
         line = f"API_KEY=`{_CIPHERTEXT}` AWS={_STRIPE_LIVE}"
 
         assert _encrypted_value_spans(line) == [(0, len(f"API_KEY=`{_CIPHERTEXT}`"))]
+
+    @pytest.mark.parametrize("quote", ["`", '"', ""], ids=["backticks", "double-quotes", "bare"])
+    def test_span_ends_at_a_hash(self, quote: str) -> None:
+        """dotenvx's base64 holds no ``#``: the text after one is plaintext, and is scanned."""
+        line = f"NOTE={quote}{_CIPHERTEXT}#{_GITHUB_TOKEN}{quote}"
+
+        assert _encrypted_value_spans(line) == [(0, line.index("#"))]
+
+    def test_guard_finds_a_secret_after_a_hash_in_backticks(self, tmp_path: Path) -> None:
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            f"API_KEY=`{_CIPHERTEXT}`\nNOTE=`{_CIPHERTEXT}#{_GITHUB_TOKEN}`\n", encoding="utf-8"
+        )
+
+        findings = NativeScanner().scan([env_file]).findings
+
+        assert [f.line_number for f in findings if f.rule_id == "github-pat"] == [2]
 
 
 def _int_schema() -> SchemaMetadata:
@@ -65,6 +96,19 @@ class TestValidator:
         assert Validator()._check_type("ENC[not ciphertext]", int) == (
             "Expected integer, got 'ENC[not ciphertext]'"
         )
+
+    @pytest.mark.parametrize("value", _PLAINTEXT_LOOKALIKES, ids=_PLAINTEXT_LOOKALIKE_IDS)
+    def test_what_the_parser_reads_as_plaintext_is_checked(self, value: str) -> None:
+        """validate skipped these as ciphertext, though the parser reads them as plaintext."""
+        env = EnvParser().parse_string(f"PORT={value}\n")
+        assert not env.variables["PORT"].is_encrypted
+        env_by_name = {name.lower(): var for name, var in env.variables.items()}
+
+        result = Validator().validate(env, _int_schema())
+
+        assert Validator()._check_type(value, int) == f"Expected integer, got '{value}'"
+        assert result.type_errors == {"PORT": f"Expected integer, got '{value}'"}
+        assert _collect_constraint_values(_int_schema(), env_by_name) == ({"PORT": value}, set())
 
     def test_type_check_still_reads_a_backtick_plaintext_value(self) -> None:
         # python-dotenv keeps the backticks, so a pydantic-settings app loads "`8080`".

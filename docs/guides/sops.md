@@ -145,7 +145,8 @@ See [`encrypt`](../cli/encrypt.md) and [`decrypt`](../cli/decrypt.md).
   dotenvx-encrypted file with SOPS (and vice versa); decrypt with the original
   backend first. Only ciphertext counts: for dotenvx a value that dotenvx decrypts,
   `KEY=encrypted:...#tail` included, and for SOPS a value in its `ENC[AES256_GCM,`
-  envelope or the metadata SOPS writes beside it. The `DOTENV_PUBLIC_KEY` header
+  envelope or the metadata SOPS writes beside it, on a line of its own: a line inside a
+  value that spans lines is that value's text. The `DOTENV_PUBLIC_KEY` header
   `dotenvx decrypt` leaves behind does not count, nor does a comment that names the
   envelope, and a SOPS file that kept that key's name is still detected as SOPS.
 

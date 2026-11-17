@@ -45,9 +45,10 @@ envdrift has dotenvx decrypt only the ciphertext, in a copy that holds nothing e
 and prints the result instead of writing it. It then writes each value back as the
 exact text it was encrypted from, inside the quotes it had. Every other line of the
 file is left as it was, except that line endings are normalized to LF. A file that is
-not valid UTF-8 is refused with nothing changed. `pull`, `vault-pull` and
-`pull-partial` decrypt the same way, so a `push` after them re-encrypts the same
-secrets.
+not valid UTF-8 is refused with nothing changed. A file that changes while dotenvx
+runs, as when an editor saves it, keeps the change, and the decrypt fails: run it
+again. `pull`, `vault-pull` and `pull-partial` decrypt the same way, so a `push` after
+them re-encrypts the same secrets.
 
 ### Refuses the key store and companion files
 

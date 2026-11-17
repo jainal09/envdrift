@@ -10,7 +10,13 @@ from typing import TYPE_CHECKING, Any
 
 from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.core.env_semantics import coerce_env_value, field_complexity
-from envdrift.core.parser import EncryptionStatus, EnvFile, EnvVar, strip_backtick_quotes
+from envdrift.core.parser import (
+    EncryptionStatus,
+    EnvFile,
+    EnvParser,
+    EnvVar,
+    strip_backtick_quotes,
+)
 from envdrift.core.schema import FieldMetadata, SchemaMetadata
 
 if TYPE_CHECKING:
@@ -219,16 +225,22 @@ def _check_extra_vars(
             result.warnings.append(f"Extra variable '{var_name}' not in schema")
 
 
-# dotenvx (``encrypted:...``) and SOPS (``ENC[AES256_GCM,...]``) ciphertext prefixes.
-_CIPHERTEXT_PREFIXES = ("encrypted:", "ENC[AES256_GCM,")
+# The parser reads each value's encryption; validate skips only what it calls ciphertext.
+_PARSER = EnvParser()
+# How a value the parser reads as ciphertext starts: dotenvx's, bare or in backticks, or SOPS's.
+_CIPHERTEXT_STARTS = ("encrypted:", "`", "ENC[AES256_GCM,")
 
 
 def _is_ciphertext(value: str) -> bool:
-    """Whether ``value`` is ciphertext, also inside the backticks dotenvx keeps around it (#964).
+    """Whether the parser reads ``value`` as ciphertext, whose plaintext is unknown.
 
-    Its plaintext is unknown, so neither the type check nor the model may judge it.
+    Neither the type check nor the model may judge it. dotenvx's counts also inside the
+    backticks dotenvx keeps around it (#964), but not with a ``#`` in it, which dotenvx left
+    unencrypted (#947). SOPS's envelope counts only bare, as SOPS writes it.
     """
-    return strip_backtick_quotes(value).startswith(_CIPHERTEXT_PREFIXES)
+    if not value.startswith(_CIPHERTEXT_STARTS):  # most values: no call to the parser
+        return False
+    return _PARSER._detect_encryption_status(value)[0] is EncryptionStatus.ENCRYPTED
 
 
 def _collect_constraint_values(
