@@ -56,7 +56,8 @@ def start_in_job(process: subprocess.Popen, kernel32: Any = None, ntdll: Any = N
     It runs nothing until it is in the job, so every process it starts is in the job too. A job
     that cannot be made is logged, and the tool runs without one, under ``taskkill /T`` alone, as
     before. A tool that is not let run, because Windows refuses or because anything else raises
-    first, a KeyboardInterrupt too, is killed, and the error raised: a suspended tool never ends.
+    first, a KeyboardInterrupt too, is ended with its job, or killed without one, and the error
+    raised: a suspended tool never ends.
 
     Args:
         process: A process started with ``CREATE_SUSPENDED``.
@@ -76,9 +77,10 @@ def start_in_job(process: subprocess.Popen, kernel32: Any = None, ntdll: Any = N
         resumed = _resume(_ntdll() if ntdll is None else ntdll, handle, process)
         return job
     finally:
-        _release(kernel32, handle, None if resumed else job)
+        if handle:
+            kernel32.CloseHandle(handle)
         if not resumed:
-            process.kill()
+            _end_unstarted(process, job)
 
 
 def _open_suspended(kernel32: Any, process: subprocess.Popen) -> Any:
@@ -97,12 +99,17 @@ def _resume(ntdll: Any, handle: Any, process: subprocess.Popen) -> bool:
     return True
 
 
-def _release(kernel32: Any, handle: Any, job: Job | None) -> None:
-    """Close the process ``handle``, if one was opened, and ``job``, unless it is None."""
-    if handle:
-        kernel32.CloseHandle(handle)
+def _end_unstarted(process: subprocess.Popen, job: Job | None) -> None:
+    """End a tool that was not let run, or not known to have been, and let go of its job.
+
+    Its job ends it, and any process it started: an interrupt can arrive once the resume has
+    let it run. Without a job, or when Windows does not end the job, the tool is killed.
+    """
+    ended = job is not None and job.terminate()
     if job is not None:
         job.close()
+    if not ended:
+        process.kill()
 
 
 def _job_holding(kernel32: Any, handle: int, process: subprocess.Popen) -> Job | None:

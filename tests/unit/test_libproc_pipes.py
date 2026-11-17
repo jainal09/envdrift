@@ -145,7 +145,7 @@ def test_the_holders_of_either_end_are_found_and_no_other_process() -> None:
         }
     )
 
-    holders = pipe_holders({READ, WRITE}, time.monotonic() + 30, lib)
+    holders = list(pipe_holders({READ, WRITE}, time.monotonic() + 30, lib))
 
     assert holders == [child, reader]
 
@@ -159,7 +159,7 @@ def test_a_process_that_has_gone_or_is_not_ours_is_passed_over() -> None:
         failing={not_ours: errno.EPERM, denied: errno.EACCES},
     )
 
-    assert pipe_holders({READ, WRITE}, time.monotonic() + 30, lib) == [child]
+    assert list(pipe_holders({READ, WRITE}, time.monotonic() + 30, lib)) == [child]
 
 
 @pytest.mark.parametrize(
@@ -174,16 +174,30 @@ def test_a_process_libproc_cannot_list_for_another_reason_is_raised(error: int) 
     lib = Libproc({child: {1: WRITE}}, listed=[unreadable, child], failing={unreadable: error})
 
     with pytest.raises(OSError, match=f"process {unreadable}") as raised:
-        pipe_holders({READ, WRITE}, time.monotonic() + 30, lib)
+        list(pipe_holders({READ, WRITE}, time.monotonic() + 30, lib))
 
     assert raised.value.errno == error
+
+
+def test_a_holder_found_before_a_call_fails_is_handed_over_first() -> None:
+    """The kill stops it though the search then fails: each holder is yielded once found."""
+    me = os.getpid()
+    child, unreadable = me + 1, me + 2
+    lib = Libproc(
+        {child: {1: WRITE}}, listed=[child, unreadable], failing={unreadable: errno.EFAULT}
+    )
+    holders = pipe_holders({READ, WRITE}, time.monotonic() + 30, lib)
+
+    assert next(holders) == child
+    with pytest.raises(OSError, match=f"process {unreadable}"):
+        next(holders)
 
 
 def test_processes_libproc_cannot_list_are_raised() -> None:
     lib = Libproc({os.getpid() + 1: {1: WRITE}}, listing_fails=errno.ENOMEM)
 
     with pytest.raises(OSError, match="the processes") as raised:
-        pipe_holders({READ, WRITE}, time.monotonic() + 30, lib)
+        list(pipe_holders({READ, WRITE}, time.monotonic() + 30, lib))
 
     assert raised.value.errno == errno.ENOMEM
 
@@ -201,21 +215,21 @@ def test_a_pipe_of_its_own_libproc_cannot_name_is_raised() -> None:
 def test_the_search_ends_with_the_time_for_listing() -> None:
     lib = Libproc({os.getpid() + 1: {1: WRITE}})
 
-    assert pipe_holders({READ, WRITE}, time.monotonic(), lib) == []
+    assert list(pipe_holders({READ, WRITE}, time.monotonic(), lib)) == []
 
 
 def test_no_process_is_listed_once_the_time_for_listing_has_run_out() -> None:
     """Listing every process takes time the kill no longer has."""
     lib = Libproc({os.getpid() + 1: {1: WRITE}})
 
-    assert pipe_holders({READ, WRITE}, time.monotonic(), lib) == []
+    assert list(pipe_holders({READ, WRITE}, time.monotonic(), lib)) == []
     assert lib.calls == []
 
 
 def test_nothing_is_looked_for_without_a_pipe_or_without_libproc() -> None:
     lib = Libproc({os.getpid() + 1: {1: WRITE}})
 
-    assert pipe_holders(set(), time.monotonic() + 30, lib) == []
+    assert list(pipe_holders(set(), time.monotonic() + 30, lib)) == []
     assert libproc_pipes._load_libproc("/nonexistent/libproc.dylib") is None
 
 
@@ -223,4 +237,4 @@ def test_nothing_is_looked_for_without_a_pipe_or_without_libproc() -> None:
 def test_there_is_no_libproc_elsewhere() -> None:
     assert libproc_pipes._libproc() is None
     assert own_pipe_handles([0, 1, 2]) == set()
-    assert pipe_holders({READ}, time.monotonic() + 30) == []
+    assert list(pipe_holders({READ}, time.monotonic() + 30)) == []

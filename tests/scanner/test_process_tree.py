@@ -312,6 +312,31 @@ def _the_child_of_a_leaver_ends_with_it(tmp_path: Path) -> None:
         _stop(beat)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="the holders are found by the pipe they hold on Linux and macOS"
+)
+def test_a_holder_found_before_the_search_fails_ends_with_the_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The search for the holders of a tool's output failed after it had found one (#925).
+
+    The holders it had found were lost with the result it never returned, so the tool's child,
+    which held the output, ran on. A holder found is stopped all the same now, so the kill ends
+    it, and the error is still logged.
+    """
+    search = process_tree._pipe_holders
+
+    def failing_once_it_has_found_them(pipes: set[str], listing_ends: float) -> Iterator[int]:
+        yield from search(pipes, listing_ends)
+        raise OSError(errno.EFAULT, "libproc could not list the files of a process")
+
+    monkeypatch.setattr(process_tree, "_pipe_holders", failing_once_it_has_found_them)
+
+    _the_child_of_a_leaver_ends_with_it(tmp_path)
+
+    assert "Could not kill every process" in caplog.text
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS lists a process's files with libproc")
 def test_libproc_finds_the_processes_that_hold_a_tools_output() -> None:
     """Each process but this one that holds an end of the tool's output pipe, and no other."""
@@ -321,7 +346,7 @@ def test_libproc_finds_the_processes_that_hold_a_tools_output() -> None:
     try:
         pipes = process_tree._output_pipes(holder)
         assert len(pipes) == 2, f"both ends of the one pipe: {pipes}"
-        holders = process_tree._pipe_holders(pipes, time.monotonic() + 30)
+        holders = list(process_tree._pipe_holders(pipes, time.monotonic() + 30))
         assert holder.pid in holders
         assert os.getpid() not in holders, "this process reads the pipe: it is not killed"
         assert other.pid not in holders
@@ -450,7 +475,7 @@ def test_the_processes_that_hold_a_tools_output_are_found_by_its_pipe() -> None:
     try:
         pipes = process_tree._output_pipes(holder)
         assert len(pipes) == 1, pipes
-        holders = process_tree._pipe_holders(pipes, time.monotonic() + 30)
+        holders = list(process_tree._pipe_holders(pipes, time.monotonic() + 30))
         assert holder.pid in holders
         assert os.getpid() not in holders, "this process reads the pipe: it is not killed"
         assert other.pid not in holders
@@ -490,7 +515,7 @@ def test_the_search_for_a_tools_output_ends_with_the_time_for_listing(
             return holds(fd_dir, pipes, listing_ends)
 
         monkeypatch.setattr(process_tree, "_holds", slow_holds)
-        assert process_tree._pipe_holders(pipes, time.monotonic() + 0.5) == []
+        assert list(process_tree._pipe_holders(pipes, time.monotonic() + 0.5)) == []
         assert len(read) == 1, "the search read on past the time for listing"
     finally:
         holder.kill()
@@ -551,13 +576,13 @@ sleep = [sys.executable, "-c", "import time; time.sleep(60)"]
 holder = subprocess.Popen(sleep, stdout=subprocess.PIPE)
 try:
     pipes = process_tree._output_pipes(holder)
-    print(process_tree._pipe_holders(pipes, time.monotonic() + 30) == [holder.pid])
+    print(list(process_tree._pipe_holders(pipes, time.monotonic() + 30)) == [holder.pid])
     lowest = os.open(os.devnull, os.O_RDONLY)
     os.close(lowest)
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (lowest + 1, hard))
     try:
-        print(process_tree._pipe_holders(pipes, time.monotonic() + 30))
+        print(list(process_tree._pipe_holders(pipes, time.monotonic() + 30)))
     except OSError as error:
         print(error.errno)
     finally:

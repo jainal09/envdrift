@@ -887,9 +887,9 @@ wrote their output or their work was done
 a tool left running in the background when it exited, if it still holds the tool's
 output open, as guard waits for that output
 ([#922](https://github.com/jainal09/envdrift/issues/922)). guard finds such a process
-in `/proc` on Linux and with libproc on macOS. On Windows each tool starts suspended
-and runs only once it is in a job object, which holds every process the tool starts,
-whether its parent still runs or not
+in `/proc` on Linux and with libproc on macOS. On Windows each tool starts suspended.
+Where Windows can make a job object for it, the tool runs only once it is in that job,
+which holds every process the tool starts, whether its parent still runs or not
 ([#925](https://github.com/jainal09/envdrift/issues/925)); earlier releases left
 that process running there, and waited for its output. Where Windows cannot make the
 job object, which guard logs at debug level, the tool runs without one and the kill

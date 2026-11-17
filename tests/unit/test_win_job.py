@@ -61,14 +61,20 @@ class Kernel32:
 
 
 class Ntdll:
-    """``NtResumeProcess``, recorded with the kernel32 calls, failing when asked to."""
+    """``NtResumeProcess``, recorded with the kernel32 calls, failing when asked to.
 
-    def __init__(self, kernel32: Kernel32, *, fail: bool = False) -> None:
+    With ``interrupt`` the tool is let run, and a KeyboardInterrupt arrives as the call returns.
+    """
+
+    def __init__(self, kernel32: Kernel32, *, fail: bool = False, interrupt: bool = False) -> None:
         self.kernel32 = kernel32
         self.fail = fail
+        self.interrupt = interrupt
 
     def NtResumeProcess(self, process: int) -> int:  # noqa: N802
         self.kernel32.calls.append(("NtResumeProcess", process))
+        if self.interrupt:
+            raise KeyboardInterrupt
         return -1073741823 if self.fail else 0  # STATUS_UNSUCCESSFUL, or STATUS_SUCCESS
 
 
@@ -168,15 +174,40 @@ def test_a_tool_interrupted_on_its_way_into_its_job_is_killed_not_left_suspended
     assert kernel32.closed() == [_PROCESS]
 
 
-def test_a_tool_that_cannot_be_let_run_is_killed_not_left_suspended() -> None:
-    """It would only wait out its timeout: it is killed, and the job and handle let go of."""
+def test_a_tool_that_cannot_be_let_run_is_ended_with_its_job() -> None:
+    """It would only wait out its timeout: its job ends it, and the job and handle are let go of."""
     kernel32 = Kernel32()
     tool = Tool()
 
     with pytest.raises(OSError, match="could not let"):
         start_in_job(tool, kernel32, Ntdll(kernel32, fail=True))  # type: ignore[arg-type]
 
+    assert ("TerminateJobObject", _JOB, 1) in kernel32.calls
+    assert tool.killed is False, "the job ended it"
+    assert sorted(kernel32.closed()) == [_JOB, _PROCESS]
+
+
+@pytest.mark.parametrize("failing", ["create", "terminate"], ids=["no-job", "job-not-ended"])
+def test_a_tool_that_cannot_be_let_run_is_killed_where_no_job_ends_it(failing: str) -> None:
+    kernel32 = Kernel32(fail=failing)
+    tool = Tool()
+
+    with pytest.raises(OSError, match="could not let"):
+        start_in_job(tool, kernel32, Ntdll(kernel32, fail=True))  # type: ignore[arg-type]
+
     assert tool.killed is True
+
+
+def test_a_tool_interrupted_as_it_is_let_run_ends_with_its_job() -> None:
+    """It may have started a child by then: killing the tool alone left that child running."""
+    kernel32 = Kernel32()
+    tool = Tool()
+
+    with pytest.raises(KeyboardInterrupt):
+        start_in_job(tool, kernel32, Ntdll(kernel32, interrupt=True))  # type: ignore[arg-type]
+
+    assert ("TerminateJobObject", _JOB, 1) in kernel32.calls, "its job, which holds its children"
+    assert tool.killed is False, "the job ended it"
     assert sorted(kernel32.closed()) == [_JOB, _PROCESS]
 
 
@@ -200,12 +231,19 @@ class _EndedJob:
 
 
 def _kill_on_windows(monkeypatch: pytest.MonkeyPatch, job: _EndedJob | None) -> list[str]:
-    """Kill a timed-out tool as on Windows; the job's end and each ``taskkill /T``, in order."""
+    """Kill a timed-out tool as on Windows; the job's end and each ``taskkill /T``, in order.
+
+    The tool itself is killed either way, as ``subprocess.run`` would.
+    """
     calls = [] if job is None else job.calls
     monkeypatch.setattr(process_tree, "_taskkill_tree", lambda pid: calls.append("taskkill /T"))
-    with monkeypatch.context() as windows:
-        windows.setattr(sys, "platform", "win32")
-        kill_process_tree(Tool(), job)  # type: ignore[arg-type]
+    tool = Tool()
+    try:
+        with monkeypatch.context() as windows:
+            windows.setattr(sys, "platform", "win32")
+            kill_process_tree(tool, job)  # type: ignore[arg-type]
+    finally:
+        assert tool.killed, "the tool itself was not killed"
     return calls
 
 

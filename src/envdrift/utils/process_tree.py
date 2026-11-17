@@ -122,11 +122,18 @@ def _stop_pipe_holders(pipes: set[str], stopped: list[int], listing_ends: float)
     """
     seen = set(stopped)
     while pipes and time.monotonic() < listing_ends:
-        holders = [pid for pid in _pipe_holders(pipes, listing_ends) if pid not in seen]
+        holders: list[int] = []
+        try:
+            for pid in _pipe_holders(pipes, listing_ends):
+                if pid not in seen:
+                    holders.append(pid)
+        finally:
+            # A search that fails still stops the holders it found before then, so that the
+            # kill ends them with the rest; its error reaches the caller all the same (#925).
+            seen.update(holders)
+            _stop_tree(holders, stopped, listing_ends)
         if not holders:
             return
-        seen.update(holders)
-        _stop_tree(holders, stopped, listing_ends)
         seen.update(stopped)
 
 
@@ -152,8 +159,8 @@ def _output_pipes(process: subprocess.Popen) -> set[str]:
     return pipes
 
 
-def _pipe_holders(pipes: set[str], listing_ends: float) -> list[int]:
-    """The pid of every process but this one that holds one of ``pipes`` open.
+def _pipe_holders(pipes: set[str], listing_ends: float) -> Iterator[int]:
+    """The pid of every process but this one that holds one of ``pipes`` open, as it is found.
 
     On Linux it reads each process's ``/proc/<pid>/fd``, which, unlike its ``environ`` or
     ``cmdline``, never waits on the process: a process that is stuck cannot hold the kill up.
@@ -164,16 +171,15 @@ def _pipe_holders(pipes: set[str], listing_ends: float) -> list[int]:
     """
     handles = {int(p.removeprefix(_LIBPROC_PIPE)) for p in pipes if p.startswith(_LIBPROC_PIPE)}
     if handles:
-        return libproc_pipes.pipe_holders(handles, listing_ends)
+        yield from libproc_pipes.pipe_holders(handles, listing_ends)
+        return
     me = str(os.getpid())
-    holders = []
     with os.scandir("/proc") as entries:
         for entry in _until(entries, listing_ends):
             if not entry.name.isdigit() or entry.name == me:
                 continue
             if _holds(Path(entry.path, "fd"), pipes, listing_ends):
-                holders.append(int(entry.name))
-    return holders
+                yield int(entry.name)
 
 
 def _holds(fd_dir: Path, pipes: set[str], listing_ends: float) -> bool:

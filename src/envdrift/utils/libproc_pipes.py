@@ -19,6 +19,7 @@ import functools
 import os
 import sys
 import time
+from collections.abc import Iterator
 from typing import Any
 
 _PROC_PIDLISTFDS = 1
@@ -102,25 +103,24 @@ def own_pipe_handles(fds: list[int], lib: Any = None) -> set[int]:
     return handles
 
 
-def pipe_holders(handles: set[int], ends: float, lib: Any = None) -> list[int]:
+def pipe_holders(handles: set[int], ends: float, lib: Any = None) -> Iterator[int]:
     """The pid of every process but this one that holds an end of a pipe in ``handles``.
 
-    The search ends at ``ends`` (a ``time.monotonic()`` value) with the holders it has found.
-    A process that has exited, or that is not this user's, is passed over.
+    Each is yielded as it is found, so a caller keeps those found before a call that fails.
+    The search ends at ``ends`` (a ``time.monotonic()`` value). A process that has exited, or
+    that is not this user's, is passed over.
     """
     lib = _libproc() if lib is None else lib
     if lib is None or not handles:
-        return []
+        return
     if time.monotonic() >= ends:  # listing every process takes time the kill no longer has
-        return []
+        return
     me = os.getpid()
-    holders = []
     for pid in _all_pids(lib):
         if time.monotonic() >= ends:
-            break
+            return
         if pid != me and _holds(lib, pid, handles, ends):
-            holders.append(pid)
-    return holders
+            yield pid
 
 
 def _holds(lib: Any, pid: int, handles: set[int], ends: float) -> bool:
