@@ -451,14 +451,7 @@ class EnvParser:
                 raw_value = joined_raw
                 raw_lines.extend(lines[index - consumed : index])
 
-            value = self.value_from_raw(raw_value)
-
-            # ${VAR} interpolation (#486): expand exactly like dotenv_values —
-            # the loader pydantic-settings uses — so validate/diff judge the
-            # value the application receives, not the unexpanded literal.
-            # `diff --strict` compares the raw text instead (#954).
-            if interpolate and "${" in value:
-                value = self._interpolate(value, env_file.variables, bare_keys)
+            value = self._expanded(self.value_from_raw(raw_value), context, interpolate)
             bare_keys.discard(key)
 
             # Determine encryption status and backend. Detection runs on the
@@ -482,6 +475,17 @@ class EnvParser:
             env_file.variables[key] = env_var
 
         return env_file
+
+    def _expanded(self, value: str, context: _ParseContext, interpolate: bool) -> str:
+        """``value`` with its ``${VAR}`` references expanded exactly like dotenv_values (#486).
+
+        dotenv_values is the loader pydantic-settings uses, so validate and diff judge the
+        value the application receives, not the unexpanded literal. Without ``interpolate``
+        the references stay as written: ``diff --strict`` compares the raw text (#954).
+        """
+        if interpolate and "${" in value:
+            return self._interpolate(value, context.env_file.variables, context.bare_keys)
+        return value
 
     def _standard_line_match(self, pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
         """Return an unambiguous ordinary assignment for the regex hot path.
