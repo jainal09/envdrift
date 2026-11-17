@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -131,6 +132,47 @@ def test_a_failed_listing_still_kills_the_processes_it_stopped(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
+def test_output_pipes_it_cannot_name_still_leave_no_process_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The kill named the tool's output pipes before it stopped a process (#925).
+
+    On macOS libproc names them, and its kill raises a failure it does not expect. The tree was
+    not stopped then, and the tool's child ran on. Now the tree is stopped first and killed all
+    the same, and the error still reaches the caller, which warns.
+    """
+    beat = tmp_path / "beat"
+    heartbeat = tmp_path / "heartbeat.py"
+    heartbeat.write_text(HEARTBEAT)
+    failure = OSError(errno.EFAULT, f"libproc could not list file 3 of process {os.getpid()}")
+
+    def unnamed(process: subprocess.Popen) -> set[str]:
+        raise failure
+
+    monkeypatch.setattr(process_tree, "_output_pipes", unnamed)
+    tool = subprocess.Popen(
+        [sys.executable, "-c", PARENT, str(heartbeat), str(beat)], stdout=subprocess.PIPE
+    )
+    child = None
+    try:
+        child = _beating_pid(beat)
+        with pytest.raises(OSError) as raised:
+            kill_process_tree(tool)
+        assert raised.value is failure
+
+        assert tool.wait(timeout=5) == -signal.SIGKILL
+        assert not _still_beating(beat), "the tool's child still runs"
+    finally:
+        tool.kill()
+        tool.wait()
+        if tool.stdout is not None:
+            tool.stdout.close()
+        if child is not None:
+            with contextlib.suppress(OSError):
+                os.kill(child, signal.SIGKILL)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="taskkill /T walks the tree on Windows")
 def test_a_failed_listing_does_not_replace_the_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -166,12 +208,6 @@ def test_a_failed_listing_does_not_replace_the_timeout(
         _stop(beat)
 
 
-@pytest.mark.xfail(
-    sys.platform != "linux",
-    strict=False,
-    raises=AssertionError,
-    reason="only Linux lists the processes that hold the tool's output (see #925)",
-)
 @pytest.mark.skipif(
     sys.platform == "win32",
     reason="the tool is a shell script that starts its child in the background",
@@ -180,7 +216,7 @@ def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
     """A tool that exits at once, leaving its child running with the tool's output pipe open.
 
     The child was re-parented when the tool exited, out of the walk's reach, and ran on (#922).
-    It is found by the pipe it holds. A setup that goes wrong fails the test, not the xfail.
+    It is found by the pipe it holds: in /proc on Linux, with libproc on macOS (#925).
     """
     beat = tmp_path / "beat"
     heartbeat = tmp_path / "heartbeat.py"
@@ -198,6 +234,126 @@ def test_a_child_that_outlived_its_tool_ends_with_it(tmp_path: Path) -> None:
         assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
     finally:
         _stop(beat)
+
+
+# A tool that starts a child, which never ends, and exits at once, leaving the child its output.
+LEAVER = """
+import subprocess, sys
+
+subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2]])
+"""
+
+
+def test_a_child_that_outlived_a_tool_ends_with_it_on_every_platform(tmp_path: Path) -> None:
+    """The child of a tool that exited holds the tool's output open, and must end with it (#925).
+
+    On Windows ``taskkill /T`` walks the tree from the tool, which had exited: the child ran
+    on, and ``communicate()`` waited for it after the kill. The tool now runs in a job object,
+    which holds the child too. On Linux and macOS the child is found by the pipe it holds.
+    """
+    _the_child_of_a_leaver_ends_with_it(tmp_path)
+
+
+class _SlowToReturn(subprocess.Popen):
+    """``Popen`` that returns a second after the process was made: a tool running by then has
+    started its child, and exited, before ``run_tool`` could put it in a job object."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        time.sleep(1)
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="a job object holds a tool's processes on Windows"
+)
+def test_a_child_the_tool_starts_before_it_is_in_its_job_ends_with_it_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tool waits, suspended, until it is in its job object, so its child is in the job too.
+
+    The tool ran as soon as it was made. A fast one started its child and exited before
+    ``run_tool`` put it in a job object: the child, outside the job, ran on after the kill, and
+    ``communicate()`` waited for it. Here ``Popen`` returns a second late, as for a fast tool.
+    """
+    monkeypatch.setattr(subprocess, "Popen", _SlowToReturn)
+
+    _the_child_of_a_leaver_ends_with_it(tmp_path)
+
+
+def _the_child_of_a_leaver_ends_with_it(tmp_path: Path) -> None:
+    """Run LEAVER past its timeout; its child must end with it, and run_tool must not wait."""
+    beat = tmp_path / "beat"
+    heartbeat = tmp_path / "heartbeat.py"
+    heartbeat.write_text(HEARTBEAT)
+    returned, rescued = threading.Event(), threading.Event()
+
+    def rescue() -> None:
+        """End the child if run_tool still waits on it a minute past the timeout: fail, not hang."""
+        if not returned.wait(CHILD_TIMEOUT_SECONDS + 60):
+            rescued.set()
+            _stop(beat)
+
+    threading.Thread(target=rescue, daemon=True).start()
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_tool(
+                [sys.executable, "-c", LEAVER, str(heartbeat), str(beat)],
+                capture_output=True,
+                timeout=CHILD_TIMEOUT_SECONDS,
+            )
+        returned.set()
+
+        assert not rescued.is_set(), "after the kill, run_tool waited for the child's output"
+        if not beat.exists():
+            pytest.fail("the tool's child never started")
+        assert not _still_beating(beat), "the tool's child still runs after the tool timed out"
+    finally:
+        returned.set()
+        _stop(beat)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="the holders are found by the pipe they hold on Linux and macOS"
+)
+def test_a_holder_found_before_the_search_fails_ends_with_the_tool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The search for the holders of a tool's output failed after it had found one (#925).
+
+    The holders it had found were lost with the result it never returned, so the tool's child,
+    which held the output, ran on. A holder found is stopped all the same now, so the kill ends
+    it, and the error is still logged.
+    """
+    search = process_tree._pipe_holders
+
+    def failing_once_it_has_found_them(pipes: set[str], listing_ends: float) -> Iterator[int]:
+        yield from search(pipes, listing_ends)
+        raise OSError(errno.EFAULT, "libproc could not list the files of a process")
+
+    monkeypatch.setattr(process_tree, "_pipe_holders", failing_once_it_has_found_them)
+
+    _the_child_of_a_leaver_ends_with_it(tmp_path)
+
+    assert "Could not kill every process" in caplog.text
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS lists a process's files with libproc")
+def test_libproc_finds_the_processes_that_hold_a_tools_output() -> None:
+    """Each process but this one that holds an end of the tool's output pipe, and no other."""
+    sleep = [sys.executable, "-c", "import time; time.sleep(60)"]
+    holder = subprocess.Popen(sleep, stdout=subprocess.PIPE)
+    other = subprocess.Popen(sleep)
+    try:
+        pipes = process_tree._output_pipes(holder)
+        assert len(pipes) == 2, f"both ends of the one pipe: {pipes}"
+        holders = list(process_tree._pipe_holders(pipes, time.monotonic() + 30))
+        assert holder.pid in holders
+        assert os.getpid() not in holders, "this process reads the pipe: it is not killed"
+        assert other.pid not in holders
+    finally:
+        for process in (holder, other):
+            process.kill()
+            process.wait()
 
 
 class InterruptError(Exception):
@@ -319,7 +475,7 @@ def test_the_processes_that_hold_a_tools_output_are_found_by_its_pipe() -> None:
     try:
         pipes = process_tree._output_pipes(holder)
         assert len(pipes) == 1, pipes
-        holders = process_tree._pipe_holders(pipes, time.monotonic() + 30)
+        holders = list(process_tree._pipe_holders(pipes, time.monotonic() + 30))
         assert holder.pid in holders
         assert os.getpid() not in holders, "this process reads the pipe: it is not killed"
         assert other.pid not in holders
@@ -359,7 +515,7 @@ def test_the_search_for_a_tools_output_ends_with_the_time_for_listing(
             return holds(fd_dir, pipes, listing_ends)
 
         monkeypatch.setattr(process_tree, "_holds", slow_holds)
-        assert process_tree._pipe_holders(pipes, time.monotonic() + 0.5) == []
+        assert list(process_tree._pipe_holders(pipes, time.monotonic() + 0.5)) == []
         assert len(read) == 1, "the search read on past the time for listing"
     finally:
         holder.kill()
@@ -420,13 +576,13 @@ sleep = [sys.executable, "-c", "import time; time.sleep(60)"]
 holder = subprocess.Popen(sleep, stdout=subprocess.PIPE)
 try:
     pipes = process_tree._output_pipes(holder)
-    print(process_tree._pipe_holders(pipes, time.monotonic() + 30) == [holder.pid])
+    print(list(process_tree._pipe_holders(pipes, time.monotonic() + 30)) == [holder.pid])
     lowest = os.open(os.devnull, os.O_RDONLY)
     os.close(lowest)
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(resource.RLIMIT_NOFILE, (lowest + 1, hard))
     try:
-        print(process_tree._pipe_holders(pipes, time.monotonic() + 30))
+        print(list(process_tree._pipe_holders(pipes, time.monotonic() + 30)))
     except OSError as error:
         print(error.errno)
     finally:
