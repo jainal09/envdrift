@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -50,24 +51,26 @@ environment = "production"
 """
 
 
-def _run_envdrift(
-    args: list[str],
-    *,
-    cwd: Path,
-    integration_pythonpath: str,
-    envdrift_cmd: list[str],
-) -> subprocess.CompletedProcess[str]:
-    """Run the real envdrift CLI as a subprocess and capture its output."""
-    env = os.environ.copy()
-    env["PYTHONPATH"] = integration_pythonpath
-    return subprocess.run(
-        [*envdrift_cmd, *args],
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+_Run = Callable[..., "subprocess.CompletedProcess[str]"]
+
+
+@pytest.fixture
+def envdrift(git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]) -> _Run:
+    """The real envdrift CLI as a subprocess, run in ``git_repo`` unless given a ``cwd``."""
+
+    def run(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        return subprocess.run(
+            [*envdrift_cmd, *args],
+            cwd=cwd or git_repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    return run
 
 
 def _flat(result: subprocess.CompletedProcess[str]) -> str:
@@ -87,17 +90,12 @@ class TestBacktickQuotedValueRoundTrip:
     """#950: a backtick-quoted value encrypts, is checked and decrypts truthfully."""
 
     def test_encrypt_reports_success_and_gitignores_the_new_key(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, git_repo: Path, envdrift: _Run
     ) -> None:
         env_file = git_repo / ".env"
         env_file.write_text(f"API_KEY=`{_API_KEY}`\n", encoding="utf-8")
 
-        result = _run_envdrift(
-            ["encrypt", ".env"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["encrypt", ".env"])
 
         output = _flat(result)
         assert result.returncode == 0, output
@@ -110,48 +108,26 @@ class TestBacktickQuotedValueRoundTrip:
         assert _is_ignored(git_repo, ".env.keys"), "the new private key is not gitignored"
 
     def test_check_counts_the_backtick_ciphertext_as_encrypted(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, git_repo: Path, envdrift: _Run
     ) -> None:
         (git_repo / ".env").write_text(f"API_KEY=`{_API_KEY}`\n", encoding="utf-8")
-        encrypted = _run_envdrift(
-            ["encrypt", ".env"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        encrypted = envdrift(["encrypt", ".env"])
         assert encrypted.returncode == 0, _flat(encrypted)
 
-        check = _run_envdrift(
-            ["encrypt", "--check", ".env"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        check = envdrift(["encrypt", "--check", ".env"])
 
         output = _flat(check)
         assert check.returncode == 0, output
         assert "File is fully encrypted" in output
         assert "PLAINTEXT SECRETS DETECTED" not in output
 
-    def test_decrypt_decrypts_the_backtick_ciphertext(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
-    ) -> None:
+    def test_decrypt_decrypts_the_backtick_ciphertext(self, git_repo: Path, envdrift: _Run) -> None:
         env_file = git_repo / ".env"
         env_file.write_text(f"API_KEY=`{_API_KEY}`\n", encoding="utf-8")
-        encrypted = _run_envdrift(
-            ["encrypt", ".env"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        encrypted = envdrift(["encrypt", ".env"])
         assert encrypted.returncode == 0, _flat(encrypted)
 
-        result = _run_envdrift(
-            ["decrypt", ".env"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["decrypt", ".env"])
 
         output = _flat(result)
         assert result.returncode == 0, output
@@ -164,19 +140,14 @@ class TestFailedEncryptStillProtectsTheKeyDotenvxWrote:
     """#950: a key dotenvx minted is gitignored even when encrypt then reports a failure."""
 
     def test_key_written_during_a_failed_encrypt_is_gitignored(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, git_repo: Path, envdrift: _Run
     ) -> None:
         # python-dotenv loads CAFÉ, but dotenvx reads only ASCII names and leaves its value
         # plaintext after it encrypted API_KEY with a key it just created, so encrypt fails.
         # That key must not be left for ``git add .`` to stage.
         (git_repo / ".env").write_text(f"API_KEY={_API_KEY}\nCAFÉ=hello\n", encoding="utf-8")
 
-        result = _run_envdrift(
-            ["encrypt", ".env"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["encrypt", ".env"])
 
         assert result.returncode == 1, _flat(result)
         assert (git_repo / ".env.keys").is_file(), _flat(result)
@@ -198,8 +169,7 @@ class TestPullAndLockReadQuotedCiphertext:
     def test_lock_check_passes_and_pull_decrypts(
         self,
         git_repo: Path,
-        integration_pythonpath: str,
-        envdrift_cmd: list[str],
+        envdrift: _Run,
         quote: str,
     ) -> None:
         (git_repo / "envdrift.toml").write_text(_MAPPING_CONFIG, encoding="utf-8")
@@ -217,12 +187,7 @@ class TestPullAndLockReadQuotedCiphertext:
         assert f"API_KEY={quote}encrypted:" in env_file.read_text(encoding="utf-8")
 
         def run(*args: str) -> subprocess.CompletedProcess[str]:
-            return _run_envdrift(
-                list(args),
-                cwd=git_repo,
-                integration_pythonpath=integration_pythonpath,
-                envdrift_cmd=envdrift_cmd,
-            )
+            return envdrift(list(args))
 
         check = run("lock", "--check")
         pull = run("pull", "--skip-sync")
@@ -237,7 +202,7 @@ class TestPullAndLockReadQuotedCiphertext:
         assert f"API_KEY={quote}{_API_KEY}{quote}" in text and "encrypted:" not in text
 
     def test_a_quoted_example_in_a_comment_is_no_ciphertext(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, git_repo: Path, envdrift: _Run
     ) -> None:
         """pull called a plaintext file "decrypted" for a comment that shows a quoted value."""
         (git_repo / "envdrift.toml").write_text(_MAPPING_CONFIG, encoding="utf-8")
@@ -249,12 +214,7 @@ class TestPullAndLockReadQuotedCiphertext:
         before = env_file.read_bytes()
 
         def run(*args: str) -> subprocess.CompletedProcess[str]:
-            return _run_envdrift(
-                list(args),
-                cwd=git_repo,
-                integration_pythonpath=integration_pythonpath,
-                envdrift_cmd=envdrift_cmd,
-            )
+            return envdrift(list(args))
 
         pull = run("pull", "--skip-sync")
         check = run("lock", "--check")

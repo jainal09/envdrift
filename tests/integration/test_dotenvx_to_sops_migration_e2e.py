@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import textwrap
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -55,21 +56,27 @@ def workspace(git_repo: Path) -> Path:
     return git_repo
 
 
-def _run_envdrift(
-    args: list[str], *, cwd: Path, integration_pythonpath: str, envdrift_cmd: list[str]
-) -> subprocess.CompletedProcess[str]:
-    """Run the real envdrift CLI with the workspace's age key."""
-    env = os.environ.copy()
-    env["PYTHONPATH"] = integration_pythonpath
-    env["SOPS_AGE_KEY_FILE"] = str(cwd / "age.key")
-    return subprocess.run(
-        [*envdrift_cmd, *args],
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+_Run = Callable[[list[str]], "subprocess.CompletedProcess[str]"]
+
+
+@pytest.fixture
+def envdrift(workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]) -> _Run:
+    """The real envdrift CLI as a subprocess, run in ``workspace`` with its age key."""
+
+    def run(args: list[str]) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        env["SOPS_AGE_KEY_FILE"] = str(workspace / "age.key")
+        return subprocess.run(
+            [*envdrift_cmd, *args],
+            cwd=workspace,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    return run
 
 
 def _flat(result: subprocess.CompletedProcess[str]) -> str:
@@ -77,54 +84,48 @@ def _flat(result: subprocess.CompletedProcess[str]) -> str:
     return " ".join((result.stdout + result.stderr).split())
 
 
-def _migrate(workspace: Path, run) -> None:
+def _migrate(envdrift: _Run) -> None:
     """The documented steps: encrypt with dotenvx, decrypt, re-encrypt with SOPS."""
     for args in (
         ["encrypt", ".env.production"],
         ["decrypt", ".env.production"],
         ["encrypt", ".env.production", "--backend", "sops", "--age", _AGE_PUBLIC_KEY],
     ):
-        result = run(args)
+        result = envdrift(args)
         assert result.returncode == 0, f"{args}: {_flat(result)}"
+
+
+def _assert_refused(envdrift: _Run, args: list[str], env_file: Path, reason: str) -> None:
+    """``envdrift args`` fails, says ``reason``, and leaves ``env_file`` as it was."""
+    before = env_file.read_bytes()
+
+    result = envdrift(args)
+
+    output = _flat(result)
+    assert result.returncode == 1, output
+    assert reason in output
+    assert env_file.read_bytes() == before
 
 
 class TestDotenvxToSopsMigration:
     """#949: the two documented steps work, and the result is a working SOPS file."""
 
     def test_sops_encrypts_the_file_dotenvx_decrypted(
-        self, workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, workspace: Path, envdrift: _Run
     ) -> None:
-        def run(args: list[str]) -> subprocess.CompletedProcess[str]:
-            return _run_envdrift(
-                args,
-                cwd=workspace,
-                integration_pythonpath=integration_pythonpath,
-                envdrift_cmd=envdrift_cmd,
-            )
-
-        _migrate(workspace, run)
+        _migrate(envdrift)
 
         text = (workspace / ".env.production").read_text(encoding="utf-8")
         assert "DATABASE_URL=ENC[AES256_GCM," in text
         assert _DATABASE_URL not in text
-        check = run(["encrypt", "--check", ".env.production"])
+        check = envdrift(["encrypt", "--check", ".env.production"])
         assert check.returncode == 0, _flat(check)
         assert "File is fully encrypted" in _flat(check)
 
-    def test_the_migrated_file_decrypts_as_sops(
-        self, workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]
-    ) -> None:
-        def run(args: list[str]) -> subprocess.CompletedProcess[str]:
-            return _run_envdrift(
-                args,
-                cwd=workspace,
-                integration_pythonpath=integration_pythonpath,
-                envdrift_cmd=envdrift_cmd,
-            )
+    def test_the_migrated_file_decrypts_as_sops(self, workspace: Path, envdrift: _Run) -> None:
+        _migrate(envdrift)
 
-        _migrate(workspace, run)
-
-        result = run(["decrypt", ".env.production"])
+        result = envdrift(["decrypt", ".env.production"])
 
         output = _flat(result)
         assert result.returncode == 0, output
@@ -134,70 +135,38 @@ class TestDotenvxToSopsMigration:
         assert f"API_KEY={_API_KEY}" in text
 
     def test_the_migrated_file_is_refused_for_dotenvx(
-        self, workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, workspace: Path, envdrift: _Run
     ) -> None:
-        def run(args: list[str]) -> subprocess.CompletedProcess[str]:
-            return _run_envdrift(
-                args,
-                cwd=workspace,
-                integration_pythonpath=integration_pythonpath,
-                envdrift_cmd=envdrift_cmd,
-            )
+        _migrate(envdrift)
 
-        _migrate(workspace, run)
-        before = (workspace / ".env.production").read_bytes()
-
-        result = run(["encrypt", ".env.production"])
-
-        output = _flat(result)
-        assert result.returncode == 1, output
-        assert "is already encrypted with sops, but the dotenvx backend was selected" in output
-        assert (workspace / ".env.production").read_bytes() == before
+        _assert_refused(
+            envdrift,
+            ["encrypt", ".env.production"],
+            workspace / ".env.production",
+            "is already encrypted with sops, but the dotenvx backend was selected",
+        )
 
 
 class TestRealCiphertextIsStillRefused:
     """The refusal still guards a file that holds the other backend's ciphertext."""
 
-    def test_dotenvx_ciphertext_is_refused_for_sops(
-        self, workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]
-    ) -> None:
-        def run(args: list[str]) -> subprocess.CompletedProcess[str]:
-            return _run_envdrift(
-                args,
-                cwd=workspace,
-                integration_pythonpath=integration_pythonpath,
-                envdrift_cmd=envdrift_cmd,
-            )
-
-        encrypted = run(["encrypt", ".env.production"])
+    def test_dotenvx_ciphertext_is_refused_for_sops(self, workspace: Path, envdrift: _Run) -> None:
+        encrypted = envdrift(["encrypt", ".env.production"])
         assert encrypted.returncode == 0, _flat(encrypted)
-        before = (workspace / ".env.production").read_bytes()
 
-        result = run(["encrypt", ".env.production", "--backend", "sops", "--age", _AGE_PUBLIC_KEY])
-
-        output = _flat(result)
-        assert result.returncode == 1, output
-        assert "is already encrypted with dotenvx, but the sops backend was selected" in output
-        assert (workspace / ".env.production").read_bytes() == before
+        _assert_refused(
+            envdrift,
+            ["encrypt", ".env.production", "--backend", "sops", "--age", _AGE_PUBLIC_KEY],
+            workspace / ".env.production",
+            "is already encrypted with dotenvx, but the sops backend was selected",
+        )
 
 
 class TestCiphertextIsFoundAsDotenvxReadsIt:
     """The refusal judges a file by the ciphertext dotenvx and SOPS really read in it."""
 
-    @staticmethod
-    def _runner(workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]):
-        def run(args: list[str]) -> subprocess.CompletedProcess[str]:
-            return _run_envdrift(
-                args,
-                cwd=workspace,
-                integration_pythonpath=integration_pythonpath,
-                envdrift_cmd=envdrift_cmd,
-            )
-
-        return run
-
     def test_ciphertext_dotenvx_cut_at_a_hash_is_refused_for_sops(
-        self, workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, workspace: Path, envdrift: _Run
     ) -> None:
         """dotenvx cut ``hunter2#Spring2024!`` at its ``#``, and decrypts what it encrypted.
 
@@ -215,27 +184,24 @@ class TestCiphertextIsFoundAsDotenvxReadsIt:
             timeout=120,
         )
         assert "#Spring2024!" in env_file.read_text(encoding="utf-8")
-        before = env_file.read_bytes()
-        run = self._runner(workspace, integration_pythonpath, envdrift_cmd)
 
-        result = run(["encrypt", ".env.production", "--backend", "sops", "--age", _AGE_PUBLIC_KEY])
-
-        output = _flat(result)
-        assert result.returncode == 1, output
-        assert "is already encrypted with dotenvx, but the sops backend was selected" in output
-        assert env_file.read_bytes() == before
+        _assert_refused(
+            envdrift,
+            ["encrypt", ".env.production", "--backend", "sops", "--age", _AGE_PUBLIC_KEY],
+            env_file,
+            "is already encrypted with dotenvx, but the sops backend was selected",
+        )
 
     def test_a_comment_that_names_the_sops_envelope_is_no_sops_ciphertext(
-        self, workspace: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, workspace: Path, envdrift: _Run
     ) -> None:
         """A plaintext file was refused for dotenvx as "already encrypted with sops"."""
         env_file = workspace / ".env.production"
         env_file.write_text(
             "# SOPS writes each value as ENC[AES256_GCM,data:...]\n" + _PLAINTEXT, encoding="utf-8"
         )
-        run = self._runner(workspace, integration_pythonpath, envdrift_cmd)
 
-        result = run(["encrypt", ".env.production"])
+        result = envdrift(["encrypt", ".env.production"])
 
         output = _flat(result)
         assert result.returncode == 0, output

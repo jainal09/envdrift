@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -28,26 +29,29 @@ _STAGING_VALUE = "sk_" + "test_" + "staging123"
 _PROD_VALUE = "sk_" + "live_" + "prod456"
 
 
-def _run_diff(
-    args: list[str],
-    *,
-    cwd: Path,
-    integration_pythonpath: str,
-    envdrift_cmd: list[str],
-    extra_env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run the real ``envdrift diff`` as a subprocess, without stray STRIPE refs."""
-    env = {k: v for k, v in os.environ.items() if not k.endswith("_STRIPE_KEY")}
-    env["PYTHONPATH"] = integration_pythonpath
-    env.update(extra_env or {})
-    return subprocess.run(
-        [*envdrift_cmd, "diff", *args],
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+_Run = Callable[..., "subprocess.CompletedProcess[str]"]
+
+
+@pytest.fixture
+def run_diff(tmp_path: Path, integration_pythonpath: str, envdrift_cmd: list[str]) -> _Run:
+    """The real ``envdrift diff`` as a subprocess, run in ``tmp_path`` without stray STRIPE refs."""
+
+    def run(
+        args: list[str], *, extra_env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        env = {k: v for k, v in os.environ.items() if not k.endswith("_STRIPE_KEY")}
+        env["PYTHONPATH"] = integration_pythonpath
+        env.update(extra_env or {})
+        return subprocess.run(
+            [*envdrift_cmd, "diff", *args],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    return run
 
 
 def _flat(result: subprocess.CompletedProcess[str]) -> str:
@@ -72,8 +76,7 @@ class TestDiffComparesKeysTheStrictParserDropped:
     def test_non_identifier_keys_that_differ_are_drift(
         self,
         tmp_path: Path,
-        integration_pythonpath: str,
-        envdrift_cmd: list[str],
+        run_diff: _Run,
         mode: list[str],
     ) -> None:
         (tmp_path / ".env.dev").write_text(
@@ -83,18 +86,8 @@ class TestDiffComparesKeysTheStrictParserDropped:
             "APP_NAME=shop\nX-API-KEY=prod-key\n2FA_ENABLED=true\n", encoding="utf-8"
         )
 
-        table = _run_diff(
-            [".env.dev", ".env.prod", "--ci", *mode],
-            cwd=tmp_path,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
-        as_json = _run_diff(
-            [".env.dev", ".env.prod", "--format", "json", *mode],
-            cwd=tmp_path,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        table = run_diff([".env.dev", ".env.prod", "--ci", *mode])
+        as_json = run_diff([".env.dev", ".env.prod", "--format", "json", *mode])
 
         assert table.returncode == 1, _flat(table)
         assert "No drift detected" not in _flat(table)
@@ -105,7 +98,7 @@ class TestDiffComparesKeysTheStrictParserDropped:
         }
 
     def test_multiline_value_under_a_non_identifier_key_is_one_variable(
-        self, tmp_path: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, tmp_path: Path, run_diff: _Run
     ) -> None:
         (tmp_path / ".env.dev").write_text(
             'X-CERT="-----BEGIN-----\ndGVzdA==\n-----END-----"\n', encoding="utf-8"
@@ -114,29 +107,19 @@ class TestDiffComparesKeysTheStrictParserDropped:
             'X-CERT="-----BEGIN-----\nb3RoZXI=\n-----END-----"\n', encoding="utf-8"
         )
 
-        result = _run_diff(
-            [".env.dev", ".env.prod", "--format", "json"],
-            cwd=tmp_path,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = run_diff([".env.dev", ".env.prod", "--format", "json"])
 
         names = [d["name"] for d in json.loads(result.stdout)["differences"]]
         assert names == ["X-CERT"], _flat(result)
 
     @pytest.mark.parametrize("fmt", ["table", "json"])
     def test_lines_no_parser_reads_are_named(
-        self, tmp_path: Path, integration_pythonpath: str, envdrift_cmd: list[str], fmt: str
+        self, tmp_path: Path, run_diff: _Run, fmt: str
     ) -> None:
         (tmp_path / ".env.dev").write_text('APP=shop\nBROKEN="a"junk\n', encoding="utf-8")
         (tmp_path / ".env.prod").write_text("APP=shop\n", encoding="utf-8")
 
-        result = _run_diff(
-            [".env.dev", ".env.prod", "--format", fmt],
-            cwd=tmp_path,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = run_diff([".env.dev", ".env.prod", "--format", fmt])
 
         assert result.returncode == 0, _flat(result)
         warning = "Could not parse non-comment content on .env.dev line(s) 2"
@@ -151,7 +134,7 @@ class TestStrictComparesRawText:
     """#954.2: ``--strict`` never expands ``${VAR}`` references."""
 
     def test_different_unresolved_references_are_drift(
-        self, tmp_path: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, tmp_path: Path, run_diff: _Run
     ) -> None:
         (tmp_path / ".env.staging").write_text(
             "STRIPE_KEY=${STAGING_STRIPE_KEY}\n", encoding="utf-8"
@@ -160,12 +143,7 @@ class TestStrictComparesRawText:
             "STRIPE_KEY=${PROD_STRIPE_KEY}\n", encoding="utf-8"
         )
 
-        result = _run_diff(
-            [".env.staging", ".env.production", "--strict", "--ci"],
-            cwd=tmp_path,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = run_diff([".env.staging", ".env.production", "--strict", "--ci"])
 
         output = _flat(result)
         assert result.returncode == 1, output
@@ -173,7 +151,7 @@ class TestStrictComparesRawText:
         assert "STRIPE_KEY" in output
 
     def test_set_variables_are_neither_compared_nor_printed(
-        self, tmp_path: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, tmp_path: Path, run_diff: _Run
     ) -> None:
         (tmp_path / ".env.staging").write_text(
             "STRIPE_KEY=${STAGING_STRIPE_KEY}\n", encoding="utf-8"
@@ -182,11 +160,8 @@ class TestStrictComparesRawText:
             "STRIPE_KEY=${PROD_STRIPE_KEY}\n", encoding="utf-8"
         )
 
-        result = _run_diff(
+        result = run_diff(
             [".env.staging", ".env.production", "--strict", "--format", "json"],
-            cwd=tmp_path,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
             extra_env={"STAGING_STRIPE_KEY": _STAGING_VALUE, "PROD_STRIPE_KEY": _PROD_VALUE},
         )
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -32,24 +33,26 @@ _PASSWORD = "hunter2" + "#" + "Spring2024!"
 _STRIPE = "abc" + "#" + "def456ghi"
 
 
-def _run_envdrift(
-    args: list[str],
-    *,
-    cwd: Path,
-    integration_pythonpath: str,
-    envdrift_cmd: list[str],
-) -> subprocess.CompletedProcess[str]:
-    """Run the real envdrift CLI as a subprocess and capture its output."""
-    env = os.environ.copy()
-    env["PYTHONPATH"] = integration_pythonpath
-    return subprocess.run(
-        [*envdrift_cmd, *args],
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+_Run = Callable[..., "subprocess.CompletedProcess[str]"]
+
+
+@pytest.fixture
+def envdrift(git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]) -> _Run:
+    """The real envdrift CLI as a subprocess, run in ``git_repo`` unless given a ``cwd``."""
+
+    def run(args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = integration_pythonpath
+        return subprocess.run(
+            [*envdrift_cmd, *args],
+            cwd=cwd or git_repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+    return run
 
 
 def _flat(result: subprocess.CompletedProcess[str]) -> str:
@@ -75,20 +78,14 @@ class TestEncryptRefusesAValueDotenvxWouldCutAtAHash:
     def test_encrypt_refuses_and_leaves_the_file_as_it_was(
         self,
         git_repo: Path,
-        integration_pythonpath: str,
-        envdrift_cmd: list[str],
+        envdrift: _Run,
         content: str,
         names: list[str],
     ) -> None:
         env_file = git_repo / ".env.production"
         env_file.write_text(content, encoding="utf-8")
 
-        result = _run_envdrift(
-            ["encrypt", ".env.production"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["encrypt", ".env.production"])
 
         output = _flat(result)
         assert result.returncode == 1, output
@@ -100,29 +97,19 @@ class TestEncryptRefusesAValueDotenvxWouldCutAtAHash:
         assert not (git_repo / ".env.keys").exists()
 
     def test_a_quoted_value_keeps_its_hash_through_the_round_trip(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, git_repo: Path, envdrift: _Run
     ) -> None:
         env_file = git_repo / ".env.production"
         env_file.write_text(
             f'DB_PASSWORD="{_PASSWORD}"\nNOTE=plain # a real comment\n', encoding="utf-8"
         )
 
-        encrypted = _run_envdrift(
-            ["encrypt", ".env.production"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        encrypted = envdrift(["encrypt", ".env.production"])
         assert encrypted.returncode == 0, _flat(encrypted)
         text = env_file.read_text(encoding="utf-8")
         assert "Spring2024" not in text and "NOTE=encrypted:" in text
 
-        decrypted = _run_envdrift(
-            ["decrypt", ".env.production"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        decrypted = envdrift(["decrypt", ".env.production"])
         assert decrypted.returncode == 0, _flat(decrypted)
         assert f'DB_PASSWORD="{_PASSWORD}"' in env_file.read_text(encoding="utf-8")
 
@@ -130,9 +117,7 @@ class TestEncryptRefusesAValueDotenvxWouldCutAtAHash:
 class TestCheckReportsPlaintextLeftAfterTheHash:
     """A file dotenvx already cut at a ``#`` is not called fully encrypted."""
 
-    def test_check_flags_the_plaintext_tail(
-        self, work_dir: Path, integration_pythonpath: str, envdrift_cmd: list[str]
-    ) -> None:
+    def test_check_flags_the_plaintext_tail(self, work_dir: Path, envdrift: _Run) -> None:
         env_file = work_dir / ".env.production"
         env_file.write_text(f"DB_PASSWORD={_PASSWORD}\nSTRIPE_SECRET={_STRIPE}\n", encoding="utf-8")
         # The file as dotenvx itself leaves it: ciphertext, then the plaintext after each #.
@@ -145,12 +130,7 @@ class TestCheckReportsPlaintextLeftAfterTheHash:
         )
         assert "#Spring2024!" in env_file.read_text(encoding="utf-8")
 
-        result = _run_envdrift(
-            ["encrypt", "--check", ".env.production"],
-            cwd=work_dir,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["encrypt", "--check", ".env.production"], cwd=work_dir)
 
         output = _flat(result)
         assert result.returncode == 1, output
@@ -163,7 +143,7 @@ class TestPushRefusesAValueDotenvxWouldCutAtAHash:
     """The partial-encryption push reaches dotenvx through the same wrapper."""
 
     def test_push_refuses_and_leaves_the_secret_file_as_it_was(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+        self, git_repo: Path, envdrift: _Run
     ) -> None:
         (git_repo / "envdrift.toml").write_text(
             "[partial_encryption]\n"
@@ -180,12 +160,7 @@ class TestPushRefusesAValueDotenvxWouldCutAtAHash:
         content = f"DB_PASSWORD={_PASSWORD}\n"
         secret.write_text(content, encoding="utf-8")
 
-        result = _run_envdrift(
-            ["push"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["push"])
 
         output = _flat(result)
         assert result.returncode == 1, output
@@ -214,9 +189,7 @@ environment = "production"
 class TestLockReportsPlaintextInsideTheQuotes:
     """Inside quotes a ``#`` is value text: ``"encrypted:... #hunter2"`` holds plaintext."""
 
-    def test_lock_check_does_not_call_it_encrypted(
-        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
-    ) -> None:
+    def test_lock_check_does_not_call_it_encrypted(self, git_repo: Path, envdrift: _Run) -> None:
         """It was read as ciphertext then a comment, and lock --check passed (exit 0)."""
         (git_repo / "envdrift.toml").write_text(_LOCK_CONFIG, encoding="utf-8")
         folder = git_repo / "svc"
@@ -239,12 +212,7 @@ class TestLockReportsPlaintextInsideTheQuotes:
             encoding="utf-8",
         )
 
-        result = _run_envdrift(
-            ["lock", "--check"],
-            cwd=git_repo,
-            integration_pythonpath=integration_pythonpath,
-            envdrift_cmd=envdrift_cmd,
-        )
+        result = envdrift(["lock", "--check"])
 
         output = _flat(result)
         assert result.returncode == 1, output
