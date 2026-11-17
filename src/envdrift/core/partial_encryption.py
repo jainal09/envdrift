@@ -538,6 +538,29 @@ def is_file_encrypted(file_path: Path) -> bool:
     return "sops_version" in content and _SOPS_CIPHERTEXT_PREFIX in content
 
 
+def holds_only_plain_keys(content: str) -> bool:
+    """Return True if every variable in ``content`` is a ``_PLAIN`` key (``is_plain_key``).
+
+    dotenvx's encrypt changes nothing in such a file (#1048): it writes no ciphertext and
+    no header to it, so the file never holds the ciphertext ``is_file_encrypted`` looks
+    for, though a dotenvx push or lock has nothing left to do in it. Content with no
+    variable is not such a file.
+    """
+    names = [
+        line.strip().partition("=")[0].strip()
+        for line in content.splitlines()
+        if _is_secret_var_line(line)
+    ]
+    return bool(names) and all(is_plain_key(name) for name in names)
+
+
+def _file_holds_only_plain_keys(file_path: Path) -> bool:
+    """``holds_only_plain_keys`` for the file at ``file_path``; False when there is none."""
+    if not file_path.exists():
+        return False
+    return holds_only_plain_keys(file_path.read_text(encoding="utf-8", errors="replace"))
+
+
 def is_fully_encrypted(file_path: Path, *, plain_keys: bool = False) -> bool:
     """Return True only when the file is FULLY encrypted (push would no-op).
 
@@ -551,11 +574,11 @@ def is_fully_encrypted(file_path: Path, *, plain_keys: bool = False) -> bool:
     and the dry-run ``--check`` sync test all use it so they agree on what
     "already pushed/encrypted" means. Those callers encrypt with dotenvx and pass
     ``plain_keys=plain_keys_apply()``: a ``_PLAIN`` key a push would leave plaintext
-    is no reason to call the file unpushed (#1048).
+    is no reason to call the file unpushed (#1048). Nor is a file of nothing but
+    ``_PLAIN`` keys, which holds no ciphertext and which a push leaves as it is.
     """
-    return is_file_encrypted(file_path) and not has_plaintext_secret_value(
-        file_path, plain_keys=plain_keys
-    )
+    pushed = is_file_encrypted(file_path) or (plain_keys and _file_holds_only_plain_keys(file_path))
+    return pushed and not has_plaintext_secret_value(file_path, plain_keys=plain_keys)
 
 
 # Backward-compatible alias for the pre-#507 private name (in-flight branches

@@ -63,6 +63,8 @@ exit code (dotenvx can exit `0` without encrypting):
   it as encrypted. It is still plaintext: `encrypt --check` and `guard` keep reporting a
   secret-looking value in one, such as `API_KEY_PLAIN=sk_live_...`. With an `Envfile`,
   every plaintext value counts again. SOPS has no `_PLAIN` rule, so nothing changes for it.
+  A file of nothing but `_PLAIN` keys holds no ciphertext, and dotenvx leaves it as it
+  is: `push`, `push --check`, `lock` and `lock --check` count it as done.
 - **Reads ciphertext in every quote style dotenvx keeps.** dotenvx keeps a value's
   quotes around its ciphertext, backticks included (`` API_KEY=`encrypted:...` ``), so
   the outcome check, `encrypt --check`, `decrypt`, `pull` and `lock` read ciphertext

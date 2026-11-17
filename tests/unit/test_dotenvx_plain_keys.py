@@ -12,12 +12,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from envdrift.cli_commands.sync_lock_helpers import _plaintext_values_remain
+from envdrift.cli_commands.sync_lock_helpers import (
+    _nothing_dotenvx_encrypts,
+    _plaintext_values_remain,
+)
 from envdrift.config import PartialEncryptionEnvironmentConfig
 from envdrift.core.partial_encryption import (
     _line_has_plaintext_secret,
     combine_files,
     has_plaintext_secret_value,
+    holds_only_plain_keys,
     is_fully_encrypted,
 )
 from envdrift.encryption import EncryptionProvider
@@ -208,3 +212,56 @@ class TestLockDecision:
         env_file.write_text(f"API_KEY={_CIPHERTEXT}\nNOTE_PLAIN=hello\n", encoding="utf-8")
 
         assert _plaintext_values_remain(env_file, EncryptionProvider.DOTENVX)
+
+
+class TestAFileOfOnlyPlainKeys:
+    """dotenvx leaves a file of nothing but ``_PLAIN`` keys as it is: it is done (#1048)."""
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "NOTE_PLAIN=hello\n",
+            'DOTENV_PUBLIC_KEY="02ab"\n# a note\nexport NOTE_PLAIN=hello\nREGION_PLAIN="eu"\n',
+        ],
+        ids=["one-key", "header-comment-export-quotes"],
+    )
+    def test_only_plain_keys(self, content: str) -> None:
+        assert holds_only_plain_keys(content)
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "",
+            "# only a comment\n",
+            'DOTENV_PUBLIC_KEY="02ab"\n',
+            "NOTE_PLAIN=hello\nAPI_KEY=abc\n",
+            "NOTE_PLAIN=hello\nEMPTY=\n",  # dotenvx encrypts an empty value
+            "note_plain=hello\n",
+        ],
+        ids=["empty", "comment", "header", "and-a-secret", "and-an-empty-value", "lowercase"],
+    )
+    def test_not_only_plain_keys(self, content: str) -> None:
+        assert not holds_only_plain_keys(content)
+
+    def test_push_counts_it_as_fully_encrypted_for_dotenvx(self, project: Path) -> None:
+        env_file = project / ".env.production.secret"
+        env_file.write_text("NOTE_PLAIN=hello\n", encoding="utf-8")
+
+        assert is_fully_encrypted(env_file, plain_keys=True)
+        assert not is_fully_encrypted(env_file)  # SOPS's view: nothing in it is encrypted
+        assert not is_fully_encrypted(project / "missing", plain_keys=True)
+
+    def test_lock_counts_it_as_done_for_dotenvx_only(self, project: Path) -> None:
+        assert _nothing_dotenvx_encrypts("NOTE_PLAIN=hello\n", EncryptionProvider.DOTENVX)
+        assert not _nothing_dotenvx_encrypts("NOTE_PLAIN=hello\n", EncryptionProvider.SOPS)
+        assert not _nothing_dotenvx_encrypts(
+            "NOTE_PLAIN=hello\nAPI_KEY=abc\n", EncryptionProvider.DOTENVX
+        )
+
+    def test_with_an_envfile_dotenvx_would_encrypt_it(self, project: Path) -> None:
+        (project / "Envfile").write_text("", encoding="utf-8")
+        env_file = project / ".env.production.secret"
+        env_file.write_text("NOTE_PLAIN=hello\n", encoding="utf-8")
+
+        assert not _nothing_dotenvx_encrypts("NOTE_PLAIN=hello\n", EncryptionProvider.DOTENVX)
+        assert not is_fully_encrypted(env_file, plain_keys=plain_keys_apply())

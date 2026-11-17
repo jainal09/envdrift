@@ -436,6 +436,21 @@ def _plaintext_values_remain(env_file: Path, provider: EncryptionProvider) -> bo
     return has_plaintext_secret_value(env_file, plain_keys=plain_keys)
 
 
+def _nothing_dotenvx_encrypts(content: str, provider: EncryptionProvider) -> bool:
+    """Whether ``provider``, dotenvx, would leave ``content`` as it is: each key is ``_PLAIN``.
+
+    Such a file holds no ciphertext, and never will, but has nothing left to encrypt: it is
+    done, as push counts it (#1048). SOPS has no ``_PLAIN`` rule.
+    """
+    from envdrift.core.partial_encryption import holds_only_plain_keys
+    from envdrift.encryption import EncryptionProvider
+    from envdrift.integrations.dotenvx_keys import plain_keys_apply
+
+    if provider != EncryptionProvider.DOTENVX or not plain_keys_apply():
+        return False
+    return holds_only_plain_keys(content)
+
+
 def _handle_already_encrypted(
     file: _LockFile,
     content: str,
@@ -570,7 +585,7 @@ def _process_lock_mapping(
         return
     encrypted = encryption_helpers.is_encrypted_content(
         context.encryption.provider, context.encryption.backend, content
-    )
+    ) or _nothing_dotenvx_encrypts(content, context.encryption.provider)
     lock_content = _LockContent(file=file, content=content, encrypted=encrypted)
     if _lock_content_handled(lock_content, context, state):
         return

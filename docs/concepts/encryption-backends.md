@@ -45,7 +45,8 @@ A key whose name ends with `_PLAIN` is the exception: dotenvx never encrypts it,
 encrypted, a bare `_PLAIN` is not) and ignores quotes and `export`. It does not apply when
 an `Envfile` is in the directory dotenvx runs in: that file's policy then decides, and by
 default encrypts every key. envdrift follows the same rule when it checks a dotenvx
-encryption, so such a value is not reported as plaintext the encryption missed. It is
+encryption, so such a value is not reported as plaintext the encryption missed, and a file
+of nothing but such keys, which holds no ciphertext, counts as pushed and locked. It is
 still plaintext, though: `encrypt --check` and `guard` keep reporting a secret-looking value
 in one. SOPS has no such rule; it leaves the keys ending in its `unencrypted_suffix`
 (`_unencrypted` by default) as plaintext instead.

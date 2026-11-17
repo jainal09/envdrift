@@ -61,6 +61,17 @@ combined_file = ".env.production"
 """
 
 
+_SECRETS_ONLY_CONFIG = """\
+[partial_encryption]
+enabled = true
+
+[[partial_encryption.environments]]
+name = "api"
+secrets_only = true
+secrets_dir = "secrets"
+"""
+
+
 def _run_envdrift(
     args: list[str], *, cwd: Path, integration_pythonpath: str, envdrift_cmd: list[str]
 ) -> subprocess.CompletedProcess[str]:
@@ -265,3 +276,77 @@ class TestPushAcceptsWhatDotenvxLeavesPlain:
         text = secret.read_text(encoding="utf-8")
         assert "DB_PASSWORD=encrypted:" in text and "REGION_PLAIN=eu" in text
         assert check.returncode == 0, _flat(check)
+
+
+class TestAFileOfOnlyPlainKeysIsDone:
+    """A file of nothing but ``_PLAIN`` keys, which dotenvx leaves as it is, is done (#1048).
+
+    It holds no ciphertext, and never will, so lock and push --check called it unencrypted
+    for ever: ``lock --check`` exited 1 after every lock, and ``push --check`` after every
+    push.
+    """
+
+    @staticmethod
+    def _runner(repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]):
+        def run(*args: str) -> subprocess.CompletedProcess[str]:
+            return _run_envdrift(
+                list(args),
+                cwd=repo,
+                integration_pythonpath=integration_pythonpath,
+                envdrift_cmd=envdrift_cmd,
+            )
+
+        return run
+
+    def test_lock_check_passes_before_and_after_a_lock_that_changes_nothing(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        (git_repo / "envdrift.toml").write_text(_LOCK_CONFIG, encoding="utf-8")
+        env_file = git_repo / "svc" / ".env.production"
+        env_file.parent.mkdir()
+        env_file.write_text("NOTE_PLAIN=hello\n", encoding="utf-8")
+        run = self._runner(git_repo, integration_pythonpath, envdrift_cmd)
+
+        results = [run("lock", "--check"), run("lock", "--force"), run("lock", "--check")]
+
+        for result in results:
+            output = _flat(result)
+            assert result.returncode == 0, output
+            assert "skipped (already encrypted)" in output
+            assert "would be encrypted" not in output
+        assert env_file.read_text(encoding="utf-8") == "NOTE_PLAIN=hello\n"
+
+    def test_push_check_is_in_sync_after_a_push(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        (git_repo / "envdrift.toml").write_text(_PARTIAL_CONFIG, encoding="utf-8")
+        (git_repo / ".env.production.clear").write_text("APP=shop\n", encoding="utf-8")
+        secret = git_repo / ".env.production.secret"
+        secret.write_text("NOTE_PLAIN=hello\n", encoding="utf-8")
+        run = self._runner(git_repo, integration_pythonpath, envdrift_cmd)
+
+        push = run("push")
+        check = run("push", "--check")
+
+        assert push.returncode == 0, _flat(push)
+        assert "(1 clear + 0 encrypted)" in _flat(push)
+        assert secret.read_text(encoding="utf-8") == "NOTE_PLAIN=hello\n"
+        assert check.returncode == 0, _flat(check)
+        assert "up to date" in _flat(check)
+
+    def test_secrets_only_push_check_is_in_sync(
+        self, git_repo: Path, integration_pythonpath: str, envdrift_cmd: list[str]
+    ) -> None:
+        (git_repo / "envdrift.toml").write_text(_SECRETS_ONLY_CONFIG, encoding="utf-8")
+        secret = git_repo / "secrets" / ".env.api"
+        secret.parent.mkdir()
+        secret.write_text("NOTE_PLAIN=hello\n", encoding="utf-8")
+        run = self._runner(git_repo, integration_pythonpath, envdrift_cmd)
+
+        push = run("push")
+        check = run("push", "--check")
+
+        assert push.returncode == 0, _flat(push)
+        assert check.returncode == 0, _flat(check)
+        assert "not encrypted" not in _flat(check)
+        assert secret.read_text(encoding="utf-8") == "NOTE_PLAIN=hello\n"
