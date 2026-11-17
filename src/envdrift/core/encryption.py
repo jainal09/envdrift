@@ -360,7 +360,7 @@ class EncryptionDetector:
         Returns:
             "dotenvx", "sops", or None if no encryption detected.
         """
-        if not self.has_sops_header(content):
+        if self.SOPS_ENC_VALUE_MARKER not in content and "sops" not in content:
             # No SOPS marker at all: the file is dotenvx's or no backend's, and its header
             # tells which without a scan of every value.
             if self.has_dotenvx_header(content):
@@ -371,7 +371,7 @@ class EncryptionDetector:
             return next(iter(backends))
         if self.has_dotenvx_header(content):
             return "dotenvx"
-        return "sops"
+        return "sops" if self.has_sops_header(content) else None
 
     def _read_text(self, path: Path) -> str | None:
         """Return the file's UTF-8 text, or None for a missing or unreadable file."""

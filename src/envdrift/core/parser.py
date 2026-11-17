@@ -43,6 +43,8 @@ def strip_backtick_quotes(value: str) -> str:
     ``KEY=`encrypted:...`#note`` is dotenvx ciphertext all the same. dotenvx tries that
     reading first, so it holds even when the comment ends with a backtick.
     """
+    if not value.startswith("`"):  # neither reading applies; most values leave here
+        return value
     quoted = _BACKTICK_VALUE_THEN_COMMENT.fullmatch(value) or _BACKTICK_WRAPPED.fullmatch(value)
     return quoted.group(1) if quoted else value
 
@@ -451,7 +453,9 @@ class EnvParser:
                 raw_value = joined_raw
                 raw_lines.extend(lines[index - consumed : index])
 
-            value = self._expanded(self.value_from_raw(raw_value), context, interpolate)
+            value = self.value_from_raw(raw_value)
+            if "${" in value:
+                value = self._expanded(value, context, interpolate)
             bare_keys.discard(key)
 
             # Determine encryption status and backend. Detection runs on the
@@ -477,15 +481,15 @@ class EnvParser:
         return env_file
 
     def _expanded(self, value: str, context: _ParseContext, interpolate: bool) -> str:
-        """``value`` with its ``${VAR}`` references expanded exactly like dotenv_values (#486).
+        """``value``, which holds ``${``, with its references expanded like dotenv_values (#486).
 
         dotenv_values is the loader pydantic-settings uses, so validate and diff judge the
         value the application receives, not the unexpanded literal. Without ``interpolate``
         the references stay as written: ``diff --strict`` compares the raw text (#954).
         """
-        if interpolate and "${" in value:
-            return self._interpolate(value, context.env_file.variables, context.bare_keys)
-        return value
+        if not interpolate:
+            return value
+        return self._interpolate(value, context.env_file.variables, context.bare_keys)
 
     def _standard_line_match(self, pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
         """Return an unambiguous ordinary assignment for the regex hot path.
@@ -937,7 +941,7 @@ class EnvParser:
         # around a backtick-quoted value's ciphertext (#950). The ciphertext is
         # base64, which never holds a "#": one in the value is plaintext that
         # dotenvx read as a comment and left unencrypted (#947).
-        inner = strip_backtick_quotes(value)
+        inner = strip_backtick_quotes(value) if value.startswith("`") else value
         if self.DOTENVX_ENCRYPTED_PATTERN.match(inner) and "#" not in inner:
             return EncryptionStatus.ENCRYPTED, "dotenvx"
 
