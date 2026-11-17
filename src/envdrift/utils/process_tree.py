@@ -3,8 +3,10 @@
 ``subprocess.run`` kills only the process it started when its timeout passes. A tool that runs
 others, such as git-secrets, a Bash script whose scan runs ``git grep``, leaves them behind:
 they are re-parented to init and run on until they next write their output or their work is
-done, after guard has exited. On Linux, a process the tool left running in the background when
-it exited, no longer below it, is found by the tool's output, which it holds open (#922).
+done, after guard has exited. A process the tool left running in the background when it exited,
+no longer below it, is found by the tool's output, which it holds open: on Linux in ``/proc``
+(#922), on macOS with libproc (#925). On Windows the tool runs in a job object, which holds such
+a process too (#925).
 """
 
 from __future__ import annotations
@@ -17,6 +19,12 @@ import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from envdrift.utils import libproc_pipes
+
+if TYPE_CHECKING:
+    from envdrift.utils.win_job import Job
 
 # A tree deeper than this is no tool's: the walk stops there.
 _MAX_DEPTH = 64
@@ -28,35 +36,57 @@ _LISTING_SECONDS = 2.0
 # user's: it is passed over. Another error, such as EMFILE, is this process's and is raised,
 # since passing over every process it hits would leave a running one out of the kill unseen.
 _GONE_OR_NOT_OURS = (FileNotFoundError, ProcessLookupError, PermissionError)
+# How ``_output_pipes`` names an end of a pipe by its libproc handle (macOS), where Linux has the
+# ``pipe:[inode]`` that ``/proc`` shows.
+_LIBPROC_PIPE = "libproc-pipe:"
 
 
-def kill_process_tree(process: subprocess.Popen) -> None:
+def kill_process_tree(process: subprocess.Popen, job: Job | None = None) -> None:
     """Kill ``process`` and every process below it that still runs.
 
     On POSIX each level of the tree is stopped (``SIGSTOP``) before its children are listed, so
     that none of them can start another one unseen, and then every one is killed: when a listing
-    fails, the processes stopped so far are killed before the error is raised. On Linux so are
-    the processes that hold the output of ``process`` open, with those below them. On Windows
-    ``taskkill /T`` walks the tree. ``process`` itself is killed either way, as
-    ``subprocess.run`` would.
+    fails, the processes stopped so far are killed before the error is raised. So are the
+    processes that hold the output of ``process`` open, with those below them, found on Linux
+    and macOS. On Windows ``job``, the job object that ``process`` was put in before it ran, is
+    ended with every process in it: one whose parent has exited too, which a walk of the tree
+    cannot reach (#925). ``taskkill /T`` walks the tree where there is no job, or where Windows
+    does not end it. ``process`` itself is killed either way, as ``subprocess.run`` would.
     """
     try:
         if sys.platform == "win32":
-            _taskkill_tree(process.pid)
+            _kill_windows_tree(process, job)
         else:
-            _kill_posix_tree(process.pid, _output_pipes(process))
+            _kill_posix_tree(process)
     finally:
         with contextlib.suppress(OSError):
             process.kill()
 
 
-def _kill_posix_tree(pid: int, pipes: set[str]) -> None:
-    """Stop ``pid``, the processes below it and the holders of ``pipes``; then kill them all."""
+def _kill_windows_tree(process: subprocess.Popen, job: Job | None) -> None:
+    """End ``job``, which holds every process ``process`` started; walk the tree without one.
+
+    The job is ended first, in one call: ``taskkill /T`` can take up to its 30-second timeout,
+    and the engine waits 5 seconds for a killed tool before guard goes on, and may exit.
+    """
+    if job is not None and job.terminate():
+        return
+    _taskkill_tree(process.pid)
+    if job is not None:
+        raise OSError(f"could not end the job object of {process.args}")
+
+
+def _kill_posix_tree(process: subprocess.Popen) -> None:
+    """Stop ``process``, the processes below it and the holders of its output; then kill them all.
+
+    The tree is stopped before its output pipes are named, so that a failure to name them, which
+    is raised, still kills the processes stopped.
+    """
     stopped: list[int] = []
     try:
         listing_ends = time.monotonic() + _LISTING_SECONDS
-        _stop_tree([pid], stopped, listing_ends)
-        _stop_pipe_holders(pipes, stopped, listing_ends)
+        _stop_tree([process.pid], stopped, listing_ends)
+        _stop_pipe_holders(_output_pipes(process), stopped, listing_ends)
     finally:
         # Even when a listing failed: a stopped process that is not killed never ends.
         for p in stopped:
@@ -92,48 +122,64 @@ def _stop_pipe_holders(pipes: set[str], stopped: list[int], listing_ends: float)
     """
     seen = set(stopped)
     while pipes and time.monotonic() < listing_ends:
-        holders = [pid for pid in _pipe_holders(pipes, listing_ends) if pid not in seen]
+        holders: list[int] = []
+        try:
+            for pid in _pipe_holders(pipes, listing_ends):
+                if pid not in seen:
+                    holders.append(pid)
+        finally:
+            # A search that fails still stops the holders it found before then, so that the
+            # kill ends them with the rest; its error reaches the caller all the same (#925).
+            seen.update(holders)
+            _stop_tree(holders, stopped, listing_ends)
         if not holders:
             return
-        seen.update(holders)
-        _stop_tree(holders, stopped, listing_ends)
         seen.update(stopped)
 
 
 def _output_pipes(process: subprocess.Popen) -> set[str]:
-    """The pipes this process reads the output of ``process`` from, as ``/proc`` names them.
+    """The pipes this process reads the output of ``process`` from.
 
-    Empty where there is no ``/proc/<pid>/fd``. Output that is not captured, or that
-    ``communicate()`` has read to its end, has no pipe to hold open.
+    On Linux each is named as ``/proc`` names it. On macOS each end of each is named by the
+    handle libproc gives it, with ``_LIBPROC_PIPE`` in front (#925). Empty elsewhere. Output
+    that is not captured, or that ``communicate()`` has read to its end, has no pipe to hold
+    open.
     """
-    if not Path("/proc/self/fd").is_dir():
-        return set()
-    pipes = set()
+    fds = []
     for stream in (process.stdout, process.stderr):
         with contextlib.suppress(OSError, ValueError):  # ValueError: closed at its end
             if stream is not None:
-                pipes.add(f"pipe:[{os.fstat(stream.fileno()).st_ino}]")
+                fds.append(stream.fileno())
+    if not Path("/proc/self/fd").is_dir():
+        return {f"{_LIBPROC_PIPE}{handle}" for handle in libproc_pipes.own_pipe_handles(fds)}
+    pipes = set()
+    for fd in fds:
+        with contextlib.suppress(OSError):
+            pipes.add(f"pipe:[{os.fstat(fd).st_ino}]")
     return pipes
 
 
-def _pipe_holders(pipes: set[str], listing_ends: float) -> list[int]:
-    """The pid of every process but this one that holds one of ``pipes`` open (Linux).
+def _pipe_holders(pipes: set[str], listing_ends: float) -> Iterator[int]:
+    """The pid of every process but this one that holds one of ``pipes`` open, as it is found.
 
-    It reads each process's ``/proc/<pid>/fd``, which, unlike its ``environ`` or ``cmdline``,
-    never waits on the process: a process that is stuck cannot hold the kill up. Reading them
-    all takes about 10 microseconds a file descriptor, seconds on a host with many processes or
-    files, so ``/proc`` and each of them are read an entry at a time, and the search ends at
-    ``listing_ends`` with the holders it has found.
+    On Linux it reads each process's ``/proc/<pid>/fd``, which, unlike its ``environ`` or
+    ``cmdline``, never waits on the process: a process that is stuck cannot hold the kill up.
+    Reading them all takes about 10 microseconds a file descriptor, seconds on a host with many
+    processes or files, so ``/proc`` and each of them are read an entry at a time, and the
+    search ends at ``listing_ends`` with the holders it has found. On macOS libproc lists them,
+    within the same time (#925).
     """
+    handles = {int(p.removeprefix(_LIBPROC_PIPE)) for p in pipes if p.startswith(_LIBPROC_PIPE)}
+    if handles:
+        yield from libproc_pipes.pipe_holders(handles, listing_ends)
+        return
     me = str(os.getpid())
-    holders = []
     with os.scandir("/proc") as entries:
         for entry in _until(entries, listing_ends):
             if not entry.name.isdigit() or entry.name == me:
                 continue
             if _holds(Path(entry.path, "fd"), pipes, listing_ends):
-                holders.append(int(entry.name))
-    return holders
+                yield int(entry.name)
 
 
 def _holds(fd_dir: Path, pipes: set[str], listing_ends: float) -> bool:

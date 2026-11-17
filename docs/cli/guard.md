@@ -883,13 +883,23 @@ it ran may have been cut short. A tool is killed together with the processes it
 started, such as the `git grep` that git-secrets runs. Earlier releases killed
 only the tool, and those processes ran on after guard had exited, until they next
 wrote their output or their work was done
-([#911](https://github.com/jainal09/envdrift/issues/911)). On Linux, so is a
-process that a tool left running in the background when it exited, if it still
-holds the tool's output open, as guard waits for that output
-([#922](https://github.com/jainal09/envdrift/issues/922)). When guard cannot read
-`/proc` on Linux, for example because it has run out of file descriptors, it still
-kills the tool and the processes it got to before then, and logs a warning that it
-could not kill every process the tool started.
+([#911](https://github.com/jainal09/envdrift/issues/911)). So is a process that
+a tool left running in the background when it exited, if it still holds the tool's
+output open, as guard waits for that output
+([#922](https://github.com/jainal09/envdrift/issues/922)). guard finds such a process
+in `/proc` on Linux and with libproc on macOS. On Windows each tool starts suspended.
+Where Windows can make a job object for it, the tool runs only once it is in that job,
+which holds every process the tool starts, whether its parent still runs or not
+([#925](https://github.com/jainal09/envdrift/issues/925)); earlier releases left
+that process running there, and waited for its output. Where Windows cannot make the
+job object, which guard logs at debug level, the tool runs without one and the kill
+walks its tree with `taskkill /T` alone, as in earlier releases: that walk cannot reach
+a process whose parent has exited. A tool that Windows cannot let run is killed, not
+left suspended until its timeout, and fails as a tool that cannot start does. When guard
+cannot list the processes, for example because it has run out of file descriptors, or
+because libproc fails on macOS for a process that still runs, or when Windows does not
+end the job object, it still kills the tool and the processes it got to before then,
+and logs a warning that it could not kill every process the tool started.
 
 Exit 5 applies to scanners you **selected** — a CLI flag or a `[guard]
 scanners` list written in your config. A scanner active only via the built-in
