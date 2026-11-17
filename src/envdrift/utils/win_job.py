@@ -138,7 +138,8 @@ def _ntdll() -> Any:
     return _load_ntdll()
 
 
-if sys.platform == "win32":
+# Run by the Windows CI jobs, which load the real DLLs; the coverage job runs on Linux.
+if sys.platform == "win32":  # pragma: no cover
     import ctypes
     from ctypes import wintypes
 
