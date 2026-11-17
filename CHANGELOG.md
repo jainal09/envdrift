@@ -1,5 +1,13 @@
 # Changelog
 
+## [11.1.10](https://github.com/jainal09/envdrift/compare/v11.1.9...v11.1.10) (2026-11-17)
+
+
+### Bug Fixes
+
+* **encrypt:** keep every value intact and never call plaintext encrypted ([#1056](https://github.com/jainal09/envdrift/issues/1056)) ([e07baae](https://github.com/jainal09/envdrift/commit/e07baae45a32b5f6e36ffb59cf85c395e6facff2))
+* **guard:** end a timed-out tool's outlived child on macOS and Windows ([#1053](https://github.com/jainal09/envdrift/issues/1053)) ([b9ec498](https://github.com/jainal09/envdrift/commit/b9ec498ddc006a4f8bbe5a0a010cca8563fb0a16))
+
 ## [11.1.9](https://github.com/jainal09/envdrift/compare/v11.1.8...v11.1.9) (2026-11-17)
 
 
