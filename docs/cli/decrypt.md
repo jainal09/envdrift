@@ -30,7 +30,25 @@ With the **dotenvx** backend, if the target file has no encrypted values
 values.`) instead of claiming a decryption happened. The file is left
 byte-for-byte untouched — dotenvx is not invoked at all — so a plaintext file
 (including one with CRLF line endings) or a non-`.env` binary file is never
-silently rewritten or corrupted.
+silently rewritten or corrupted. Ciphertext counts in any quote style dotenvx
+writes it in, backticks included (`` API_KEY=`encrypted:...` ``).
+
+### Values come back exactly as written
+
+dotenvx's own `decrypt` writes each value the way `dotenvx run` would load it: it
+expands `$VAR` and `${VAR}` from your shell's environment, runs `$(...)`, drops the
+backslash of `\$`, takes the value of a variable your shell already has under the
+same name, and rewrites the plaintext values of a partly encrypted file the same
+way. `DB_PASSWORD=Xk9$mQ2zz!` came back as `DB_PASSWORD=Xk9!`.
+
+envdrift has dotenvx decrypt only the ciphertext, in a copy that holds nothing else,
+and prints the result instead of writing it. It then writes each value back as the
+exact text it was encrypted from, inside the quotes it had. Every other line of the
+file is left as it was, except that line endings are normalized to LF. A file that is
+not valid UTF-8 is refused with nothing changed. A file that changes while dotenvx
+runs, as when an editor saves it, keeps the change, and the decrypt fails: run it
+again. `pull`, `vault-pull` and `pull-partial` decrypt the same way, so a `push` after
+them re-encrypts the same secrets.
 
 ### Refuses the key store and companion files
 
@@ -239,20 +257,24 @@ matches the one used to encrypt the file.
 
 ### A Value Encrypted Under Another Key
 
-dotenvx decrypts value by value. When one value was encrypted under a different
-key (for example after a merge, or through key drift), dotenvx writes the values
-it could decrypt to the file and then fails. envdrift takes a byte-for-byte copy
-of the file before dotenvx runs and writes it back, CRLF line endings included,
-so a failed decrypt never leaves decrypted secrets in a tracked file. The error
-names the value dotenvx could not decrypt:
+When one value was encrypted under a different key (for example after a merge, or
+through key drift), the decrypt fails. dotenvx decrypts the values in a copy (see
+[Values come back exactly as written](#values-come-back-exactly-as-written)), and the
+file is written only once every value decrypted, so a failed decrypt leaves the file
+as it was, CRLF line endings included, and never leaves decrypted secrets in a
+tracked file. The error names the value dotenvx could not decrypt:
 
 ```text
 [ERROR] Decryption failed: dotenvx decryption failed: ☠ [DECRYPTION_FAILED] could not decrypt STRIPE_API_KEY. ...
-.env.production was left as it was: envdrift restored the bytes it had before the decrypt.
+.env.production was left as it was.
 ```
 
-The same applies when dotenvx exits 0 but leaves ciphertext behind (`Decryption
-did not take effect`). The copy goes back whole or not at all: it is written to a
+envdrift also takes a byte-for-byte copy of the file before it decrypts, and writes it
+back when the decrypt wrote the file but then failed, as when it exited 0 but left
+ciphertext behind (`Decryption did not take effect`). A decrypt that fails before it
+writes the file has changed nothing, so the copy is not written back then: a change
+saved to the file meanwhile, as when an editor saves it, is kept.
+The copy goes back whole or not at all: it is written to a
 temporary file next to the file and renamed over it, so if envdrift cannot write
 it back (a full disk, for example), the file is left as dotenvx wrote it, never
 cut short. The message then says the file may now hold decrypted plaintext, marks

@@ -22,6 +22,33 @@ class EncryptionStatus(Enum):
     EMPTY = "empty"  # No value (KEY= or KEY="")
 
 
+# A backtick-quoted value followed by a comment, as dotenvx reads ``KEY=`value`#note``.
+_BACKTICK_VALUE_THEN_COMMENT = re.compile(r"`((?:\\`|[^`])*)`\s*#.*", re.DOTALL)
+# A value in one pair of backticks.
+_BACKTICK_WRAPPED = re.compile(r"`([\s\S]*)`")
+
+
+def strip_backtick_quotes(value: str) -> str:
+    """Return ``value`` without one surrounding pair of backticks, as dotenvx reads it.
+
+    dotenvx takes ``KEY=`value` `` as a quoted value and keeps the backticks around
+    the ciphertext it writes (``KEY=`encrypted:...` ``). python-dotenv, and so
+    ``EnvParser``, keeps them as part of the value, which is what a
+    pydantic-settings app loads. Checks about encryption look inside them, as
+    dotenvx does (#950, #964).
+
+    dotenvx ends the value at its closing backtick, and reads a ``#`` after it as a
+    comment, glued to it or not. python-dotenv takes no backtick as a quote, and starts
+    a comment only after whitespace, so it keeps a glued one in the value:
+    ``KEY=`encrypted:...`#note`` is dotenvx ciphertext all the same. dotenvx tries that
+    reading first, so it holds even when the comment ends with a backtick.
+    """
+    if not value.startswith("`"):  # neither reading applies; most values leave here
+        return value
+    quoted = _BACKTICK_VALUE_THEN_COMMENT.fullmatch(value) or _BACKTICK_WRAPPED.fullmatch(value)
+    return quoted.group(1) if quoted else value
+
+
 @dataclass
 class EnvVar:
     """Parsed environment variable."""
@@ -301,7 +328,9 @@ class EnvParser:
     # (#486/#537).
     UNQUOTED_COMMENT_PATTERN = re.compile(r"\s+#.*")
 
-    def parse(self, path: Path | str, *, lenient: bool = False) -> EnvFile:
+    def parse(
+        self, path: Path | str, *, lenient: bool = False, interpolate: bool = True
+    ) -> EnvFile:
         """
         Parse a .env file and produce an EnvFile representing its parsed contents.
 
@@ -310,6 +339,8 @@ class EnvParser:
             lenient (bool): When True, also recover keys the strict pattern
                 rejects (non-identifier / non-ASCII), so the parsed variable set
                 matches every assignment in the file.
+            interpolate (bool): When False, keep ``${VAR}`` references as the
+                text the file holds instead of expanding them (``diff --strict``).
 
         Returns:
             EnvFile: Parsed file containing variables and comments.
@@ -338,19 +369,21 @@ class EnvParser:
             raise ValueError(
                 f"Could not read {path} as UTF-8 text (not a valid .env file)"
             ) from exc
-        env_file = self.parse_string(content, lenient=lenient)
+        env_file = self.parse_string(content, lenient=lenient, interpolate=interpolate)
         env_file.path = path
 
         return env_file
 
-    def parse_string(self, content: str, *, lenient: bool = False) -> EnvFile:
+    def parse_string(
+        self, content: str, *, lenient: bool = False, interpolate: bool = True
+    ) -> EnvFile:
         """
         Parse .env formatted text, extracting variables (with detected encryption status) and comments.
 
         Parameters:
             content (str): The complete text content of a .env file to parse.
-            lenient (bool): When True, accept non-identifier / non-ASCII keys too
-                (see ``LENIENT_LINE_PATTERN``).
+            lenient (bool): Accept non-identifier and non-ASCII keys too (``LENIENT_LINE_PATTERN``).
+            interpolate (bool): When False, keep ``${VAR}`` references unexpanded (see ``parse``).
 
         Returns:
             EnvFile: An EnvFile populated with parsed EnvVar entries keyed by variable name and a list of comment lines.
@@ -419,12 +452,8 @@ class EnvParser:
                 raw_lines.extend(lines[index - consumed : index])
 
             value = self.value_from_raw(raw_value)
-
-            # ${VAR} interpolation (#486): expand exactly like dotenv_values —
-            # the loader pydantic-settings uses — so validate/diff judge the
-            # value the application receives, not the unexpanded literal.
             if "${" in value:
-                value = self._interpolate(value, env_file.variables, bare_keys)
+                value = self._expanded(value, context, interpolate)
             bare_keys.discard(key)
 
             # Determine encryption status and backend. Detection runs on the
@@ -448,6 +477,17 @@ class EnvParser:
             env_file.variables[key] = env_var
 
         return env_file
+
+    def _expanded(self, value: str, context: _ParseContext, interpolate: bool) -> str:
+        """``value``, which holds ``${``, with its references expanded like dotenv_values (#486).
+
+        dotenv_values is the loader pydantic-settings uses, so validate and diff judge the
+        value the application receives, not the unexpanded literal. Without ``interpolate``
+        the references stay as written: ``diff --strict`` compares the raw text (#954).
+        """
+        if not interpolate:
+            return value
+        return self._interpolate(value, context.env_file.variables, context.bare_keys)
 
     def _standard_line_match(self, pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
         """Return an unambiguous ordinary assignment for the regex hot path.
@@ -895,8 +935,12 @@ class EnvParser:
         if not value:
             return EncryptionStatus.EMPTY, None
 
-        # Check for dotenvx encrypted format
-        if self.DOTENVX_ENCRYPTED_PATTERN.match(value):
+        # Check for dotenvx encrypted format, inside the backticks dotenvx keeps
+        # around a backtick-quoted value's ciphertext (#950). The ciphertext is
+        # base64, which never holds a "#": one in the value is plaintext that
+        # dotenvx read as a comment and left unencrypted (#947).
+        inner = strip_backtick_quotes(value) if value.startswith("`") else value
+        if self.DOTENVX_ENCRYPTED_PATTERN.match(inner) and "#" not in inner:
             return EncryptionStatus.ENCRYPTED, "dotenvx"
 
         # Check for SOPS encrypted format

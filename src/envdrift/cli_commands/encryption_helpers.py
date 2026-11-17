@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import re
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -107,6 +106,17 @@ def build_sops_encrypt_kwargs(encryption_config: EncryptionConfig | None) -> dic
     return kwargs
 
 
+def _holds_dotenvx_ciphertext(content: str) -> bool:
+    """Whether a value of ``content`` is dotenvx ciphertext, found as dotenvx finds its values.
+
+    Bare, or inside the quotes dotenvx keeps around it, backticks too (#950). A mention in a
+    comment is no value, nor is a line inside a value that spans lines.
+    """
+    from envdrift.integrations.dotenvx_keys import ciphertext_values
+
+    return bool(ciphertext_values(content.replace("\r\n", "\n")))
+
+
 def is_encrypted_content(
     provider: EncryptionProvider,
     backend: EncryptionBackend,
@@ -118,7 +128,7 @@ def is_encrypted_content(
     # Use regex to match the DOTENVX encrypted value pattern to avoid false
     # positives from comments or other text containing "encrypted:".
     if provider == EncryptionProvider.DOTENVX:
-        return bool(re.search(r"=\s*encrypted:", content, re.IGNORECASE))
+        return _holds_dotenvx_ciphertext(content)
     # For SOPS the canonical metadata block (not the looser has_encrypted_header
     # substring scan) is the signal: a bare ENC[AES256_GCM, token in a plaintext
     # value or comment must not count (#475), and a file without the block is
@@ -167,7 +177,7 @@ def should_attempt_decryption(
     clean "not encrypted" skip rather than an avoidable decrypt failure.
     """
     if provider == EncryptionProvider.DOTENVX:
-        return bool(re.search(r"=\s*encrypted:", content, re.IGNORECASE))
+        return _holds_dotenvx_ciphertext(content)
     return _has_backend_ciphertext_marker(backend, content)
 
 

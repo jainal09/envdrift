@@ -1,6 +1,7 @@
 """Tests for DotenvxWrapper integration."""
 
 import os
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -216,29 +217,31 @@ def test_encrypt_passes_dash_proof_path_to_dotenvx(tmp_path, monkeypatch):
 
 
 def test_decrypt_passes_dash_proof_path_to_dotenvx(tmp_path, monkeypatch):
-    """#474: ``decrypt -f -dash.env`` argv must be dash-proofed too."""
+    """#474: ``decrypt -f -dash.env`` argv must be dash-proofed too.
+
+    dotenvx decrypts a copy under the file's own name (#946), whose path is absolute,
+    and the keys file is ./-prefixed.
+    """
     monkeypatch.chdir(tmp_path)
     dash_file = Path("-dash.env")
     dash_file.write_text("API_KEY=encrypted:abc\n", encoding="utf-8")
+    seen: list[list[str]] = []
+
+    def run_raw(args, env=None, cwd=None):
+        seen.append(list(args))
+        copy = Path(args[args.index("-f") + 1])
+        decrypted = copy.read_text(encoding="utf-8").replace("encrypted:abc", "plain")
+        return subprocess.CompletedProcess(args, 0, decrypted.encode(), b"")
 
     wrapper = DotenvxWrapper(auto_install=False)
-    with patch.object(wrapper, "_run") as mock_run:
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = ""
-        mock_result.stderr = ""
-        mock_run.return_value = mock_result
-
+    with patch.object(wrapper, "_run_raw", side_effect=run_raw):
         wrapper.decrypt(dash_file, env_keys_file=Path("-dash.env.keys"))
 
-    args = mock_run.call_args[0][0]
-    assert args == [
-        "decrypt",
-        "-f",
-        f".{os.sep}-dash.env",
-        "-fk",
-        f".{os.sep}-dash.env.keys",
-    ]
+    [args] = seen
+    copy = Path(args[2])
+    assert args[:2] == ["decrypt", "-f"] and copy.is_absolute() and copy.name == "-dash.env"
+    assert args[3:] == ["-fk", f".{os.sep}-dash.env.keys", "--stdout"]
+    assert dash_file.read_text(encoding="utf-8") == "API_KEY=plain\n"
 
 
 # ---------------------------------------------------------------------------

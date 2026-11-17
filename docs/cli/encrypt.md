@@ -54,7 +54,42 @@ exit code (dotenvx can exit `0` without encrypting):
 - **Reports silent encryption failures.** When the key is missing or malformed
   (a `.env.keys` that is a directory, garbage, or a mismatched key), the file is
   re-read after the call; if any plaintext value survives, the command fails
-  loudly instead of printing `[OK]`.
+  loudly instead of printing `[OK]`. A value written as `DB_PASSWORD: hunter2`, which
+  dotenvx loads like `DB_PASSWORD=hunter2` but never encrypts, is such a plaintext value,
+  for `push` and `lock` too: write it with `=` instead.
+- **Leaves dotenvx's `_PLAIN` keys to dotenvx.** dotenvx never encrypts a key whose name
+  ends with `_PLAIN` (case-sensitive: `NOTE_PLAIN` and `_PLAIN`, not `note_plain`),
+  unless an `Envfile` in the directory it runs in sets its own policy. So with the
+  dotenvx backend, the outcome check, `push`, `push --check`, `lock` and `lock --check`
+  do not count such a value as plaintext the encryption missed, and `push` does not count
+  it as encrypted. It is still plaintext: `encrypt --check` and `guard` keep reporting a
+  secret-looking value in one, such as `API_KEY_PLAIN=sk_live_...`. With an `Envfile`,
+  every plaintext value counts again. SOPS has no `_PLAIN` rule, so nothing changes for it.
+  A file of nothing but `_PLAIN` keys holds no ciphertext, and dotenvx leaves it as it
+  is: `push`, `push --check`, `lock` and `lock --check` count it as done. A `_PLAIN`
+  value that spans lines is one value: a line inside it, such as `TOKEN=hello` or
+  `TOKEN=ENC[AES256_GCM,...]`, is no variable of its own.
+- **Reads ciphertext in every quote style dotenvx keeps.** dotenvx keeps a value's
+  quotes around its ciphertext, backticks included (`` API_KEY=`encrypted:...` ``), so
+  the outcome check, `encrypt --check`, `decrypt`, `pull` and `lock` read ciphertext
+  inside `"`, `'` or backticks alike, instead of calling a backtick-quoted encryption a
+  key problem, or a file whose values are all quoted unencrypted. A comment glued to the
+  closing quote (`` PORT=`encrypted:...`#note ``) is no part of the value, as dotenvx
+  reads it.
+- **Gitignores the key file on failure too.** `.env.keys` is added to `.gitignore`
+  after a run that fails its outcome check as well, since dotenvx may already have
+  written a new private key to it.
+- **Refuses a value dotenvx would cut at a `#`.** dotenvx ends an unquoted value at its
+  first `#` and keeps the rest of the line as a comment, while python-dotenv (and so
+  envdrift) starts a comment only at a `#` after whitespace. `DB_PASSWORD=hunter2#Spring2024!`
+  would be encrypted as `hunter2`, with `#Spring2024!` left in the file as plaintext, and
+  `COLOR=#FF0000` not at all. dotenvx `encrypt`, `lock`, `vault-push` and `push` refuse such
+  a file before dotenvx runs, name the variables, and change nothing: put each value in
+  quotes (`DB_PASSWORD='hunter2#Spring2024!'`) and encrypt again. `NOTE=plain # comment`
+  is fine, and so is a `_PLAIN` key, which dotenvx encrypts none of unless an `Envfile`
+  sets its own policy (it still reads `DOCS_PLAIN=https://example.com/a#b` only up to the
+  `#`). `encrypt --check` reports a file dotenvx already cut this way as holding
+  plaintext, not as fully encrypted.
 - **Encrypts with the key the folder already holds.** dotenvx 2.x creates a brand-new
   key whenever a file has no `DOTENV_PUBLIC_KEY` header, even when `.env.keys` already
   holds the file's key, and the file then needs a key only this machine has. So before
@@ -100,6 +135,9 @@ command line. Without `--check`, each file is encrypted in turn.
 ### `--check`
 
 Only check encryption status without modifying the file. Exits with code 1 if plaintext secrets are detected.
+A backtick-quoted value is judged by the value inside the backticks, which is what dotenvx
+encrypts, so `` STRIPE=`sk_live_...` `` is reported as a plaintext secret, with a comment
+glued after the closing backtick or not.
 
 ```bash
 envdrift encrypt .env.production --check
@@ -143,7 +181,8 @@ Re-running `encrypt` on an already-encrypted SOPS file verifies the post-state: 
 fully encrypted file is an honest exit-0 no-op (`already encrypted (no change)`),
 while surviving plaintext values or recipient flags missing from the file's metadata
 fail loudly. A file encrypted with the other backend is refused instead of being
-double-encrypted. See the
+double-encrypted. The refusal rests on the ciphertext the values hold, so a file
+`dotenvx decrypt` left with only its `DOTENV_PUBLIC_KEY` header encrypts with SOPS. See the
 [SOPS guide](../guides/sops.md#re-running-encrypt-on-an-already-encrypted-file).
 
 ## Examples

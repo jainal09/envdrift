@@ -17,6 +17,12 @@ The `diff` command compares two .env files and shows:
 - **Changed variables** - Different values between files
 - **Unchanged variables** - Same in both (with `--include-unchanged`)
 
+Both files are read the way python-dotenv reads them, so every key it loads is
+compared, including names that are not Python identifiers (`X-API-KEY`,
+`2FA_ENABLED`) and multi-line quoted values under them. Non-comment content that
+cannot be parsed at all is left out, as python-dotenv leaves it out, and a warning
+names the file and line numbers (on stderr with `--format json`).
+
 This is useful for:
 
 - Reviewing differences between development and production
@@ -35,6 +41,11 @@ This is useful for:
 ### `--schema`, `-s`
 
 Schema for sensitive field detection. When provided, sensitive fields are masked in output.
+A variable is matched to its field as pydantic-settings matches it: by the field's alias,
+or by its name after the `env_prefix`, in the schema's case policy. So `X-API-KEY` is
+masked when it is the alias of a sensitive field, and compared through that field's type.
+A name that several fields share is masked when any one of them is sensitive, and its
+values differ when any one of those fields reads them differently.
 
 ```bash
 envdrift diff .env.dev .env.prod --schema config.settings:Settings
@@ -107,6 +118,11 @@ Identical files exit 0 with or without the flag.
 
 Normalize values before comparing so trivially-equivalent strings don't show up
 as drift. Enabled by default; pass `--strict` to fall back to raw string compare.
+`--strict` compares the text the files hold: a `${VAR}` reference is compared, and
+shown, as written, so `${STAGING_STRIPE_KEY}` and `${PROD_STRIPE_KEY}` differ even
+when neither variable is set. Without `--strict`, references are expanded the way
+pydantic-settings expands them (a value defined earlier in the file, then the
+environment, then the `:-` default or `""`) before the values are compared.
 
 When `--normalize` is in effect, two values are considered equal if:
 
@@ -149,7 +165,9 @@ envdrift diff .env.dev .env.prod --schema config.settings:Settings
 
 Displayed values are always the original ones from the file — normalization
 only affects the `changed` / `unchanged` classification, never what you see in
-the table or JSON output.
+the table or JSON output. A `${VAR}` reference is the exception: without
+`--strict` it is shown expanded, which can print the value of an environment
+variable, while `--strict` shows the reference as written.
 
 ## Examples
 

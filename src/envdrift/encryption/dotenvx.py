@@ -15,6 +15,7 @@ from envdrift.encryption.base import (
     EncryptionStatus,
 )
 from envdrift.integrations.dotenvx import is_dotenvx_safe_filename
+from envdrift.integrations.dotenvx_keys import plain_keys_apply
 
 if TYPE_CHECKING:
     from envdrift.core.partial_encryption import DecryptSnapshot
@@ -228,6 +229,7 @@ class DotenvxEncryptionBackend(EncryptionBackend):
             DotenvxError,
             DotenvxFilenameError,
             DotenvxKeyError,
+            DotenvxValueError,
         )
 
         try:
@@ -239,9 +241,10 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                 cwd=kwargs.get("cwd"),
                 environment=kwargs.get("environment"),
             )
-        except DotenvxKeyError as e:
+        except (DotenvxKeyError, DotenvxValueError) as e:
             # A refusal, not a crash: the folder's key could not be reused (or
-            # dotenvx did not reuse it) and both files were left as they were.
+            # dotenvx did not reuse it), or dotenvx would leave part of a value
+            # in plaintext (#947), and both files were left as they were.
             return EncryptionResult(success=False, message=str(e), file_path=env_file)
         except (DotenvxError, DotenvxFilenameError) as e:
             # DotenvxFilenameError: the wrapper refused pre-flight (e.g. a
@@ -254,8 +257,9 @@ class DotenvxEncryptionBackend(EncryptionBackend):
         # exit code. dotenvx can exit 0 *without* encrypting when the private key
         # is missing or malformed (e.g. .env.keys is a directory, garbage, or a
         # mismatched key); it only prints a warning to stderr. Re-read the file
-        # and confirm no plaintext value survived (envdrift #443).
-        if has_plaintext_secret_value(env_file):
+        # and confirm no plaintext value survived (envdrift #443). A _PLAIN key,
+        # which dotenvx never encrypts where it ran, is not one that survived (#1048).
+        if has_plaintext_secret_value(env_file, plain_keys=plain_keys_apply(kwargs.get("cwd"))):
             return EncryptionResult(
                 success=False,
                 message=(
@@ -275,8 +279,8 @@ class DotenvxEncryptionBackend(EncryptionBackend):
     def _decrypt_under(
         self, snapshot: DecryptSnapshot, env_file: Path, keys_file: Path | str | None, kwargs
     ) -> None:
-        """Run dotenvx's decrypt; on a failure the snapshot puts the file back, and says so."""
-        from envdrift.integrations.dotenvx import DotenvxError
+        """Run dotenvx's decrypt; the error for a failure says what became of the file."""
+        from envdrift.integrations.dotenvx import DotenvxError, DotenvxNotFoundError
 
         try:
             with snapshot:
@@ -286,8 +290,9 @@ class DotenvxEncryptionBackend(EncryptionBackend):
                     env=kwargs.get("env"),
                     cwd=kwargs.get("cwd"),
                 )
-        except DotenvxError as e:
-            # dotenvx's own output names the value it could not decrypt.
+        except (DotenvxError, DotenvxNotFoundError) as e:
+            # dotenvx's own output names the value it could not decrypt. dotenvx can also go
+            # missing after the check before this; the file is then left as it is, too.
             raise EncryptionBackendError(
                 f"{_dotenvx_failure_message('decryption', e)}\n{snapshot.note}"
             ) from e

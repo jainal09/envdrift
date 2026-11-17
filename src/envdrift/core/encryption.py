@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from envdrift.core.parser import EncryptionStatus, EnvFile
+from envdrift.core.parser import EncryptionStatus, EnvFile, EnvParser, strip_backtick_quotes
 from envdrift.core.partial_encryption import _is_sops_metadata_key
 from envdrift.core.schema import SchemaMetadata
 from envdrift.encryption.sops import SOPSEncryptionBackend
@@ -293,11 +293,77 @@ class EncryptionDetector:
         """
         if self.SOPS_ENC_VALUE_MARKER in content:
             return True
-        return any(pattern.search(content) for pattern in self.SOPS_METADATA_PATTERNS)
+        return self._holds_sops_metadata(content)
+
+    def _holds_sops_metadata(self, content: str) -> bool:
+        """Whether ``content`` holds the metadata SOPS writes beside its ciphertext.
+
+        A line inside a value that spans lines is that value's text, as dotenvx reads it,
+        not metadata: ``CERT="...\\nsops_version=3.13.3\\n..."`` holds none. SOPS writes
+        no such value: it escapes a value's line breaks.
+        """
+        from envdrift.integrations.dotenvx_keys import multiline_value_spans
+
+        # Each pattern names "sops" in lower case: without it, none of them can match,
+        # and the line-by-line search of a large file is skipped.
+        if "sops" not in content:
+            return False
+        found = [m.start() for p in self.SOPS_METADATA_PATTERNS for m in p.finditer(content)]
+        if not found:  # no scan of every value for a file without any
+            return False
+        spans = multiline_value_spans(content)
+        return any(all(not start < at < end for start, end in spans) for at in found)
+
+    def ciphertext_backends(self, content: str) -> set[str]:
+        """
+        Return the backends whose ciphertext the content holds.
+
+        dotenvx counts only for a value that is dotenvx ciphertext, not for its
+        header: ``dotenvx decrypt`` keeps the ``DOTENV_PUBLIC_KEY`` header, and SOPS
+        keeps that key's name when it encrypts such a file (#949). Its values are found
+        as dotenvx finds them, so ``KEY=encrypted:...#tail``, which dotenvx decrypts, is
+        its ciphertext too. SOPS counts for a value in its ``ENC[AES256_GCM,`` envelope,
+        or for the metadata SOPS writes only beside its ciphertext; a mention of the
+        envelope in a comment is neither.
+
+        Parameters:
+            content (str): Raw file content to inspect.
+
+        Returns:
+            set[str]: A subset of ``{"dotenvx", "sops"}``.
+        """
+        backends: set[str] = set()
+        if self._holds_dotenvx_ciphertext(content):
+            backends.add("dotenvx")
+        if self._holds_sops_ciphertext(content):
+            backends.add("sops")
+        return backends
+
+    @staticmethod
+    def _holds_dotenvx_ciphertext(content: str) -> bool:
+        """Whether a value of ``content`` is dotenvx ciphertext, found as dotenvx finds them."""
+        from envdrift.integrations.dotenvx_keys import ENCRYPTED_PREFIX, ciphertext_values
+
+        if ENCRYPTED_PREFIX not in content:  # no scan of every value for a file without one
+            return False
+        return bool(ciphertext_values(content.replace("\r\n", "\n")))
+
+    def _holds_sops_ciphertext(self, content: str) -> bool:
+        """Whether a value of ``content`` is in SOPS's envelope, or SOPS's metadata is there."""
+        if self.SOPS_ENC_VALUE_MARKER in content:  # no parse of a file without SOPS's envelope
+            env = EnvParser().parse_string(content, lenient=True, interpolate=False)
+            if any(var.encryption_backend == "sops" for var in env.assignments):
+                return True
+        return self._holds_sops_metadata(content)
 
     def detect_backend(self, content: str) -> str | None:
         """
         Detect which encryption backend was used for the content.
+
+        The ciphertext decides when it is one backend's (``ciphertext_backends``),
+        since a header can outlive it: the dotenvx header named dotenvx for a file
+        SOPS had encrypted after a ``dotenvx decrypt`` (#949). The headers decide
+        only when the content holds no ciphertext, or both backends'.
 
         Parameters:
             content (str): Raw file content to inspect.
@@ -305,11 +371,31 @@ class EncryptionDetector:
         Returns:
             "dotenvx", "sops", or None if no encryption detected.
         """
+        if self.SOPS_ENC_VALUE_MARKER not in content and "sops" not in content:
+            # No SOPS marker at all: the file is dotenvx's or no backend's, and its header
+            # tells which without a scan of every value.
+            if self.has_dotenvx_header(content):
+                return "dotenvx"
+            return "dotenvx" if self._holds_dotenvx_ciphertext(content) else None
+        backends = self.ciphertext_backends(content)
+        if len(backends) == 1:
+            return next(iter(backends))
         if self.has_dotenvx_header(content):
             return "dotenvx"
-        if self.has_sops_header(content):
-            return "sops"
-        return None
+        return "sops" if self.has_sops_header(content) else None
+
+    def _read_text(self, path: Path) -> str | None:
+        """Return the file's UTF-8 text, or None for a missing or unreadable file."""
+        if not path.exists():
+            return None
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # Not readable as UTF-8 text (binary blob, directory, ...): it is not a
+            # dotenvx/sops-encrypted file, so no backend is detected. Returning
+            # None (rather than crashing) lets decrypt auto-detect fall back to a
+            # clean per-backend message instead of a raw traceback (#13).
+            return None
 
     def detect_backend_for_file(self, path: Path) -> str | None:
         """
@@ -321,18 +407,21 @@ class EncryptionDetector:
         Returns:
             "dotenvx", "sops", or None if no encryption detected.
         """
-        if not path.exists():
-            return None
+        content = self._read_text(path)
+        return None if content is None else self.detect_backend(content)
 
-        try:
-            content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            # Not readable as UTF-8 text (binary blob, directory, ...): it is not a
-            # dotenvx/sops-encrypted file, so no backend is detected. Returning
-            # None (rather than crashing) lets decrypt auto-detect fall back to a
-            # clean per-backend message instead of a raw traceback (#13).
-            return None
-        return self.detect_backend(content)
+    def ciphertext_backends_for_file(self, path: Path) -> set[str]:
+        """
+        Return the backends whose ciphertext a file holds (see ``ciphertext_backends``).
+
+        Parameters:
+            path (Path): Filesystem path to the file to inspect.
+
+        Returns:
+            set[str]: A subset of ``{"dotenvx", "sops"}``; empty for an unreadable file.
+        """
+        content = self._read_text(path)
+        return set() if content is None else self.ciphertext_backends(content)
 
     def is_file_encrypted(self, path: Path) -> bool:
         """
@@ -403,9 +492,13 @@ class EncryptionDetector:
         """
         Determine whether a plaintext value matches any configured secret patterns.
 
+        The patterns match from the start of the value, so a backtick-quoted value
+        is judged inside its backticks, the value dotenvx would encrypt (#964).
+
         Returns:
             `true` if the value appears to be a secret, `false` otherwise.
         """
+        value = strip_backtick_quotes(value)
         for pattern in self.SECRET_VALUE_PATTERNS:
             if pattern.search(value):
                 return True

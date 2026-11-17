@@ -1185,7 +1185,7 @@ class NativeScanner(ScannerBackend):
             # mixed-content files — and dotenvx's public-key artifact. The public key
             # is public by definition (not a secret) but looks like a high-entropy
             # assignment; this mirrors how the partial-encryption combine step excludes
-            # it from secret-var counts (see partial_encryption._is_secret_var_line).
+            # it from secret-var counts (see partial_encryption._secret_assignment).
             # Only those values are left out: a plaintext secret after one on the same
             # line, past a space or a form feed, is still reported (#937).
             skipped = _Spans(_skipped_value_spans(line))

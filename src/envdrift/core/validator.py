@@ -10,7 +10,13 @@ from typing import TYPE_CHECKING, Any
 
 from envdrift.core.encryption import is_dotenvx_public_key_var
 from envdrift.core.env_semantics import coerce_env_value, field_complexity
-from envdrift.core.parser import EncryptionStatus, EnvFile, EnvVar
+from envdrift.core.parser import (
+    EncryptionStatus,
+    EnvFile,
+    EnvParser,
+    EnvVar,
+    strip_backtick_quotes,
+)
 from envdrift.core.schema import FieldMetadata, SchemaMetadata
 
 if TYPE_CHECKING:
@@ -219,6 +225,24 @@ def _check_extra_vars(
             result.warnings.append(f"Extra variable '{var_name}' not in schema")
 
 
+# The parser reads each value's encryption; validate skips only what it calls ciphertext.
+_PARSER = EnvParser()
+# How a value the parser reads as ciphertext starts: dotenvx's, bare or in backticks, or SOPS's.
+_CIPHERTEXT_STARTS = ("encrypted:", "`", "ENC[AES256_GCM,")
+
+
+def _is_ciphertext(value: str) -> bool:
+    """Whether the parser reads ``value`` as ciphertext, whose plaintext is unknown.
+
+    Neither the type check nor the model may judge it. dotenvx's counts also inside the
+    backticks dotenvx keeps around it (#964), but not with a ``#`` in it, which dotenvx left
+    unencrypted (#947). SOPS's envelope counts only bare, as SOPS writes it.
+    """
+    if not value.startswith(_CIPHERTEXT_STARTS):  # most values: no call to the parser
+        return False
+    return _PARSER._detect_encryption_status(value)[0] is EncryptionStatus.ENCRYPTED
+
+
 def _collect_constraint_values(
     schema: SchemaMetadata, env_by_name: dict[str, EnvVar]
 ) -> tuple[dict[str, Any], set[str]]:
@@ -246,7 +270,7 @@ def _collect_constraint_values(
         binding_name, env_var = binding
         model_input_key = binding_name if field_meta.alias is not None else field_name
         value = env_var.value
-        if value.startswith(("encrypted:", "ENC[")):
+        if _is_ciphertext(value):
             ciphertext_fields.add(field_name)
             continue
         is_complex, allow_parse_failure = field_complexity(
@@ -567,9 +591,14 @@ class Validator:
         """
         Determine whether a plaintext value matches any known secret-like pattern.
 
+        The patterns match from the start of the value, so a backtick-quoted value
+        is judged inside its backticks, as dotenvx reads it (#964).
+
         Returns:
             `true` if the value matches any secret-like pattern, `false` otherwise.
         """
+        if value.startswith("`"):  # most values hold none: they skip the call
+            value = strip_backtick_quotes(value)
         for pattern in self.SECRET_PATTERNS:
             if pattern.search(value):
                 return True
@@ -616,9 +645,9 @@ class Validator:
             return None
 
         # Skip type check for encrypted values (supports both dotenvx and SOPS)
-        # dotenvx format: encrypted:...
+        # dotenvx format: encrypted:..., also inside backticks (#964)
         # SOPS format: ENC[AES256_GCM,...
-        if value.startswith("encrypted:") or value.startswith("ENC["):
+        if _is_ciphertext(value):
             return None
 
         coerced = coerce_env_value(expected_type, value, metadata)

@@ -490,11 +490,12 @@ environment = "production"
 """,
             encoding="utf-8",
         )
-        # The sync engine only processes mappings whose env file exists; a
-        # minimal dotenvx-style encrypted file makes the mapping eligible
-        # (mirrors the AWS lane's `pull` fixture).
+        # The sync engine only processes mappings whose env file exists (mirrors the AWS lane's
+        # `pull` fixture). It holds no ciphertext: pull syncs the key, and has nothing to
+        # decrypt with it. A made-up "encrypted:" value cannot be decrypted, and pull reports
+        # that it failed (#950).
         (work_dir / ".env.production").write_text(
-            'DOTENV_PUBLIC_KEY_PRODUCTION="034a5e"\nDATABASE_URL="encrypted:abc123"\n',
+            'DOTENV_PUBLIC_KEY_PRODUCTION="034a5e"\nDATABASE_URL=postgres://localhost/app\n',
             encoding="utf-8",
         )
 

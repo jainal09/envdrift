@@ -289,16 +289,22 @@ def _analyze_encrypt_file(
 def _refuse_cross_backend_encryption(
     files: list[Path],
     analyze_file: Callable[[Path], EncryptionReport],
+    detector: EncryptionDetector,
     backend: EncryptionProvider,
 ) -> None:
     """Analyze a whole batch before refusing ciphertext from another backend."""
     # Analyze every target before touching any backend: unreadable input and
     # cross-backend double encryption are refused up front (#475), and the
-    # refusal must not depend on the selected backend being installed.
+    # refusal must not depend on the selected backend being installed. Only
+    # ciphertext can be double-encrypted, so the refusal rests on the ciphertext
+    # the file holds: dotenvx keeps its DOTENV_PUBLIC_KEY header after a decrypt,
+    # and that header alone blocked the dotenvx-to-SOPS migration (#949).
     for env_file in files:
-        report_backend = analyze_file(env_file).detected_backend
-        if not report_backend or report_backend == backend.value:
+        analyze_file(env_file)
+        foreign = sorted(detector.ciphertext_backends_for_file(env_file) - {backend.value})
+        if not foreign:
             continue
+        report_backend = foreign[0]
         print_error(
             f"{env_file} is already encrypted with {report_backend}, but the "
             f"{backend.value} backend was selected. Double-encrypting would nest "
@@ -366,6 +372,13 @@ def _encrypt_one_file(
     result = encryption_backend.encrypt(env_file, **encrypt_kwargs)
     if not result.success:
         print_error(result.message)
+        # dotenvx may have written a new private key before the outcome check
+        # failed: gitignore it before exiting, or `git add .` stages it (#950). A
+        # .gitignore that cannot be read or written must not hide that failure.
+        try:
+            _protect_private_keys(env_file)
+        except (OSError, UnicodeError) as exc:
+            print_warning(f"Could not add .env.keys to .gitignore ({exc}): do not commit it.")
         raise typer.Exit(code=1)
     if result.changed:
         print_success(f"Encrypted {env_file} using {encryption_backend.name}")
@@ -482,9 +495,10 @@ def _run_encrypt_action(
             raise typer.Exit(code=1)
         return
 
-    # report.detected_backend carries header and value-level detection, so
-    # stripped-header ciphertext is still refused before backend creation.
-    _refuse_cross_backend_encryption(files, analyze_file, backend)
+    # The refusal reads the ciphertext in the values, so stripped-header
+    # ciphertext is still refused before backend creation, and a header left
+    # without ciphertext is not (#949).
+    _refuse_cross_backend_encryption(files, analyze_file, detector, backend)
     _encrypt_files(files, backend, encryption_config, sops_options)
 
 

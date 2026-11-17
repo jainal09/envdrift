@@ -422,15 +422,42 @@ def _handle_sops_recipients(
     return True
 
 
+def _plaintext_values_remain(env_file: Path, provider: EncryptionProvider) -> bool:
+    """Whether an encrypted ``env_file`` still holds values ``provider`` would encrypt.
+
+    dotenvx never encrypts a ``_PLAIN`` key, so for it that key is not left over
+    (#1048). SOPS has no such rule, and keeps its own check.
+    """
+    from envdrift.core.partial_encryption import has_plaintext_secret_value
+    from envdrift.encryption import EncryptionProvider
+    from envdrift.integrations.dotenvx_keys import plain_keys_apply
+
+    plain_keys = provider == EncryptionProvider.DOTENVX and plain_keys_apply()
+    return has_plaintext_secret_value(env_file, plain_keys=plain_keys)
+
+
+def _nothing_dotenvx_encrypts(content: str, provider: EncryptionProvider) -> bool:
+    """Whether ``provider``, dotenvx, would leave ``content`` as it is: each key is ``_PLAIN``.
+
+    Such a file holds no ciphertext, and never will, but has nothing left to encrypt: it is
+    done, as push counts it (#1048). SOPS has no ``_PLAIN`` rule.
+    """
+    from envdrift.core.partial_encryption import holds_only_plain_keys
+    from envdrift.encryption import EncryptionProvider
+    from envdrift.integrations.dotenvx_keys import plain_keys_apply
+
+    if provider != EncryptionProvider.DOTENVX or not plain_keys_apply():
+        return False
+    return holds_only_plain_keys(content)
+
+
 def _handle_already_encrypted(
     file: _LockFile,
     content: str,
     context: _LockEncryptContext,
     state: _LockState,
 ) -> bool:
-    from envdrift.core.partial_encryption import has_plaintext_secret_value
-
-    if has_plaintext_secret_value(file.env_file):
+    if _plaintext_values_remain(file.env_file, context.encryption.provider):
         state.warnings.append(f"{file.env_file}: partially encrypted, plaintext values remain")
         if context.request.check_only:
             _print_line(
@@ -558,7 +585,7 @@ def _process_lock_mapping(
         return
     encrypted = encryption_helpers.is_encrypted_content(
         context.encryption.provider, context.encryption.backend, content
-    )
+    ) or _nothing_dotenvx_encrypts(content, context.encryption.provider)
     lock_content = _LockContent(file=file, content=content, encrypted=encrypted)
     if _lock_content_handled(lock_content, context, state):
         return

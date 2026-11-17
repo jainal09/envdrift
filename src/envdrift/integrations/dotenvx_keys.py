@@ -73,10 +73,40 @@ _LINE_RE = re.compile(
     + _EOL
 )
 _SURROUNDING_QUOTES_RE = re.compile(_BOL + r"(['\"`])([\s\S]*)\1" + _EOL)
+# A value that is one token in a single pair of the quotes dotenvx reads.
+_QUOTED_TOKEN_RE = re.compile(r"(['\"`])[\s\S]*\1")
 
 PRIVATE_KEY_PREFIX = "DOTENV_PRIVATE_KEY"
 PUBLIC_KEY_PREFIX = "DOTENV_PUBLIC_KEY"
 ENCRYPTED_PREFIX = "encrypted:"
+# dotenvx's encrypt leaves a key whose name ends with this as plaintext (#1048).
+PLAIN_KEY_SUFFIX = "_PLAIN"
+# The policy file dotenvx reads from its working directory when there is one.
+ENVFILE_NAME = "Envfile"
+
+
+def is_plain_key(name: str) -> bool:
+    """Return True if dotenvx's encrypt leaves the key ``name`` as plaintext (#1048).
+
+    dotenvx 2.38.2 tests the name with ``/_PLAIN$/``, case-sensitive: ``NOTE_PLAIN``
+    and a bare ``_PLAIN`` stay plaintext, while ``note_plain``, ``NOTE_plain``,
+    ``PLAIN`` and ``X_PLAIN_Y`` are encrypted, whatever the value's quotes or an
+    ``export``. It skips them only when :func:`plain_keys_apply`.
+    """
+    return name.endswith(PLAIN_KEY_SUFFIX)
+
+
+def plain_keys_apply(cwd: Path | str | None = None) -> bool:
+    """Return True if dotenvx's encrypt, run in ``cwd``, leaves the ``_PLAIN`` keys plain.
+
+    It does unless it reads an ``Envfile`` in that directory (the current one by
+    default): then the Envfile's policy decides which keys are encrypted, and by
+    default every key is, ``_PLAIN`` ones included. Any entry under that name
+    counts, since dotenvx fails on one it cannot read instead of applying the rule.
+    """
+    folder = Path(cwd) if cwd else Path()
+    return not os.path.lexists(folder / ENVFILE_NAME)
+
 
 # secp256k1 domain parameters (SEC 2, section 2.4.1).
 _P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
@@ -199,6 +229,86 @@ def has_encrypted_values(text: str) -> bool:
         if not name.startswith(PUBLIC_KEY_PREFIX)
         for value in values
     )
+
+
+def comment_cut_names(text: str) -> list[str]:
+    """Return the names whose unquoted value dotenvx ends at a ``#`` touching it (#947).
+
+    dotenvx ends an unquoted value at its first ``#`` and reads the rest of the line
+    as a comment, wherever that ``#`` is. python-dotenv, which envdrift follows,
+    starts a comment only at a ``#`` after whitespace, so ``PASSWORD=hunter2#Spring``
+    holds ``hunter2#Spring``: dotenvx would encrypt ``hunter2`` and leave ``#Spring``
+    in the file as plaintext. A ``#`` right after ``=`` (``COLOR=#FF0000``) makes the
+    whole value a comment to dotenvx. Inside quotes a ``#`` is value text to both.
+    """
+    flat = re.sub(r"\r\n?", "\n", text)
+    names: list[str] = []
+    for match in _LINE_RE.finditer(flat):
+        if _cut_at_a_hash(flat, match) and match.group(1) not in names:
+            names.append(match.group(1))
+    return names
+
+
+def _cut_at_a_hash(flat: str, match: re.Match[str]) -> bool:
+    """Whether dotenvx ends the unquoted value of ``match`` at a ``#`` that touches it."""
+    value = match.group(2)
+    if _QUOTED_TOKEN_RE.fullmatch((value or "").strip(_JS_SPACE_CHARS)):
+        return False
+    # The unquoted value runs to the first "#"; without a value, the "#" follows "=".
+    hash_at = match.end(2) if value is not None else flat.find("#", match.end(1), match.end())
+    if flat[hash_at : hash_at + 1] != "#":
+        return False
+    return hash_at > 0 and flat[hash_at - 1] not in _JS_SPACE_CHARS
+
+
+@dataclass(frozen=True)
+class CiphertextValue:
+    """One dotenvx ciphertext value in a text: its name, and where the ciphertext is.
+
+    ``start`` and ``end`` bound the ciphertext alone, inside any quotes around it,
+    so replacing that span keeps the quotes the value has.
+    """
+
+    name: str
+    start: int
+    end: int
+    ciphertext: str
+
+
+def ciphertext_values(text: str) -> list[CiphertextValue]:
+    """Return every value of ``text`` that dotenvx decrypts, in file order (#946).
+
+    ``text`` must have ``\\n`` line ends: the spans are positions in it. dotenvx's
+    own scanner finds the values, so a line inside a quoted multi-line value is
+    never taken for an assignment of its own.
+    """
+    values: list[CiphertextValue] = []
+    for match in _LINE_RE.finditer(text):
+        raw = match.group(2)
+        if raw is None:
+            continue
+        start = match.start(2) + len(raw) - len(raw.lstrip(_JS_SPACE_CHARS))
+        token = raw.strip(_JS_SPACE_CHARS)
+        if _QUOTED_TOKEN_RE.fullmatch(token):
+            start, token = start + 1, token[1:-1]
+        if token.startswith(ENCRYPTED_PREFIX):
+            values.append(CiphertextValue(match.group(1), start, start + len(token), token))
+    return values
+
+
+def multiline_value_spans(text: str) -> list[tuple[int, int]]:
+    """The ``(start, end)`` of each value of ``text`` that holds a line break (#1048).
+
+    A quoted value can span lines, and dotenvx reads a line inside one, such as
+    ``TOKEN=hello``, as part of the value, never as an assignment of its own. The
+    positions are those of the value, quotes included, in ``text``.
+    """
+    spans: list[tuple[int, int]] = []
+    for match in _LINE_RE.finditer(text):
+        value = match.group(2)
+        if value is not None and any(eol in value for eol in "\n\r\u2028\u2029"):
+            spans.append((match.start(2), match.end(2)))
+    return spans
 
 
 def unverifiable_ciphertext(text: str) -> bool:

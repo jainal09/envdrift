@@ -50,13 +50,18 @@ def _emit_error(message: str, format_: str) -> NoReturn:
     raise typer.Exit(code=1)
 
 
-def _read_env(path: Path, format_: str) -> EnvFile:
+def _read_env(path: Path, format_: str, *, interpolate: bool) -> EnvFile:
     """Validate and parse one .env file, surfacing every failure as a clean error.
 
     Guards the cases the adversarial sweep crashed on: a directory passed where a
     file is expected (``IsADirectoryError``) and a binary / non-UTF-8 file
     (``UnicodeDecodeError``) both produced an uncaught traceback. Returns the
     parsed file or exits nonzero with an actionable message.
+
+    The parse is lenient, so a key python-dotenv loads but the strict pattern
+    rejects (``X-API-KEY``, ``2FA_ENABLED``) is compared rather than dropped, and
+    the lines nothing could read are named (#954). ``interpolate`` is False for
+    ``--strict``, which compares the raw text of ``${VAR}`` references.
     """
     # Typer's Path argument already rejects an unreadable file (Click exits 2
     # with a clean "is not readable" message), so the remaining cases to guard
@@ -66,11 +71,31 @@ def _read_env(path: Path, format_: str) -> EnvFile:
     if not path.is_file():
         _emit_error(f"Not a file: {path}", format_)
     try:
-        return EnvParser().parse(path)
+        env_file = EnvParser().parse(path, lenient=True, interpolate=interpolate)
     except ValueError:
         # EnvParser converts a non-UTF-8 read into a ValueError (UnicodeDecodeError
         # is itself a ValueError subclass), so this one arm covers both.
         _emit_error(f"Could not read {path} as UTF-8 text (not a valid .env file)", format_)
+    _warn_unparsed_lines(env_file, format_)
+    return env_file
+
+
+def _warn_unparsed_lines(env_file: EnvFile, format_: str) -> None:
+    """Name the lines of ``env_file`` diff skips, which python-dotenv drops too (#954).
+
+    In ``json`` mode the warning goes to stderr so stdout stays pure JSON.
+    """
+    if not env_file.unparsed_lines:
+        return
+    line_numbers = ", ".join(str(line) for line in env_file.unparsed_lines)
+    message = (
+        f"Could not parse non-comment content on {env_file.path} line(s) {line_numbers}; "
+        "diff ignored those lines"
+    )
+    if format_ == "json":
+        print(f"[WARN] {message}", file=sys.stderr)
+    else:
+        print_warning(message)
 
 
 def diff(
@@ -108,7 +133,7 @@ def diff(
             help=(
                 "Normalize values (whitespace, bool casing, JSON quote style) and "
                 "use --schema types for comparison. Disable with --strict for "
-                "raw string compare."
+                "raw string compare, with ${VAR} references left unexpanded."
             ),
         ),
     ] = True,
@@ -125,7 +150,7 @@ def diff(
         format_ (str): Output format, either "table" (default) for human-readable output or "json" for machine-readable output.
         include_unchanged (bool): If True, include variables that are unchanged between the two files in the output.
         exit_on_drift (bool): If True, exit with code 1 after displaying output when drift is detected. Defaults to False.
-        normalize (bool): If True (default), normalize values before comparing — strips leading/trailing whitespace, treats `true/True/TRUE` (and similar bool aliases) as equal, and parses JSON-style lists/dicts so quote-style differences don't read as drift. When a `--schema` is provided, values are also coerced through the corresponding Pydantic type before comparison. Pass `--strict` to disable and fall back to raw string compare.
+        normalize (bool): If True (default), normalize values before comparing — strips leading/trailing whitespace, treats `true/True/TRUE` (and similar bool aliases) as equal, and parses JSON-style lists/dicts so quote-style differences don't read as drift. When a `--schema` is provided, values are also coerced through the corresponding Pydantic type before comparison. Pass `--strict` to disable and fall back to raw string compare, where `${VAR}` references are compared as written instead of expanded.
     """
     # Validate output format up-front (mirrors guard's --fail-on validation).
     # Lowercase first so "JSON"/"Table" are accepted, but reject anything else
@@ -137,8 +162,8 @@ def diff(
 
     # Validate + parse both files. Clean, format-aware errors for missing,
     # directory, and binary/non-UTF-8 inputs instead of an uncaught traceback.
-    env_file1 = _read_env(env1, format_)
-    env_file2 = _read_env(env2, format_)
+    env_file1 = _read_env(env1, format_, interpolate=normalize)
+    env_file2 = _read_env(env2, format_, interpolate=normalize)
 
     # Load schema if provided
     schema_meta = _load_schema_meta(schema, service_dir, format_) if schema else None
